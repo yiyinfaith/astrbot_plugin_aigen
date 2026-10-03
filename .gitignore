@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+*.legacy.py
+*.legacy.yaml
+*.legacy.json
+
+# Runtime state belongs to AstrBot/data, never in the plugin repository.
+user_counts.json
+group_counts.json
+user_checkin.json
+daily_stats.json
+preset_images.json
+user_prompts.json
+preset_ref_images.json
+preset_images/
+preset_ref_images/
+fonts/
