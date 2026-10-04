@@ -738,6 +738,7 @@ class ImageManager:
         at_tasks = []
         ordered_tasks = []
         at_users: set[str] = set()
+        pending_extra_sources = list(extra_sources or [])
 
         # 1. 规范化 ignore_id，确保是字符串且去除空白
         if ignore_id:
@@ -782,6 +783,17 @@ class ImageManager:
             for match in re.finditer(r"@(\d+)", str(value)):
                 add_at_user(match.group(1))
 
+        def add_text_content(value):
+            """Read textual @mentions and image URLs at their chain position."""
+            if value is None:
+                return
+            text = str(value)
+            add_text_mentions(text)
+            for source in list(pending_extra_sources):
+                if source and source in text:
+                    add_image_task(source, message_tasks)
+                    pending_extra_sources.remove(source)
+
         def image_source(segment) -> str | None:
             for attr in ("url", "file", "path"):
                 source = getattr(segment, attr, None)
@@ -805,7 +817,7 @@ class ImageManager:
                                 getattr(s_chain, "qq", getattr(s_chain, "user_id", ""))
                             )
                         else:
-                            add_text_mentions(getattr(s_chain, "text", None))
+                            add_text_content(getattr(s_chain, "text", None))
 
                 if not found_in_chain:
                     quoted_images = await self._load_quoted_image_refs(event, seg)
@@ -836,7 +848,7 @@ class ImageManager:
             elif isinstance(seg, At):
                 add_at_user(getattr(seg, "qq", getattr(seg, "user_id", "")))
             else:
-                add_text_mentions(getattr(seg, "text", None))
+                add_text_content(getattr(seg, "text", None))
 
         # 3. 某些平台不会把 @ 序列化为 At 组件，补充规范化文本中的数字 QQ。
         # 已由组件读到的 ID 会去重；无法得知组件位置时按消息末尾处理。
@@ -848,12 +860,12 @@ class ImageManager:
             event_text = str(raw_event_text or "")
         except (AttributeError, TypeError, RuntimeError, ValueError):
             event_text = str(getattr(event, "message_str", "") or "")
-        add_text_mentions(event_text)
+        add_text_content(event_text)
         if include_at_avatar and at_users:
             logger.debug(f"At users to fetch avatars: {at_users}")
 
         # 文本中的图片 URL 属于发送者主动提供的图片，加入“发送图片”来源。
-        for source in extra_sources or []:
+        for source in pending_extra_sources:
             add_image_task(source, message_tasks)
 
         async def resolve(tasks: list) -> list[bytes]:
