@@ -282,7 +282,7 @@ class ImageGeneratorPlugin(Star):
         )
 
     @filter.llm_tool(name="generate_image")
-    async def generate_image_tool(
+    async def generate_image(
         self, event: AstrMessageEvent, prompt: str, image_url: str = ""
     ):
         """使用统一图片生成入口生成或编辑图片。
