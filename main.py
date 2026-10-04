@@ -2,7 +2,7 @@
 
 The plugin intentionally keeps the small, stable feature set needed in
 production: image generation, keyword presets, configurable help text, and
-quota billing. Network details remain in ``ApiManager`` so all supported
+usage statistics. Network details remain in ``ApiManager`` so all supported
 request modes use one implementation.
 """
 
@@ -37,10 +37,11 @@ class ImageGeneratorPlugin(Star):
     """Generate images through configured OpenAI-compatible or Gemini APIs."""
 
     _HELP_COMMANDS: ClassVar[set[str]] = {
+        "ai生成帮助",
         "画图帮助",
-        "发图帮助",
-        "手办化帮助",
-        "lm帮助",
+        "生图帮助",
+        "画图菜单",
+        "生图菜单",
     }
     _DRAW_COMMANDS: ClassVar[set[str]] = {"画图", "文生图", "生图"}
     _MODE_ALIASES: ClassVar[dict[str, str]] = {
@@ -66,7 +67,7 @@ class ImageGeneratorPlugin(Star):
         self._llm_last_call: dict[str, float] = {}
 
     async def initialize(self):
-        """Load persistent quotas and user presets after plugin injection."""
+        """Load usage statistics and user presets after plugin injection."""
         await self.data_mgr.initialize()
         logger.info(
             "Image generator loaded with %d presets and interface mode %s",
@@ -188,7 +189,7 @@ class ImageGeneratorPlugin(Star):
         return None
 
     def _resolve_draw_prompt(self, raw: str) -> tuple[str, str, str]:
-        """Resolve ``/画图 <custom prompt>`` or an optional preset keyword."""
+        """Resolve ``/生图 <custom prompt>`` or an optional preset keyword."""
         clean = self._clean_message(raw)
         for command in self._DRAW_COMMANDS:
             if clean == command:
@@ -217,25 +218,6 @@ class ImageGeneratorPlugin(Star):
                 images.append(image)
         return images
 
-    def _quota(self, event: AstrMessageEvent, uid: str, gid: str, cost: int) -> dict:
-        """Check the optional group balance and return the account to charge.
-
-        Personal balances remain on disk for backwards compatibility, but they
-        are no longer a generation gate and are never decremented.  This keeps
-        historical billing files readable while removing the personal limit.
-        """
-        if self._is_admin(event):
-            return {"allowed": True, "source": "free"}
-        group_balance = self.data_mgr.get_group_count(gid) if gid else 0
-        if gid and group_balance >= cost:
-            return {"allowed": True, "source": "group"}
-        if not gid:
-            return {"allowed": True, "source": "free"}
-        return {
-            "allowed": False,
-            "msg": f"次数不足：本次需要 {cost} 次，群组剩余 {group_balance} 次。",
-        }
-
     async def _save_config(self) -> None:
         """Persist command changes through AstrBot's native config object."""
         save = getattr(self.conf, "save", None)
@@ -256,12 +238,9 @@ class ImageGeneratorPlugin(Star):
         images: list[bytes],
         show_progress: bool = True,
     ) -> list[Any]:
-        """Charge one request, call the selected API mode, and build a reply."""
+        """Call the selected API mode, record usage, and build a reply."""
         uid = norm_id(event.get_sender_id())
         gid = norm_id(event.get_group_id())
-        deduction = self._quota(event, uid, gid, 1)
-        if not deduction.get("allowed"):
-            return [Plain(deduction.get("msg", "暂时无法生成图片。"))]
 
         display_name = "" if preset_name in {"", "自定义"} else preset_name
         template = str(
@@ -274,9 +253,6 @@ class ImageGeneratorPlugin(Star):
             feedback = feedback.replace(" [{preset}]", "").replace("[{preset}]", "")
         if show_progress:
             await event.send(event.chain_result([Plain(feedback)]))
-
-        if deduction.get("source") == "group":
-            await self.data_mgr.decrease_group_count(gid)
 
         try:
             start = datetime.now(timezone.utc)
@@ -393,9 +369,9 @@ class ImageGeneratorPlugin(Star):
         )
         yield event.chain_result(result)
 
-    @filter.command("画图", aliases={"文生图", "生图"}, prefix_optional=False)
+    @filter.command("生图", aliases={"画图"}, prefix_optional=False)
     async def draw_command(self, event: AstrMessageEvent):
-        """Generate an image from ``/画图 <自定义提示词>`` or a preset."""
+        """Generate an image from ``/生图 <自定义提示词>`` or a preset."""
         prompt, preset_name, model = self._resolve_draw_prompt(
             self._event_message_text(event)
         )
@@ -409,109 +385,14 @@ class ImageGeneratorPlugin(Star):
         )
 
     @filter.command(
-        "画图帮助",
-        aliases={"发图帮助", "手办化帮助", "lm帮助"},
+        "ai生成帮助",
+        aliases={"生图帮助", "画图帮助", "生图菜单", "画图菜单"},
         prefix_optional=True,
     )
     async def help_command(self, event: AstrMessageEvent):
         """Send the help text configured in the plugin settings."""
         text = str(self.conf.get("help_text", "帮助文档未配置。"))
         yield event.chain_result([Plain(text)])
-
-    @filter.command("lm列表", aliases={"lmlist"}, prefix_optional=True)
-    async def preset_list(self, event: AstrMessageEvent):
-        """List available preset trigger words without changing their prompts."""
-        names = sorted(self.data_mgr.prompt_map)
-        yield event.chain_result([Plain("可用预设：\n" + "、".join(names))])
-
-    @filter.command("lm查看", aliases={"lmv", "lm预览"}, prefix_optional=True)
-    async def preset_view(self, event: AstrMessageEvent):
-        """Display one complete preset prompt."""
-        raw = self._clean_message(self._event_message_text(event))
-        key = raw.split(maxsplit=1)[1].strip() if " " in raw else ""
-        prompt = self.data_mgr.get_prompt(key)
-        if not prompt:
-            yield event.chain_result([Plain(f"未找到预设：{key or '（未填写）'}")])
-            return
-        yield event.chain_result([Plain(f"【{key}】\n{prompt}")])
-
-    @filter.command("lm添加", aliases={"lma"}, prefix_optional=True)
-    async def preset_add(self, event: AstrMessageEvent):
-        """Add a user preset to the data directory without rewriting old presets."""
-        raw = self._clean_message(self._event_message_text(event))
-        payload = raw.split(maxsplit=1)[1].strip() if " " in raw else ""
-        if ":" not in payload:
-            yield event.chain_result([Plain("用法：/lm添加 触发词:提示词")])
-            return
-        key, prompt = (item.strip() for item in payload.split(":", 1))
-        if not key or not prompt:
-            yield event.chain_result([Plain("触发词和提示词都不能为空。")])
-            return
-        await self.data_mgr.add_user_prompt(key, prompt)
-        yield event.chain_result([Plain(f"✅ 已保存预设：{key}")])
-
-    @filter.command("lm删除", aliases={"lmd", "lm删", "删除预设"}, prefix_optional=True)
-    async def preset_delete(self, event: AstrMessageEvent):
-        """Delete only a user-owned preset; configured defaults remain untouched."""
-        raw = self._clean_message(self._event_message_text(event))
-        key = raw.split(maxsplit=1)[1].strip() if " " in raw else ""
-        if not key or not await self.data_mgr.remove_user_prompt(key):
-            yield event.chain_result([Plain("只能删除已经通过 /lm添加 保存的预设。")])
-            return
-        yield event.chain_result([Plain(f"✅ 已删除自定义预设：{key}")])
-
-    @filter.command("画图查询次数", aliases={"手办化查询次数"}, prefix_optional=True)
-    async def quota_query(self, event: AstrMessageEvent):
-        """Show billing status without exposing a personal generation limit."""
-        gid = norm_id(event.get_group_id())
-        message = "个人次数限制：已取消"
-        if gid:
-            message += f"\n群组剩余：{self.data_mgr.get_group_count(gid)} 次"
-        yield event.chain_result([Plain(message)])
-
-    @filter.command(
-        "画图增加用户次数", aliases={"手办化增加用户次数"}, prefix_optional=True
-    )
-    async def quota_add_user(self, event: AstrMessageEvent):
-        """Let an administrator grant personal image credits."""
-        if not self._is_admin(event):
-            return
-        raw = self._clean_message(self._event_message_text(event))
-        parts = raw.split()
-        if len(parts) < 3:
-            yield event.chain_result([Plain("用法：/画图增加用户次数 用户ID 次数")])
-            return
-        try:
-            amount = int(parts[2])
-        except ValueError:
-            yield event.chain_result([Plain("次数必须是整数。")])
-            return
-        await self.data_mgr.add_user_count(parts[1], amount)
-        yield event.chain_result([Plain(f"✅ 已为 {parts[1]} 增加 {amount} 次。")])
-
-    @filter.command(
-        "画图增加群组次数", aliases={"手办化增加群组次数"}, prefix_optional=True
-    )
-    async def quota_add_group(self, event: AstrMessageEvent):
-        """Let an administrator grant group image credits."""
-        if not self._is_admin(event):
-            return
-        raw = self._clean_message(self._event_message_text(event))
-        parts = raw.split()
-        if len(parts) < 2:
-            yield event.chain_result([Plain("用法：/画图增加群组次数 次数")])
-            return
-        try:
-            amount = int(parts[1])
-        except ValueError:
-            yield event.chain_result([Plain("次数必须是整数。")])
-            return
-        gid = norm_id(event.get_group_id())
-        if not gid:
-            yield event.chain_result([Plain("该命令只能在群聊中使用。")])
-            return
-        await self.data_mgr.add_group_count(gid, amount)
-        yield event.chain_result([Plain(f"✅ 已为本群增加 {amount} 次。")])
 
     @filter.command("切换API模式", prefix_optional=True)
     async def switch_mode(self, event: AstrMessageEvent):

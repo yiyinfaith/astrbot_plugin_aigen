@@ -12,8 +12,6 @@ class DataManager:
         self.data_dir = Path(data_dir)
         self.config = config
 
-        self.user_counts_file = self.data_dir / "user_counts.json"
-        self.group_counts_file = self.data_dir / "group_counts.json"
         self.daily_stats_file = self.data_dir / "daily_stats.json"
         self.preset_images_file = self.data_dir / "preset_images.json"
         self.user_prompts_file = self.data_dir / "user_prompts.json"
@@ -30,16 +28,12 @@ class DataManager:
         if not self.fonts_dir.exists():
             self.fonts_dir.mkdir(parents=True, exist_ok=True)
 
-        self.user_counts: Dict[str, int] = {}
-        self.group_counts: Dict[str, int] = {}
         self.daily_stats: Dict[str, Any] = {}
         self.preset_images: Dict[str, str] = {}
         self.user_prompts: Dict[str, str] = {}
         self.prompt_map: Dict[str, str] = {}
 
     async def initialize(self):
-        await self._load_json(self.user_counts_file, "user_counts")
-        await self._load_json(self.group_counts_file, "group_counts")
         await self._load_json(self.user_prompts_file, "user_prompts")
         if not self.daily_stats_file.exists():
             self.daily_stats = {"date": "", "users": {}, "groups": {}}
@@ -127,39 +121,6 @@ class DataManager:
         await self._save_json(self.user_prompts_file, self.user_prompts)
         self.reload_prompts()
         return True
-
-    # --- 积分相关 ---
-    def get_user_count(self, uid: str) -> int:
-        return self.user_counts.get(norm_id(uid), 0)
-
-    async def decrease_user_count(self, uid: str, amount: int = 1):
-        uid = norm_id(uid)
-        count = self.get_user_count(uid)
-        if amount <= 0 or count <= 0:
-            return
-        self.user_counts[uid] = count - min(amount, count)
-        await self._save_json(self.user_counts_file, self.user_counts)
-
-    async def add_user_count(self, uid: str, amount: int):
-        uid = norm_id(uid)
-        self.user_counts[uid] = self.get_user_count(uid) + amount
-        await self._save_json(self.user_counts_file, self.user_counts)
-
-    def get_group_count(self, gid: str) -> int:
-        return self.group_counts.get(norm_id(gid), 0)
-
-    async def decrease_group_count(self, gid: str, amount: int = 1):
-        gid = norm_id(gid)
-        count = self.get_group_count(gid)
-        if amount <= 0 or count <= 0:
-            return
-        self.group_counts[gid] = count - min(amount, count)
-        await self._save_json(self.group_counts_file, self.group_counts)
-
-    async def add_group_count(self, gid: str, amount: int):
-        gid = norm_id(gid)
-        self.group_counts[gid] = self.get_group_count(gid) + amount
-        await self._save_json(self.group_counts_file, self.group_counts)
 
     async def record_usage(self, uid: str, gid: Optional[str]):
         today = datetime.now().strftime("%Y-%m-%d")

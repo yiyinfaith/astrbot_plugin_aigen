@@ -74,8 +74,14 @@ class PluginContractTest(unittest.TestCase):
 
     def test_personal_limit_is_not_used_for_generation(self):
         main = (ROOT / "main.py").read_text(encoding="utf-8")
+        data_manager = (ROOT / "data_manager.py").read_text(encoding="utf-8")
         self.assertNotIn("decrease_user_count", main)
+        self.assertNotIn("decrease_group_count", main)
+        self.assertNotIn("_quota", main)
+        self.assertNotIn("次数不足", main)
         self.assertNotIn("个人剩余：", main)
+        self.assertNotIn("get_user_count", data_manager)
+        self.assertNotIn("get_group_count", data_manager)
         self.assertIn("match_keyword_in_text", main)
 
 
