@@ -21,8 +21,6 @@ class ApiManager:
     def __init__(self, config: dict):
         self.config = config
         self.key_lock = asyncio.Lock()
-        self.generic_idx = 0
-        self.gemini_idx = 0
         self.unified_idx = 0
         self._session = None  # 保持 Session 持久化，复用 TCP/SSL 连接
         self._last_metrics = {}
@@ -48,31 +46,6 @@ class ApiManager:
 
     def get_last_metrics(self) -> Dict:
         return dict(self._last_metrics or {})
-
-    def _normalize_call_api_args(
-        self,
-        legacy_use_power_or_proxy=None,
-        proxy=None,
-    ):
-        """兼容旧版 call_api 调用签名：
-        - 新版: call_api(images, prompt, model, proxy=...)
-        - 旧版: call_api(images, prompt, model, False, proxy)
-        """
-        resolved_proxy = proxy
-        if isinstance(legacy_use_power_or_proxy, bool):
-            # 旧版 use_power 参数，现已废弃，直接忽略
-            pass
-        else:
-            if resolved_proxy is None:
-                resolved_proxy = legacy_use_power_or_proxy
-
-        if isinstance(resolved_proxy, bool):
-            resolved_proxy = None
-
-        if resolved_proxy is not None:
-            resolved_proxy = str(resolved_proxy).strip() or None
-
-        return resolved_proxy
 
     def _should_bypass_proxy(self, url: str) -> bool:
         """本地/内网地址不走代理，避免请求本地中转时反而绕远路。"""
@@ -128,17 +101,10 @@ class ApiManager:
         return [str(keys).strip()] if str(keys).strip() else []
 
     def _get_interface_mode(self) -> str:
-        """Resolve the configured interface mode with legacy compatibility.
-
-        Returns:
-            The canonical interface mode name.
-        """
-        mode = str(self.config.get("interface_mode", "") or "").strip().lower()
-        mode = {
-            "response": "openai_response",
-            "v1/response": "openai_response",
-            "/v1/response": "openai_response",
-        }.get(mode, mode)
+        """Return the selected current interface mode."""
+        mode = str(
+            self.config.get("interface_mode", "openai_image") or "openai_image"
+        ).strip().lower()
         valid_modes = {
             "openai_image",
             "openai_chat",
@@ -146,67 +112,24 @@ class ApiManager:
             "gemini_official",
             "custom_endpoint",
         }
-        if mode in valid_modes:
-            return mode
-
-        legacy_mode = (
-            str(self.config.get("api_mode", "generic") or "generic").strip().lower()
-        )
-        if legacy_mode in {
-            "openai_response",
-            "response",
-            "v1/response",
-            "/v1/response",
-        }:
-            return "openai_response"
-        if legacy_mode == "gemini_official":
-            return "gemini_official"
-        if legacy_mode == "openai_image":
-            return "openai_image"
-        if legacy_mode == "custom_endpoint":
-            return "custom_endpoint"
-        return (
-            "openai_image"
-            if self.config.get("generic_prefer_images_api", False)
-            else "openai_chat"
-        )
+        return mode if mode in valid_modes else "openai_image"
 
     def _get_base_url(self, mode: str) -> str:
-        unified_base = str(self.config.get("base_url", "") or "").strip()
-        if unified_base:
-            return unified_base
+        """Return the unified base URL configured for the plugin."""
+        base_url = str(self.config.get("base_url", "") or "").strip()
+        if not base_url and mode == "gemini_official":
+            return "https://generativelanguage.googleapis.com"
+        return base_url
 
-
-        if mode == "gemini_official":
-            legacy_url = str(self.config.get("gemini_api_url", "") or "").strip()
-            return legacy_url or "https://generativelanguage.googleapis.com"
-        return str(self.config.get("generic_api_url", "") or "").strip()
-
-    async def get_key(self, mode: str) -> str | None:
-        """获取轮询 Key"""
+    async def get_key(self) -> str | None:
+        """获取统一 Key 池中的下一个 Key。"""
         async with self.key_lock:
             keys = self._normalize_keys(self.config.get("api_keys", []))
-            if keys:
-                k = keys[self.unified_idx % len(keys)]
-                self.unified_idx += 1
-                return k
-
-            if mode == "gemini_official":
-                keys = self._normalize_keys(self.config.get("gemini_api_keys", []))
-
-                if not keys:
-                    return None
-                k = keys[self.gemini_idx % len(keys)]
-                self.gemini_idx += 1
-                return k
-            else:
-                keys = self._normalize_keys(self.config.get("generic_api_keys", []))
-
-                if not keys:
-                    return None
-                k = keys[self.generic_idx % len(keys)]
-                self.generic_idx += 1
-                return k
+            if not keys:
+                return None
+            key = keys[self.unified_idx % len(keys)]
+            self.unified_idx += 1
+            return key
 
     def extract_image_url(self, data: Dict) -> str | None:
         """解析各种奇怪的 API 返回格式"""
@@ -1447,13 +1370,10 @@ class ApiManager:
         images: List[bytes],
         prompt: str,
         model: str,
-        legacy_use_power_or_proxy=None,
         proxy: str = None,
         aspect_ratio: str = None,
         resolution: str = None,
     ) -> bytes | str:
-        proxy = self._normalize_call_api_args(legacy_use_power_or_proxy, proxy)
-
         return await self._call_api_once(
             images,
             prompt,
@@ -1481,17 +1401,13 @@ class ApiManager:
         mode = "gemini_official" if interface_mode == "gemini_official" else "generic"
 
         # 1. 确定 URL
-        base = self._get_base_url(
-            interface_mode
-        )
+        base = self._get_base_url(interface_mode)
 
         if not base:
             return "API URL 未配置"
 
         # 2. 获取 Key
-        key = await self.get_key(
-            interface_mode
-        )
+        key = await self.get_key()
         if not key:
             return "无可用 API Key"
 
@@ -1553,37 +1469,6 @@ class ApiManager:
                 generation_params=generation_params,
                 exact_endpoint=(interface_mode == "custom_endpoint"),
                 stream=bool(self.config.get("use_stream", False)),
-            )
-
-        # 对于明确使用 Generic 图片接口的站点，可配置为优先直连 Images API
-        # 但当输入为多图时，优先走 chat/completions 以保留全部参考图（Images API 常只接受单图编辑）。
-        if interface_mode == "openai_chat" and self.config.get(
-            "generic_prefer_images_api", False
-        ):
-            if len(images) <= 1:
-                logger.info("已启用 generic_prefer_images_api，优先直接走 Images API")
-                image_api_result = await self.call_images_api(
-                    images,
-                    prompt,
-                    model,
-                    key,
-                    base,
-                    proxy,
-                    generation_params=generation_params,
-                    stream=bool(self.config.get("use_stream", False)),
-                )
-                if not (
-                    images
-                    and isinstance(image_api_result, str)
-                    and self._is_images_edits_unsupported_error(image_api_result)
-                ):
-                    return image_api_result
-                logger.warning(
-                    "Preferred Images API edits endpoint is unsupported; falling back to chat/completions."
-                )
-            logger.info(
-                "generic_prefer_images_api 已启用，但检测到多图输入，"
-                "为保留全部参考图改走 chat/completions"
             )
 
         # 画质强化 Prompt

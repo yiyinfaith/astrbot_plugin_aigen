@@ -43,19 +43,7 @@ class ImageGeneratorPlugin(Star):
         "画图菜单",
         "生图菜单",
     }
-    _DRAW_COMMANDS: ClassVar[set[str]] = {"画图", "文生图", "生图"}
-    _MODE_ALIASES: ClassVar[dict[str, str]] = {
-        "image": "openai_image",
-        "openai_image": "openai_image",
-        "chat": "openai_chat",
-        "openai_chat": "openai_chat",
-        "response": "openai_response",
-        "openai_response": "openai_response",
-        "gemini": "gemini_official",
-        "gemini_official": "gemini_official",
-        "custom": "custom_endpoint",
-        "custom_endpoint": "custom_endpoint",
-    }
+    _DRAW_COMMANDS: ClassVar[set[str]] = {"画图", "生图"}
 
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -67,7 +55,7 @@ class ImageGeneratorPlugin(Star):
         self._llm_last_call: dict[str, float] = {}
 
     async def initialize(self):
-        """Load usage statistics and user presets after plugin injection."""
+        """Load usage statistics and configured presets after plugin injection."""
         await self.data_mgr.initialize()
         logger.info(
             "Image generator loaded with %d presets and interface mode %s",
@@ -82,15 +70,6 @@ class ImageGeneratorPlugin(Star):
         session = getattr(self.api_mgr, "_session", None)
         if session is not None and not session.closed:
             await session.close()
-
-    def _is_admin(self, event: AstrMessageEvent) -> bool:
-        """Return whether the sender is an AstrBot administrator."""
-        sender_id = norm_id(event.get_sender_id())
-        context_config = self.context.get_config() or {}
-        admins = context_config.get("admins_id", []) or []
-        if isinstance(admins, str):
-            admins = re.split(r"[\r\n,]+", admins)
-        return bool(sender_id) and sender_id in {norm_id(item) for item in admins}
 
     def _bot_id(self, event: AstrMessageEvent) -> str:
         """Resolve the current bot ID for image extraction filtering."""
@@ -217,17 +196,6 @@ class ImageGeneratorPlugin(Star):
             extra_sources=extract_image_urls_from_text(prompt),
         )
 
-    async def _save_config(self) -> None:
-        """Persist command changes through AstrBot's native config object."""
-        save = getattr(self.conf, "save", None)
-        if callable(save):
-            try:
-                result = save()
-                if hasattr(result, "__await__"):
-                    await result
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Could not save plugin configuration: %s", exc)
-
     async def _generate(
         self,
         event: AstrMessageEvent,
@@ -273,8 +241,6 @@ class ImageGeneratorPlugin(Star):
         result = await self.img_mgr.optimize_output_image(result)
         elapsed = (datetime.now(timezone.utc) - start).total_seconds()
         await self.data_mgr.record_usage(uid, gid)
-        if preset_name not in {"", "自定义"}:
-            await self.data_mgr.save_preset_image(preset_name, result)
         suffix = f" | 预设：{preset_name}" if preset_name not in {"", "自定义"} else ""
         if self.conf.get("show_model_info", False):
             suffix += f" | 模型：{model}"
@@ -392,47 +358,3 @@ class ImageGeneratorPlugin(Star):
         """Send the help text configured in the plugin settings."""
         text = str(self.conf.get("help_text", "帮助文档未配置。"))
         yield event.chain_result([Plain(text)])
-
-    @filter.command("切换API模式", prefix_optional=True)
-    async def switch_mode(self, event: AstrMessageEvent):
-        """Switch among all supported image request modes."""
-        if not self._is_admin(event):
-            return
-        raw = self._clean_message(self._event_message_text(event))
-        parts = raw.split(maxsplit=1)
-        if len(parts) == 1:
-            yield event.chain_result(
-                [Plain(f"当前模式：{self.conf.get('interface_mode', 'openai_image')}")]
-            )
-            return
-        mode = self._MODE_ALIASES.get(parts[1].strip().lower())
-        if not mode:
-            yield event.chain_result(
-                [
-                    Plain(
-                        "支持：openai_image、openai_chat、openai_response、gemini_official、custom_endpoint"
-                    )
-                ]
-            )
-            return
-        self.conf["interface_mode"] = mode
-        await self._save_config()
-        yield event.chain_result([Plain(f"✅ API 模式已切换为：{mode}")])
-
-    @filter.command("切换模型", prefix_optional=True)
-    async def switch_model(self, event: AstrMessageEvent):
-        """View or change the default image model."""
-        if not self._is_admin(event):
-            return
-        raw = self._clean_message(self._event_message_text(event))
-        parts = raw.split(maxsplit=1)
-        if len(parts) == 1:
-            yield event.chain_result(
-                [
-                    Plain(f"当前模型：{self.conf.get('model')}")
-                ]
-            )
-            return
-        self.conf["model"] = parts[1].strip()
-        await self._save_config()
-        yield event.chain_result([Plain(f"✅ 默认模型已切换为：{self.conf['model']}")])

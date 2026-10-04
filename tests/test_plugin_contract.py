@@ -45,6 +45,9 @@ class PluginContractTest(unittest.TestCase):
             "persona_photo_style",
             "enable_rebellious_mode",
             "rebellious_probability",
+            "batch_max_images",
+            "batch_concurrency",
+            "batch_retries",
         }
         self.assertFalse(removed.intersection(schema))
         self.assertIn("model", schema)
@@ -83,6 +86,23 @@ class PluginContractTest(unittest.TestCase):
         self.assertNotIn("get_user_count", data_manager)
         self.assertNotIn("get_group_count", data_manager)
         self.assertIn("match_keyword_in_text", main)
+
+    def test_removed_commands_and_legacy_helpers_are_gone(self):
+        main = (ROOT / "main.py").read_text(encoding="utf-8")
+        data_manager = (ROOT / "data_manager.py").read_text(encoding="utf-8")
+        image_manager = (ROOT / "image_manager.py").read_text(encoding="utf-8")
+        api_manager = (ROOT / "api_manager.py").read_text(encoding="utf-8")
+        utils = (ROOT / "utils.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("切换API模式", main)
+        self.assertNotIn("切换模型", main)
+        self.assertNotIn("user_prompts", data_manager)
+        self.assertNotIn("preset_images", data_manager)
+        self.assertNotIn("extract_pdfs_from_event", image_manager)
+        self.assertNotIn("create_preset_table", image_manager)
+        self.assertNotIn("_normalize_call_api_args", api_manager)
+        self.assertNotIn("generic_prefer_images_api", api_manager)
+        self.assertNotIn("normalize_model_list", utils)
 
 
 if __name__ == "__main__":

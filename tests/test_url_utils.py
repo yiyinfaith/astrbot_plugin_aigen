@@ -1,6 +1,6 @@
 import unittest
 
-from utils import match_keyword_in_text, normalize_api_root, normalize_model_list
+from utils import match_keyword_in_text, normalize_api_root
 
 
 class UrlNormalizationTest(unittest.TestCase):
@@ -36,24 +36,6 @@ class UrlNormalizationTest(unittest.TestCase):
         self.assertEqual(
             normalize_api_root("https://api.example.com/openai/v1/response"),
             "https://api.example.com/openai",
-        )
-
-
-class ModelListNormalizationTest(unittest.TestCase):
-    def test_old_and_new_model_entries_are_supported(self):
-        self.assertEqual(
-            normalize_model_list(
-                [
-                    "model-a",
-                    {"id": "model-b"},
-                    {"model": "model-c"},
-                    {"name": "model-d"},
-                    {},
-                    None,
-                    "model-a",
-                ]
-            ),
-            ["model-a", "model-b", "model-c", "model-d"],
         )
 
 

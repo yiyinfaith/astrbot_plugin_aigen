@@ -68,11 +68,6 @@ class ApiEndpointBuildTest(unittest.TestCase):
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent",
         )
 
-    def test_response_alias_resolves_to_response_mode(self):
-        manager = self.ApiManager({"interface_mode": "/v1/response"})
-        self.assertEqual(manager._get_interface_mode(), "openai_response")
-
-
 class ApiImagesEditRequestTest(unittest.IsolatedAsyncioTestCase):
     async def test_image_mode_posts_edits_as_multipart(self):
         api_manager = load_api_manager()

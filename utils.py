@@ -36,25 +36,6 @@ def match_keyword_in_text(text: Any, keywords: Any) -> tuple[str, int] | None:
     return None
 
 
-def normalize_model_list(raw_models: Any) -> List[str]:
-    """兼容字符串列表和旧版字典模型配置，并跳过无效项。"""
-    if not isinstance(raw_models, (list, tuple, set)):
-        return []
-
-    models = []
-    for item in raw_models:
-        value = ""
-        if isinstance(item, str):
-            value = item
-        elif isinstance(item, dict):
-            value = item.get("id") or item.get("model") or item.get("name") or ""
-
-        value = str(value).strip()
-        if value and value not in models:
-            models.append(value)
-    return models
-
-
 def normalize_api_root(raw_url: Any) -> str:
     """Extract an API root while removing version and endpoint suffixes.
 
