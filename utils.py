@@ -16,8 +16,8 @@ def norm_id(raw_id: Any) -> str:
 def match_keyword_in_text(text: Any, keywords: Any) -> tuple[str, int] | None:
     """Match the longest configured keyword anywhere in ``text``.
 
-    This is the fuzzy matching rule used by AstrBot's memelite plugin.  The
-    longest-first order makes overlapping presets deterministic (for example,
+    This follows the requested fuzzy matching rule.  The longest-first order
+    makes overlapping presets deterministic (for example,
     ``手办化2`` wins over ``手办化``).
     """
     value = str(text or "")
