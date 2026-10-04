@@ -1,6 +1,6 @@
 import unittest
 
-from utils import normalize_api_root, normalize_model_list
+from utils import match_keyword_in_text, normalize_api_root, normalize_model_list
 
 
 class UrlNormalizationTest(unittest.TestCase):
@@ -55,6 +55,23 @@ class ModelListNormalizationTest(unittest.TestCase):
             ),
             ["model-a", "model-b", "model-c", "model-d"],
         )
+
+
+class PresetKeywordMatchTest(unittest.TestCase):
+    def test_keyword_can_follow_a_mention(self):
+        self.assertEqual(
+            match_keyword_in_text("@小明手办化", ["手办化", "手办化2"]),
+            ("手办化", 3),
+        )
+
+    def test_longest_overlapping_keyword_wins(self):
+        self.assertEqual(
+            match_keyword_in_text("请手办化2", ["手办化", "手办化2"]),
+            ("手办化2", 1),
+        )
+
+    def test_empty_keywords_are_ignored(self):
+        self.assertIsNone(match_keyword_in_text("手办化", ["", "  "]))
 
 
 if __name__ == "__main__":

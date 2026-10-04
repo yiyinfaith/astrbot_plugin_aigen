@@ -13,6 +13,29 @@ def norm_id(raw_id: Any) -> str:
     return str(raw_id).strip()
 
 
+def match_keyword_in_text(text: Any, keywords: Any) -> tuple[str, int] | None:
+    """Match the longest configured keyword anywhere in ``text``.
+
+    This is the fuzzy matching rule used by AstrBot's memelite plugin.  The
+    longest-first order makes overlapping presets deterministic (for example,
+    ``手办化2`` wins over ``手办化``).
+    """
+    value = str(text or "")
+    candidates_set: set[str] = set()
+    for raw_keyword in keywords or []:
+        if raw_keyword is None:
+            continue
+        keyword = str(raw_keyword).strip()
+        if keyword:
+            candidates_set.add(keyword)
+    candidates = sorted(candidates_set, key=lambda item: (-len(item), item))
+    for keyword in candidates:
+        index = value.find(keyword)
+        if index >= 0:
+            return keyword, index
+    return None
+
+
 def normalize_model_list(raw_models: Any) -> List[str]:
     """兼容字符串列表和旧版字典模型配置，并跳过无效项。"""
     if not isinstance(raw_models, (list, tuple, set)):

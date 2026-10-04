@@ -60,6 +60,12 @@ class PluginContractTest(unittest.TestCase):
         self.assertNotIn("use_text_to_image_api", main + api)
         self.assertNotIn("text_to_image_model", main + api)
 
+    def test_personal_limit_is_not_used_for_generation(self):
+        main = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertNotIn("decrease_user_count", main)
+        self.assertNotIn("个人剩余：", main)
+        self.assertIn("match_keyword_in_text", main)
+
 
 if __name__ == "__main__":
     unittest.main()

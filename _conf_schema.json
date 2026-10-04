@@ -54,9 +54,9 @@
         "default": false
     },
     "prefix": {
-        "description": "【基础】指令前缀限制",
+        "description": "【兼容】旧版指令前缀设置",
         "type": "bool",
-        "hint": "开启后，指令需要前缀（如 '#'）或 @机器人 才能触发。",
+        "hint": "预设关键词现在按 memelite 同款规则在消息任意位置匹配；该字段仅为旧配置保留。",
         "default": true
     },
     "extra_prefix": {

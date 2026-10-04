@@ -23,7 +23,7 @@ from astrbot.core import AstrBotConfig
 from .api_manager import ApiManager
 from .data_manager import DataManager
 from .image_manager import ImageManager
-from .utils import extract_image_urls_from_text, norm_id
+from .utils import extract_image_urls_from_text, match_keyword_in_text, norm_id
 
 
 @register(
@@ -113,9 +113,38 @@ class ImageGeneratorPlugin(Star):
         return ""
 
     @staticmethod
+    def _event_message_text(event: AstrMessageEvent) -> str:
+        """Return AstrBot's normalized text representation for an event.
+
+        Current AstrBot platforms expose ``get_message_str()`` as the stable
+        API.  ``message_str`` is retained as a fallback for older adapters and
+        for the small fake events used by downstream tests.
+        """
+        getter = getattr(event, "get_message_str", None)
+        if callable(getter):
+            try:
+                value = getter()
+                if value is not None:
+                    return str(value)
+            except (AttributeError, TypeError, RuntimeError, ValueError) as exc:
+                logger.debug("Could not read normalized event text: %s", exc)
+        return str(getattr(event, "message_str", "") or "")
+
+    @staticmethod
     def _clean_message(text: str) -> str:
         """Remove one command prefix while retaining the user's prompt."""
-        return re.sub(r"^(?:[/#！!])", "", (text or "").strip()).strip()
+        return re.sub(r"^(?:[/#！!])\s*", "", (text or "").strip()).strip()
+
+    @staticmethod
+    def _remove_mention_prefix(text: str) -> str:
+        """Drop textual @mentions that precede a matched preset keyword.
+
+        A platform may serialize an ``At`` component as ``@123`` or as a
+        display name such as ``@小明``.  The component itself is still used by
+        ``ImageManager`` to fetch the avatar; this helper only keeps that
+        serialization from becoming part of the image prompt.
+        """
+        return re.sub(r"(?:^|\s)@[^\s]+\s*", " ", text).strip()
 
     def _model_for_request(self, text: str) -> tuple[str, str]:
         """Resolve the configured default model for a request."""
@@ -123,7 +152,13 @@ class ImageGeneratorPlugin(Star):
         return text.strip(), model
 
     def _resolve_preset_prompt(self, text: str) -> tuple[str, str, str] | None:
-        """Resolve a keyword preset and preserve text appended after it."""
+        """Resolve a keyword preset anywhere in the message.
+
+        The matching rule follows memelite's fuzzy mode (``keyword in text``)
+        instead of requiring the keyword to be the first token.  This allows
+        messages such as ``@小明手办化`` and ``请手办化`` to trigger while the
+        image collector still obtains the actual ``At`` component/avatar.
+        """
         clean = self._clean_message(text)
         if not clean:
             return None
@@ -134,11 +169,15 @@ class ImageGeneratorPlugin(Star):
         ):
             return clean[len(extra_prefix) :].strip(), "自定义", model
 
-        for key in sorted(self.data_mgr.prompt_map, key=len, reverse=True):
-            if clean == key or clean.startswith(key + " "):
-                prompt = self.data_mgr.get_prompt(key)
-                if prompt and prompt != "[内置预设]":
-                    return f"{prompt} {clean[len(key) :].strip()}".strip(), key, model
+        matched = match_keyword_in_text(clean, self.data_mgr.prompt_map)
+        if matched:
+            key, match_at = matched
+            prompt = self.data_mgr.get_prompt(key)
+            if prompt and prompt != "[内置预设]":
+                before = self._remove_mention_prefix(clean[:match_at])
+                after = clean[match_at + len(key) :].strip()
+                suffix = " ".join(part for part in (before, after) if part).strip()
+                return f"{prompt} {suffix}".strip(), key, model
         return None
 
     def _resolve_draw_prompt(self, raw: str) -> tuple[str, str, str]:
@@ -172,25 +211,22 @@ class ImageGeneratorPlugin(Star):
         return images
 
     def _quota(self, event: AstrMessageEvent, uid: str, gid: str, cost: int) -> dict:
-        """Check credits and return the account that will be charged.
+        """Check the optional group balance and return the account to charge.
 
-        Administrators remain free.  Other requests use personal credits first
-        and fall back to group credits when a group is available.
+        Personal balances remain on disk for backwards compatibility, but they
+        are no longer a generation gate and are never decremented.  This keeps
+        historical billing files readable while removing the personal limit.
         """
         if self._is_admin(event):
             return {"allowed": True, "source": "free"}
-        user_balance = self.data_mgr.get_user_count(uid)
-        if user_balance >= cost:
-            return {"allowed": True, "source": "user"}
         group_balance = self.data_mgr.get_group_count(gid) if gid else 0
         if gid and group_balance >= cost:
             return {"allowed": True, "source": "group"}
+        if not gid:
+            return {"allowed": True, "source": "free"}
         return {
             "allowed": False,
-            "msg": (
-                f"次数不足：本次需要 {cost} 次，个人剩余 {user_balance} 次，"
-                f"群组剩余 {group_balance} 次。"
-            ),
+            "msg": f"次数不足：本次需要 {cost} 次，群组剩余 {group_balance} 次。",
         }
 
     async def _save_config(self) -> None:
@@ -232,9 +268,7 @@ class ImageGeneratorPlugin(Star):
         if show_progress:
             await event.send(event.chain_result([Plain(feedback)]))
 
-        if deduction.get("source") == "user":
-            await self.data_mgr.decrease_user_count(uid)
-        elif deduction.get("source") == "group":
+        if deduction.get("source") == "group":
             await self.data_mgr.decrease_group_count(gid)
 
         try:
@@ -259,25 +293,24 @@ class ImageGeneratorPlugin(Star):
         await self.data_mgr.record_usage(uid, gid)
         if preset_name not in {"", "自定义"}:
             await self.data_mgr.save_preset_image(preset_name, result)
-        remaining = self.data_mgr.get_user_count(uid)
         suffix = f" | 预设：{preset_name}" if preset_name not in {"", "自定义"} else ""
         if self.conf.get("show_model_info", False):
             suffix += f" | 模型：{model}"
         return [
             Image.fromBytes(result),
-            Plain(f"\n✅ 生成成功（{elapsed:.1f}s）{suffix} | 个人剩余：{remaining}"),
+            Plain(f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}"),
         ]
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=5)
     async def on_preset_request(self, event: AstrMessageEvent, ctx=None):
         """Trigger configured keyword presets and the free prompt prefix."""
-        if self.conf.get("prefix", True) and not event.is_at_or_wake_command:
-            return
-        text = self._clean_message(event.message_str)
+        text = self._clean_message(self._event_message_text(event))
         if not text:
             return
-        first = text.split(maxsplit=1)[0]
-        if first in self._HELP_COMMANDS or first in self._DRAW_COMMANDS:
+        if any(
+            text == command or text.startswith(command + " ")
+            for command in self._HELP_COMMANDS | self._DRAW_COMMANDS
+        ):
             return
         resolved = self._resolve_preset_prompt(text)
         if resolved is None or not resolved[0]:
@@ -345,7 +378,9 @@ class ImageGeneratorPlugin(Star):
     @filter.command("画图", aliases={"文生图"}, prefix_optional=True)
     async def draw_command(self, event: AstrMessageEvent):
         """Generate an image from ``/画图 <自定义提示词>`` or a preset."""
-        prompt, preset_name, model = self._resolve_draw_prompt(event.message_str)
+        prompt, preset_name, model = self._resolve_draw_prompt(
+            self._event_message_text(event)
+        )
         if not prompt:
             yield event.chain_result([Plain("用法：/画图 <自定义提示词>。")])
             return
@@ -374,7 +409,7 @@ class ImageGeneratorPlugin(Star):
     @filter.command("lm查看", aliases={"lmv", "lm预览"}, prefix_optional=True)
     async def preset_view(self, event: AstrMessageEvent):
         """Display one complete preset prompt."""
-        raw = self._clean_message(event.message_str)
+        raw = self._clean_message(self._event_message_text(event))
         key = raw.split(maxsplit=1)[1].strip() if " " in raw else ""
         prompt = self.data_mgr.get_prompt(key)
         if not prompt:
@@ -385,7 +420,7 @@ class ImageGeneratorPlugin(Star):
     @filter.command("lm添加", aliases={"lma"}, prefix_optional=True)
     async def preset_add(self, event: AstrMessageEvent):
         """Add a user preset to the data directory without rewriting old presets."""
-        raw = self._clean_message(event.message_str)
+        raw = self._clean_message(self._event_message_text(event))
         payload = raw.split(maxsplit=1)[1].strip() if " " in raw else ""
         if ":" not in payload:
             yield event.chain_result([Plain("用法：/lm添加 触发词:提示词")])
@@ -400,7 +435,7 @@ class ImageGeneratorPlugin(Star):
     @filter.command("lm删除", aliases={"lmd", "lm删", "删除预设"}, prefix_optional=True)
     async def preset_delete(self, event: AstrMessageEvent):
         """Delete only a user-owned preset; configured defaults remain untouched."""
-        raw = self._clean_message(event.message_str)
+        raw = self._clean_message(self._event_message_text(event))
         key = raw.split(maxsplit=1)[1].strip() if " " in raw else ""
         if not key or not await self.data_mgr.remove_user_prompt(key):
             yield event.chain_result([Plain("只能删除已经通过 /lm添加 保存的预设。")])
@@ -409,10 +444,9 @@ class ImageGeneratorPlugin(Star):
 
     @filter.command("画图查询次数", aliases={"手办化查询次数"}, prefix_optional=True)
     async def quota_query(self, event: AstrMessageEvent):
-        """Show personal and group balances."""
-        uid = norm_id(event.get_sender_id())
+        """Show billing status without exposing a personal generation limit."""
         gid = norm_id(event.get_group_id())
-        message = f"个人剩余：{self.data_mgr.get_user_count(uid)} 次"
+        message = "个人次数限制：已取消"
         if gid:
             message += f"\n群组剩余：{self.data_mgr.get_group_count(gid)} 次"
         yield event.chain_result([Plain(message)])
@@ -424,7 +458,7 @@ class ImageGeneratorPlugin(Star):
         """Let an administrator grant personal image credits."""
         if not self._is_admin(event):
             return
-        raw = self._clean_message(event.message_str)
+        raw = self._clean_message(self._event_message_text(event))
         parts = raw.split()
         if len(parts) < 3:
             yield event.chain_result([Plain("用法：/画图增加用户次数 用户ID 次数")])
@@ -444,7 +478,7 @@ class ImageGeneratorPlugin(Star):
         """Let an administrator grant group image credits."""
         if not self._is_admin(event):
             return
-        raw = self._clean_message(event.message_str)
+        raw = self._clean_message(self._event_message_text(event))
         parts = raw.split()
         if len(parts) < 2:
             yield event.chain_result([Plain("用法：/画图增加群组次数 次数")])
@@ -466,7 +500,7 @@ class ImageGeneratorPlugin(Star):
         """Switch among all supported image request modes."""
         if not self._is_admin(event):
             return
-        raw = self._clean_message(event.message_str)
+        raw = self._clean_message(self._event_message_text(event))
         parts = raw.split(maxsplit=1)
         if len(parts) == 1:
             yield event.chain_result(
@@ -492,7 +526,7 @@ class ImageGeneratorPlugin(Star):
         """View or change the default image model."""
         if not self._is_admin(event):
             return
-        raw = self._clean_message(event.message_str)
+        raw = self._clean_message(self._event_message_text(event))
         parts = raw.split(maxsplit=1)
         if len(parts) == 1:
             yield event.chain_result(

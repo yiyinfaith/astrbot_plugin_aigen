@@ -436,6 +436,77 @@ class ImageManager:
 
         return []
 
+    @staticmethod
+    def _event_chain(event: AstrMessageEvent) -> list:
+        """Read the message chain through the current AstrBot event API."""
+        getter = getattr(event, "get_messages", None)
+        if callable(getter):
+            try:
+                messages = getter()
+                if messages is not None:
+                    return list(messages)
+            except (AttributeError, TypeError, RuntimeError, ValueError) as exc:
+                logger.debug("Could not read event message chain: %s", exc)
+        message_obj = getattr(event, "message_obj", None)
+        messages = getattr(message_obj, "message", None)
+        return list(messages or [])
+
+    async def _load_quoted_image_refs(
+        self, event: AstrMessageEvent, reply: Reply
+    ) -> list[bytes]:
+        """Resolve quoted-message image references using AstrBot's utilities.
+
+        Newer AstrBot adapters intentionally leave ``Reply.chain`` empty.  The
+        quoted-message parser and ``MediaResolver`` are the supported fallback;
+        older installations simply return no references and use the existing
+        context/bot fetch path below.
+        """
+        try:
+            from astrbot.core.utils.media_utils import MediaResolver
+            from astrbot.core.utils.quoted_message.image_resolver import ImageResolver
+            from astrbot.core.utils.quoted_message_parser import (
+                extract_quoted_message_images,
+            )
+        except (ImportError, ModuleNotFoundError):
+            return []
+
+        try:
+            refs = list(await extract_quoted_message_images(event, reply))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Quoted image parser unavailable: %s", exc)
+            return []
+        if not refs:
+            return []
+
+        # OneBot may expose an opaque file token first and a downloadable URL
+        # only after ImageResolver talks to the adapter.
+        if getattr(event, "get_platform_name", lambda: "")() == "aiocqhttp":
+            try:
+                refs.extend(await ImageResolver(event).resolve_for_llm(refs))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Quoted image URL resolution failed: %s", exc)
+
+        result: list[bytes] = []
+        seen: set[str] = set()
+        for ref in refs:
+            if not ref or str(ref) in seen:
+                continue
+            seen.add(str(ref))
+            try:
+                raw = await MediaResolver(ref, media_type="image").to_bytes()
+                if raw:
+                    image = await asyncio.get_running_loop().run_in_executor(
+                        None, self._extract_first_frame_sync, raw
+                    )
+                    if image:
+                        result.append(image)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Quoted image reference could not be read: %s", exc)
+                fallback = await self.load_bytes(str(ref))
+                if fallback:
+                    result.append(fallback)
+        return result
+
     async def load_raw_bytes(self, src: str) -> bytes | None:
         """加载原始字节（本地/URL/Base64），不做图片解析或格式转换"""
         raw = None
@@ -662,8 +733,10 @@ class ImageManager:
 
         logger.debug(f"extract_images_from_event: ignore_id={ignore_id}")
 
+        chain = self._event_chain(event)
+
         # 2. 收集所有待下载/读取的任务
-        for seg in event.message_obj.message:
+        for seg in chain:
             # 回复链
             if isinstance(seg, Reply):
                 # 优先尝试使用 chain (AstrBot 可能会自动填充)
@@ -676,6 +749,12 @@ class ImageManager:
                                 tasks.append(self.load_bytes(s_chain.url))
                             elif s_chain.file:
                                 tasks.append(self.load_bytes(s_chain.file))
+
+                if not found_in_chain:
+                    quoted_images = await self._load_quoted_image_refs(event, seg)
+                    if quoted_images:
+                        found_in_chain = True
+                        tasks.extend(asyncio.sleep(0, result=image) for image in quoted_images)
 
                 # 如果 chain 中没有图片，且有 context 和 message_id，尝试主动获取消息
                 if not found_in_chain and context and hasattr(seg, "id") and seg.id:
@@ -704,9 +783,11 @@ class ImageManager:
                     tasks.append(self.load_bytes(seg.url))
                 elif self._is_probably_valid_source(getattr(seg, "file", None)):
                     tasks.append(self.load_bytes(seg.file))
+                elif self._is_probably_valid_source(getattr(seg, "path", None)):
+                    tasks.append(self.load_bytes(seg.path))
             # @用户
             elif isinstance(seg, At):
-                qq = str(seg.qq).strip()
+                qq = str(getattr(seg, "qq", getattr(seg, "user_id", ""))).strip()
                 # 过滤机器人自身的 ID
                 if ignore_id and qq == ignore_id:
                     continue
@@ -714,7 +795,12 @@ class ImageManager:
 
         # 3. 文本中正则匹配的@
         # 有些平台 At 可能表现为纯文本
-        text_ats = re.findall(r"@(\d+)", event.message_str)
+        getter = getattr(event, "get_message_str", None)
+        try:
+            event_text = str(getter() if callable(getter) else getattr(event, "message_str", "") or "")
+        except (AttributeError, TypeError, RuntimeError, ValueError):
+            event_text = str(getattr(event, "message_str", "") or "")
+        text_ats = re.findall(r"@(\d+)", event_text)
         for qq in text_ats:
             qq = str(qq).strip()
             # 过滤机器人自身的 ID
