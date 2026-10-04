@@ -203,20 +203,19 @@ class ImageGeneratorPlugin(Star):
         return clean, "自定义", str(self.conf.get("model", "nano-banana"))
 
     async def _extract_images(
-        self, event: AstrMessageEvent, prompt: str
+        self, event: AstrMessageEvent, prompt: str, preset_name: str = "自定义"
     ) -> list[bytes]:
-        """Collect images from the current message, mentions, and URL text."""
-        images = await self.img_mgr.extract_images_from_event(
+        """Collect image parameters using the preset or custom-prompt rules."""
+        is_preset = preset_name not in {"", "自定义"}
+        return await self.img_mgr.extract_images_from_event(
             event,
             ignore_id=self._bot_id(event),
             context=self.context,
             include_at_avatar=True,
+            max_images=1 if is_preset else None,
+            include_sender_avatar=is_preset,
+            extra_sources=extract_image_urls_from_text(prompt),
         )
-        for url in extract_image_urls_from_text(prompt):
-            image = await self.img_mgr.load_bytes(url)
-            if image:
-                images.append(image)
-        return images
 
     async def _save_config(self) -> None:
         """Persist command changes through AstrBot's native config object."""
@@ -311,7 +310,7 @@ class ImageGeneratorPlugin(Star):
         ):
             return
         event.stop_event()
-        images = await self._extract_images(event, prompt)
+        images = await self._extract_images(event, prompt, preset_name)
         yield event.chain_result(
             await self._generate(event, prompt, preset_name, model, images)
         )
@@ -379,7 +378,7 @@ class ImageGeneratorPlugin(Star):
             yield event.chain_result([Plain("用法：/画图 <自定义提示词>。")])
             return
         event.stop_event()
-        images = await self._extract_images(event, prompt)
+        images = await self._extract_images(event, prompt, preset_name)
         yield event.chain_result(
             await self._generate(event, prompt, preset_name, model, images)
         )

@@ -722,10 +722,22 @@ class ImageManager:
         ignore_id: str = None,
         context=None,
         include_at_avatar: bool = True,
+        max_images: int | None = None,
+        include_sender_avatar: bool = False,
+        extra_sources: List[str] | None = None,
     ) -> List[bytes]:
-        """从消息事件中提取所有图片 - 并发加速"""
-        tasks = []
-        at_users = set()  # 使用集合去重
+        """按请求类型收集图片，并保留消息中的参数顺序。
+
+        ``max_images=1`` 用于预设关键词：引用图片、消息中发送的图片、
+        @用户头像、发送者头像依次作为回退来源。多图请求不设置
+        ``max_images``，引用图片、发送图片和 @头像按照组件在消息中的顺序
+        收集，且不会自动加入发送者头像。
+        """
+        quoted_tasks = []
+        message_tasks = []
+        at_tasks = []
+        ordered_tasks = []
+        at_users: set[str] = set()
 
         # 1. 规范化 ignore_id，确保是字符串且去除空白
         if ignore_id:
@@ -735,28 +747,73 @@ class ImageManager:
 
         chain = self._event_chain(event)
 
-        # 2. 收集所有待下载/读取的任务
+        def add_image_task(source: str, bucket: list):
+            if not self._is_probably_valid_source(source):
+                return False
+            # Keep the loader lazy so lower-priority sources are not opened
+            # when a higher-priority source already satisfied a single-image
+            # request.
+            task = lambda source=source: self.load_bytes(source)
+            bucket.append(task)
+            ordered_tasks.append(task)
+            return True
+
+        def add_image_bytes(image: bytes, bucket: list):
+            if not isinstance(image, bytes):
+                return
+            task = lambda image=image: asyncio.sleep(0, result=image)
+            bucket.append(task)
+            ordered_tasks.append(task)
+
+        def add_at_user(user_id: str):
+            qq = str(user_id or "").strip()
+            if not qq or (ignore_id and qq == ignore_id) or qq in at_users:
+                return
+            at_users.add(qq)
+            if not include_at_avatar:
+                return
+            task = lambda qq=qq: self.get_avatar(qq)
+            at_tasks.append(task)
+            ordered_tasks.append(task)
+
+        def add_text_mentions(value):
+            if value is None:
+                return
+            for match in re.finditer(r"@(\d+)", str(value)):
+                add_at_user(match.group(1))
+
+        def image_source(segment) -> str | None:
+            for attr in ("url", "file", "path"):
+                source = getattr(segment, attr, None)
+                if source and self._is_probably_valid_source(source):
+                    return str(source)
+            return None
+
+        # 2. 收集引用图片、当前消息图片和 @头像。ordered_tasks 保留多图
+        # 请求的真实组件顺序；单图请求稍后按来源类别选择。
         for seg in chain:
-            # 回复链
             if isinstance(seg, Reply):
-                # 优先尝试使用 chain (AstrBot 可能会自动填充)
                 found_in_chain = False
                 if seg.chain:
                     for s_chain in seg.chain:
                         if isinstance(s_chain, Image):
-                            found_in_chain = True
-                            if s_chain.url:
-                                tasks.append(self.load_bytes(s_chain.url))
-                            elif s_chain.file:
-                                tasks.append(self.load_bytes(s_chain.file))
+                            source = image_source(s_chain)
+                            if source and add_image_task(source, quoted_tasks):
+                                found_in_chain = True
+                        elif isinstance(s_chain, At):
+                            add_at_user(
+                                getattr(s_chain, "qq", getattr(s_chain, "user_id", ""))
+                            )
+                        else:
+                            add_text_mentions(getattr(s_chain, "text", None))
 
                 if not found_in_chain:
                     quoted_images = await self._load_quoted_image_refs(event, seg)
                     if quoted_images:
                         found_in_chain = True
-                        tasks.extend(asyncio.sleep(0, result=image) for image in quoted_images)
+                        for image in quoted_images:
+                            add_image_bytes(image, quoted_tasks)
 
-                # 如果 chain 中没有图片，且有 context 和 message_id，尝试主动获取消息
                 if not found_in_chain and context and hasattr(seg, "id") and seg.id:
                     try:
                         logger.debug(
@@ -766,35 +823,23 @@ class ImageManager:
 
                         for comp in components:
                             if isinstance(comp, Image):
-                                if self._is_probably_valid_source(
-                                    getattr(comp, "url", None)
-                                ):
-                                    tasks.append(self.load_bytes(comp.url))
-                                elif self._is_probably_valid_source(
-                                    getattr(comp, "file", None)
-                                ):
-                                    tasks.append(self.load_bytes(comp.file))
+                                source = image_source(comp)
+                                if source:
+                                    add_image_task(source, quoted_tasks)
                     except Exception as e:
                         logger.warning(f"Failed to fetch reply message {seg.id}: {e}")
 
-            # 当前消息图片
             elif isinstance(seg, Image):
-                if self._is_probably_valid_source(getattr(seg, "url", None)):
-                    tasks.append(self.load_bytes(seg.url))
-                elif self._is_probably_valid_source(getattr(seg, "file", None)):
-                    tasks.append(self.load_bytes(seg.file))
-                elif self._is_probably_valid_source(getattr(seg, "path", None)):
-                    tasks.append(self.load_bytes(seg.path))
-            # @用户
+                source = image_source(seg)
+                if source:
+                    add_image_task(source, message_tasks)
             elif isinstance(seg, At):
-                qq = str(getattr(seg, "qq", getattr(seg, "user_id", ""))).strip()
-                # 过滤机器人自身的 ID
-                if ignore_id and qq == ignore_id:
-                    continue
-                at_users.add(qq)
+                add_at_user(getattr(seg, "qq", getattr(seg, "user_id", "")))
+            else:
+                add_text_mentions(getattr(seg, "text", None))
 
-        # 3. 文本中正则匹配的@
-        # 有些平台 At 可能表现为纯文本
+        # 3. 某些平台不会把 @ 序列化为 At 组件，补充规范化文本中的数字 QQ。
+        # 已由组件读到的 ID 会去重；无法得知组件位置时按消息末尾处理。
         getter = getattr(event, "get_message_str", None)
         try:
             raw_event_text = (
@@ -803,34 +848,45 @@ class ImageManager:
             event_text = str(raw_event_text or "")
         except (AttributeError, TypeError, RuntimeError, ValueError):
             event_text = str(getattr(event, "message_str", "") or "")
-        text_ats = re.findall(r"@(\d+)", event_text)
-        for qq in text_ats:
-            qq = str(qq).strip()
-            # 过滤机器人自身的 ID
-            if ignore_id and qq == ignore_id:
-                continue
-            at_users.add(qq)
-
-        # 4. 头像任务 (去重后)
+        add_text_mentions(event_text)
         if include_at_avatar and at_users:
             logger.debug(f"At users to fetch avatars: {at_users}")
-            for uid in at_users:
-                tasks.append(self.get_avatar(uid))
 
-        # 5. 并发执行所有任务
-        if not tasks:
+        # 文本中的图片 URL 属于发送者主动提供的图片，加入“发送图片”来源。
+        for source in extra_sources or []:
+            add_image_task(source, message_tasks)
+
+        async def resolve(tasks: list) -> list[bytes]:
+            if not tasks:
+                return []
+            coroutines = [task() if callable(task) else task for task in tasks]
+            results = await asyncio.gather(*coroutines, return_exceptions=True)
+            images = []
+            for result in results:
+                if isinstance(result, bytes):
+                    images.append(result)
+                elif isinstance(result, Exception):
+                    logger.warning(f"Image extraction error: {result}")
+            return images
+
+        if max_images == 1:
+            # 预设关键词只接收一张图，并严格按：引用 > 发送图片 > @头像
+            # > 发送者头像 选择第一个成功读取的来源。
+            for tasks in (quoted_tasks, message_tasks, at_tasks):
+                images = await resolve(tasks)
+                if images:
+                    return images[:1]
+            if include_sender_avatar:
+                sender_id = str(event.get_sender_id() or "").strip()
+                sender_avatar = await self.get_avatar(sender_id)
+                if isinstance(sender_avatar, bytes):
+                    return [sender_avatar]
             return []
-        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # 6. 过滤有效结果
-        img_bytes = []
-        for res in results:
-            if isinstance(res, bytes):
-                img_bytes.append(res)
-            elif isinstance(res, Exception):
-                logger.warning(f"Image extraction error: {res}")
-
-        return img_bytes
+        images = await resolve(ordered_tasks)
+        if max_images is not None and max_images > 0:
+            return images[:max_images]
+        return images
 
     def _create_table_sync(
         self, presets: List[Tuple[str, bool]], data_mgr, font_path: str
