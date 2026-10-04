@@ -60,6 +60,18 @@ class PluginContractTest(unittest.TestCase):
         self.assertNotIn("use_text_to_image_api", main + api)
         self.assertNotIn("text_to_image_model", main + api)
 
+    def test_new_trigger_switches_replace_legacy_prefix_setting(self):
+        schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+        main = (ROOT / "main.py").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("prefix", schema)
+        self.assertEqual(schema["extra_prefix"]["default"], "生图")
+        self.assertTrue(schema["custom_prompt_need_prefix"]["default"])
+        self.assertFalse(schema["preset_need_prefix"]["default"])
+        self.assertNotIn("memelite", json.dumps(schema, ensure_ascii=False).lower())
+        self.assertNotIn("memelite", main.lower())
+        self.assertNotIn("memelite", readme.lower())
+
     def test_personal_limit_is_not_used_for_generation(self):
         main = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertNotIn("decrease_user_count", main)

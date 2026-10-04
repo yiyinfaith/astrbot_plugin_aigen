@@ -42,7 +42,7 @@ class ImageGeneratorPlugin(Star):
         "手办化帮助",
         "lm帮助",
     }
-    _DRAW_COMMANDS: ClassVar[set[str]] = {"画图", "文生图"}
+    _DRAW_COMMANDS: ClassVar[set[str]] = {"画图", "文生图", "生图"}
     _MODE_ALIASES: ClassVar[dict[str, str]] = {
         "image": "openai_image",
         "openai_image": "openai_image",
@@ -136,6 +136,13 @@ class ImageGeneratorPlugin(Star):
         return re.sub(r"^(?:[/#！!])\s*", "", (text or "").strip()).strip()
 
     @staticmethod
+    def _has_astrbot_prefix(event: AstrMessageEvent, text: str) -> bool:
+        """Return whether an event has AstrBot's command prefix or bot wake."""
+        if str(text or "").lstrip().startswith(("/", "#", "!", "！")):
+            return True
+        return bool(getattr(event, "is_at_or_wake_command", False))
+
+    @staticmethod
     def _remove_mention_prefix(text: str) -> str:
         """Drop textual @mentions that precede a matched preset keyword.
 
@@ -154,8 +161,8 @@ class ImageGeneratorPlugin(Star):
     def _resolve_preset_prompt(self, text: str) -> tuple[str, str, str] | None:
         """Resolve a keyword preset anywhere in the message.
 
-        The matching rule follows memelite's fuzzy mode (``keyword in text``)
-        instead of requiring the keyword to be the first token.  This allows
+        The matching rule uses fuzzy matching (``keyword in text``) instead of
+        requiring the keyword to be the first token.  This allows
         messages such as ``@小明手办化`` and ``请手办化`` to trigger while the
         image collector still obtains the actual ``At`` component/avatar.
         """
@@ -163,7 +170,7 @@ class ImageGeneratorPlugin(Star):
         if not clean:
             return None
         clean, model = self._model_for_request(clean)
-        extra_prefix = str(self.conf.get("extra_prefix", "bnn") or "bnn").strip()
+        extra_prefix = str(self.conf.get("extra_prefix", "生图") or "生图").strip()
         if extra_prefix and (
             clean == extra_prefix or clean.startswith(extra_prefix + " ")
         ):
@@ -303,8 +310,9 @@ class ImageGeneratorPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=5)
     async def on_preset_request(self, event: AstrMessageEvent, ctx=None):
-        """Trigger configured keyword presets and the free prompt prefix."""
-        text = self._clean_message(self._event_message_text(event))
+        """Trigger configured presets and custom prompts from normal messages."""
+        raw_text = self._event_message_text(event)
+        text = self._clean_message(raw_text)
         if not text:
             return
         if any(
@@ -316,6 +324,16 @@ class ImageGeneratorPlugin(Star):
         if resolved is None or not resolved[0]:
             return
         prompt, preset_name, model = resolved
+        need_prefix_key = (
+            "custom_prompt_need_prefix"
+            if preset_name == "自定义"
+            else "preset_need_prefix"
+        )
+        default_need_prefix = preset_name == "自定义"
+        if self.conf.get(need_prefix_key, default_need_prefix) and not self._has_astrbot_prefix(
+            event, raw_text
+        ):
+            return
         event.stop_event()
         images = await self._extract_images(event, prompt)
         yield event.chain_result(
@@ -375,7 +393,7 @@ class ImageGeneratorPlugin(Star):
         )
         yield event.chain_result(result)
 
-    @filter.command("画图", aliases={"文生图"}, prefix_optional=True)
+    @filter.command("画图", aliases={"文生图", "生图"}, prefix_optional=False)
     async def draw_command(self, event: AstrMessageEvent):
         """Generate an image from ``/画图 <自定义提示词>`` or a preset."""
         prompt, preset_name, model = self._resolve_draw_prompt(
