@@ -24,8 +24,10 @@ class ImageManager:
         self.proxy = config.get("proxy_url") if config.get("use_proxy") else None
         self.max_retries = config.get("download_retries", 3)
         self.timeout = config.get("timeout", 60)
-        self.table_quality = config.get("preset_table_quality", "高清")
-        self.table_columns = config.get("preset_table_columns", 5)
+        # Preset-table rendering options were removed from the public schema.
+        # Keep stable internal defaults for legacy helper methods.
+        self.table_quality = "高清"
+        self.table_columns = 5
         self._font_download_lock = asyncio.Lock()
         self._font_install_task: Optional[asyncio.Task] = None
 

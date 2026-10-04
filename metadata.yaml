@@ -1,9 +1,9 @@
 name: astrbot_plugin_aigen
-display_name: AI 图片生成器
-desc: 支持文生图、图生图、关键词预设和计费的 AstrBot 图片生成插件
-short_desc: 多接口图片生成与关键词预设
-version: v3.1.0
-author: yiyinfaith
+display_name: AI多模态生成器
+desc: 适用于Astrbot的多模态生成插件，包括生图生视频等
+short_desc: 适用于Astrbot的多模态生成插件，包括生图生视频等
+version: v1.0.0
+author: 一吟Faith
 repo: https://github.com/yiyinfaith/astrbot_plugin_aigen
 astrbot_version: ">=4.16,<5"
 support_platforms:
@@ -14,5 +14,4 @@ support_platforms:
   - dingtalk
   - wecom
 help: |
-  使用 /画图 <自定义提示词> 生成图片，也可以发送已配置的预设关键词触发预设提示词。
-  发送 /画图帮助 查看插件配置中的完整帮助文字。
+  插件介绍及使用教程见README.md文件

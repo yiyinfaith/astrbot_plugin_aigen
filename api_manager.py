@@ -53,15 +53,12 @@ class ApiManager:
         self,
         legacy_use_power_or_proxy=None,
         proxy=None,
-        use_text_to_image_api: bool = False,
     ):
         """兼容旧版 call_api 调用签名：
-        - 新版: call_api(images, prompt, model, proxy, use_text_to_image_api=...)
+        - 新版: call_api(images, prompt, model, proxy=...)
         - 旧版: call_api(images, prompt, model, False, proxy)
         """
         resolved_proxy = proxy
-        resolved_use_text_to_image_api = bool(use_text_to_image_api)
-
         if isinstance(legacy_use_power_or_proxy, bool):
             # 旧版 use_power 参数，现已废弃，直接忽略
             pass
@@ -75,87 +72,7 @@ class ApiManager:
         if resolved_proxy is not None:
             resolved_proxy = str(resolved_proxy).strip() or None
 
-        return resolved_proxy, resolved_use_text_to_image_api
-
-    def _get_luxury_request_count(self) -> int:
-        """获取奢侈模式并发请求数。"""
-        try:
-            count = int(self.config.get("luxury_request_count", 3) or 3)
-        except Exception:
-            count = 3
-        return max(1, count)
-
-    async def _call_api_with_luxury_mode(
-        self,
-        images: List[bytes],
-        prompt: str,
-        model: str,
-        proxy: str = None,
-        use_text_to_image_api: bool = False,
-        aspect_ratio: str = None,
-        resolution: str = None,
-    ) -> bytes | str:
-        """奢侈模式：同一请求并发多次，只取首个成功结果，其余丢弃。"""
-        luxury_count = self._get_luxury_request_count()
-        if luxury_count <= 1:
-            return await self._call_api_once(
-                images,
-                prompt,
-                model,
-                proxy,
-                use_text_to_image_api,
-                aspect_ratio=aspect_ratio,
-                resolution=resolution,
-            )
-
-        logger.info(
-            f"奢侈模式已启用：同一请求并发 {luxury_count} 次，仅取其中一张成功图片"
-        )
-
-        tasks = [
-            asyncio.create_task(
-                self._call_api_once(
-                    images,
-                    prompt,
-                    model,
-                    proxy,
-                    use_text_to_image_api,
-                    aspect_ratio=aspect_ratio,
-                    resolution=resolution,
-                )
-            )
-            for _ in range(luxury_count)
-        ]
-
-        first_error = "奢侈模式下所有并发请求均失败"
-        success_result = None
-
-        try:
-            for completed in asyncio.as_completed(tasks):
-                try:
-                    result = await completed
-                except Exception as e:
-                    result = f"系统错误: {e}"
-
-                if isinstance(result, bytes) and result:
-                    success_result = result
-                    break
-
-                if (
-                    isinstance(result, str)
-                    and result
-                    and first_error == "奢侈模式下所有并发请求均失败"
-                ):
-                    first_error = result
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-        if success_result is not None:
-            return success_result
-        return first_error
+        return resolved_proxy
 
     def _should_bypass_proxy(self, url: str) -> bool:
         """本地/内网地址不走代理，避免请求本地中转时反而绕远路。"""
@@ -254,22 +171,18 @@ class ApiManager:
             else "openai_chat"
         )
 
-    def _get_base_url(self, mode: str, use_text_to_image_api: bool = False) -> str:
+    def _get_base_url(self, mode: str) -> str:
         unified_base = str(self.config.get("base_url", "") or "").strip()
         if unified_base:
             return unified_base
 
-        if use_text_to_image_api and self.config.get("text_to_image_api_url"):
-            return str(self.config.get("text_to_image_api_url") or "").strip()
 
         if mode == "gemini_official":
             legacy_url = str(self.config.get("gemini_api_url", "") or "").strip()
             return legacy_url or "https://generativelanguage.googleapis.com"
         return str(self.config.get("generic_api_url", "") or "").strip()
 
-    async def get_key(
-        self, mode: str, use_text_to_image_api: bool = False
-    ) -> str | None:
+    async def get_key(self, mode: str) -> str | None:
         """获取轮询 Key"""
         async with self.key_lock:
             keys = self._normalize_keys(self.config.get("api_keys", []))
@@ -277,15 +190,6 @@ class ApiManager:
                 k = keys[self.unified_idx % len(keys)]
                 self.unified_idx += 1
                 return k
-
-            if use_text_to_image_api:
-                keys = self._normalize_keys(
-                    self.config.get("text_to_image_api_keys", [])
-                )
-                if keys:
-                    k = keys[self.unified_idx % len(keys)]
-                    self.unified_idx += 1
-                    return k
 
             if mode == "gemini_official":
                 keys = self._normalize_keys(self.config.get("gemini_api_keys", []))
@@ -545,6 +449,73 @@ class ApiManager:
             logger.error(f"Error parsing API response: {e}")
         return None
 
+    @staticmethod
+    def _parse_gemini_stream_response(response_text: str) -> Dict | None:
+        """Merge Gemini ``streamGenerateContent`` SSE chunks into one response."""
+        candidates = []
+        for line in response_text.splitlines():
+            line = line.strip()
+            if not line or line.startswith(":"):
+                continue
+            if line.startswith("data:"):
+                line = line[5:].strip()
+            if not line or line == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for candidate in chunk.get("candidates", []) or []:
+                if isinstance(candidate, dict):
+                    candidates.append(candidate)
+        if not candidates:
+            return None
+
+        first = dict(candidates[0])
+        merged_parts = []
+        finish_reason = None
+        for candidate in candidates:
+            content = candidate.get("content") or {}
+            parts = content.get("parts") or []
+            if isinstance(parts, list):
+                merged_parts.extend(part for part in parts if isinstance(part, dict))
+            if candidate.get("finishReason"):
+                finish_reason = candidate["finishReason"]
+        if merged_parts:
+            first["content"] = {"parts": merged_parts}
+        if finish_reason:
+            first["finishReason"] = finish_reason
+        return {"candidates": [first]}
+
+    @staticmethod
+    def _parse_response_stream(response_text: str) -> Dict | None:
+        """Collect image-generation items from Responses API SSE output."""
+        response_data: Dict = {}
+        output_items = []
+        saw_json = False
+        for line in response_text.splitlines():
+            line = line.strip()
+            if not line or line.startswith(":"):
+                continue
+            if line.startswith("data:"):
+                line = line[5:].strip()
+            if not line or line == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            saw_json = True
+            if isinstance(chunk.get("response"), dict):
+                response_data.update(chunk["response"])
+            if isinstance(chunk.get("output"), list):
+                output_items.extend(chunk["output"])
+            if isinstance(chunk.get("item"), dict):
+                output_items.append(chunk["item"])
+        if output_items:
+            response_data["output"] = output_items
+        return response_data if saw_json and response_data else None
+
     def get_mime_type(self, data: bytes) -> str:
         """简单的 MIME 类型检测"""
         if data.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -649,7 +620,27 @@ class ApiManager:
         try:
             res_data = json.loads(resp_text)
         except json.JSONDecodeError:
-            return f"数据解析失败: 返回内容不是 JSON. 内容: {resp_text[:100]}..."
+            # A few compatible Images endpoints return one JSON object per
+            # ``data:`` SSE event when streaming is enabled.
+            stream_items = []
+            for line in resp_text.splitlines():
+                line = line.strip()
+                if line.startswith("data:"):
+                    line = line[5:].strip()
+                if not line or line == "[DONE]":
+                    continue
+                try:
+                    stream_items.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            if not stream_items:
+                return f"数据解析失败: 返回内容不是 JSON. 内容: {resp_text[:100]}..."
+            res_data = stream_items[-1]
+            if isinstance(res_data, dict) and "data" not in res_data:
+                for item in stream_items:
+                    if isinstance(item, dict) and isinstance(item.get("data"), list):
+                        res_data = {**res_data, "data": item["data"]}
+                        break
 
         if "error" in res_data:
             return json.dumps(res_data["error"], ensure_ascii=False)
@@ -673,6 +664,7 @@ class ApiManager:
         proxy: str = None,
         generation_params: Dict = None,
         exact_endpoint: bool = False,
+        stream: bool | None = None,
     ) -> bytes | str:
         """Call the Images edits endpoint with multipart form data.
 
@@ -690,6 +682,8 @@ class ApiManager:
             Generated image bytes or a user-facing error message.
         """
         has_input_image = bool(images)
+        if stream is None:
+            stream = bool(self.config.get("use_stream", False))
         candidate_urls = (
             [base_url.rstrip("/")]
             if exact_endpoint
@@ -722,6 +716,8 @@ class ApiManager:
                 form.add_field("prompt", final_prompt)
                 form.add_field("n", "1")
                 form.add_field("size", generation_params["size"])
+                if stream:
+                    form.add_field("stream", "true")
                 if not str(model).lower().startswith("gpt-image"):
                     form.add_field("response_format", "b64_json")
 
@@ -741,6 +737,22 @@ class ApiManager:
                     timeout=timeout,
                 ) as resp:
                     resp_text = await resp.text()
+
+                    if resp.status != 200 and stream:
+                        logger.info(
+                            "Images edits endpoint rejected stream mode; retrying once without stream"
+                        )
+                        return await self._call_images_api_multipart(
+                            images,
+                            prompt,
+                            model,
+                            key,
+                            base_url,
+                            proxy,
+                            generation_params=generation_params,
+                            exact_endpoint=exact_endpoint,
+                            stream=False,
+                        )
 
                     if "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
                         logger.warning(
@@ -805,6 +817,7 @@ class ApiManager:
         proxy: str = None,
         generation_params: Dict = None,
         exact_endpoint: bool = False,
+        stream: bool = False,
     ) -> bytes | str:
         """Call an OpenAI-compatible Images API endpoint.
 
@@ -845,6 +858,7 @@ class ApiManager:
                 base_url,
                 proxy,
                 generation_params=generation_params,
+                stream=stream,
             )
 
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
@@ -869,6 +883,11 @@ class ApiManager:
         }
         if not str(model).lower().startswith("gpt-image"):
             payload["response_format"] = "b64_json"
+        if stream:
+            # Some compatible Images endpoints expose SSE as an optional
+            # request flag; providers that do not support it still return a
+            # normal error which is surfaced to the caller.
+            payload["stream"] = True
 
         # 如果有输入图片，兼容不同 Images API 的字段要求
         # 一些服务要求 image_url；另一些只认 image / input_image / images
@@ -897,6 +916,22 @@ class ApiManager:
                     timeout=timeout,
                 ) as resp:
                     resp_text = await resp.text()
+
+                    if resp.status != 200 and stream:
+                        logger.info(
+                            "Images endpoint rejected stream mode; retrying once without stream"
+                        )
+                        return await self.call_images_api(
+                            images,
+                            prompt,
+                            model,
+                            key,
+                            base_url,
+                            proxy,
+                            generation_params=generation_params,
+                            exact_endpoint=exact_endpoint,
+                            stream=False,
+                        )
 
                     if "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
                         logger.warning(
@@ -978,6 +1013,7 @@ class ApiManager:
         base_url: str,
         proxy: str = None,
         generation_params: dict | None = None,
+        stream: bool = False,
     ) -> bytes | str:
         """Call a Responses-compatible image endpoint at ``/v1/response``.
 
@@ -1030,6 +1066,8 @@ class ApiManager:
             "input": [{"role": "user", "content": content}],
             "tools": [{"type": "image_generation"}],
         }
+        if stream:
+            payload["stream"] = True
 
         timeout_value = self.config.get("timeout", 120)
         timeout = aiohttp.ClientTimeout(total=timeout_value)
@@ -1047,6 +1085,20 @@ class ApiManager:
                 response_text = await response.text()
 
                 if response.status != 200:
+                    if stream:
+                        logger.info(
+                            "Responses endpoint rejected stream mode; retrying once without stream"
+                        )
+                        return await self.call_response_api(
+                            images,
+                            prompt,
+                            model,
+                            key,
+                            base_url,
+                            proxy,
+                            generation_params=generation_params,
+                            stream=False,
+                        )
                     error_message = response_text
                     try:
                         error_data = json.loads(response_text)
@@ -1066,10 +1118,12 @@ class ApiManager:
                 try:
                     response_data = json.loads(response_text)
                 except json.JSONDecodeError:
-                    return (
-                        "数据解析失败: 返回内容不是 JSON. "
-                        f"内容: {response_text[:100]}..."
-                    )
+                    response_data = self._parse_response_stream(response_text)
+                    if response_data is None:
+                        return (
+                            "数据解析失败: 返回内容不是 JSON. "
+                            f"内容: {response_text[:100]}..."
+                        )
 
                 if "error" in response_data:
                     return json.dumps(response_data["error"], ensure_ascii=False)
@@ -1395,31 +1449,16 @@ class ApiManager:
         model: str,
         legacy_use_power_or_proxy=None,
         proxy: str = None,
-        use_text_to_image_api: bool = False,
         aspect_ratio: str = None,
         resolution: str = None,
     ) -> bytes | str:
-        proxy, use_text_to_image_api = self._normalize_call_api_args(
-            legacy_use_power_or_proxy, proxy, use_text_to_image_api
-        )
-
-        if self.config.get("enable_luxury_mode", False):
-            return await self._call_api_with_luxury_mode(
-                images,
-                prompt,
-                model,
-                proxy,
-                use_text_to_image_api,
-                aspect_ratio=aspect_ratio,
-                resolution=resolution,
-            )
+        proxy = self._normalize_call_api_args(legacy_use_power_or_proxy, proxy)
 
         return await self._call_api_once(
             images,
             prompt,
             model,
             proxy,
-            use_text_to_image_api,
             aspect_ratio=aspect_ratio,
             resolution=resolution,
         )
@@ -1430,7 +1469,6 @@ class ApiManager:
         prompt: str,
         model: str,
         proxy: str = None,
-        use_text_to_image_api: bool = False,
         aspect_ratio: str = None,
         resolution: str = None,
     ) -> bytes | str:
@@ -1444,7 +1482,7 @@ class ApiManager:
 
         # 1. 确定 URL
         base = self._get_base_url(
-            interface_mode, use_text_to_image_api=use_text_to_image_api
+            interface_mode
         )
 
         if not base:
@@ -1452,7 +1490,7 @@ class ApiManager:
 
         # 2. 获取 Key
         key = await self.get_key(
-            interface_mode, use_text_to_image_api=use_text_to_image_api
+            interface_mode
         )
         if not key:
             return "无可用 API Key"
@@ -1462,7 +1500,7 @@ class ApiManager:
         payload = {}
         url = base.rstrip("/")
 
-        default_aspect_ratio = self.config.get("image_aspect_ratio", "4:3")
+        default_aspect_ratio = "4:3"
         if images:
             default_aspect_ratio = detect_aspect_ratio_from_image(
                 images[0], default_aspect_ratio
@@ -1489,6 +1527,7 @@ class ApiManager:
                 base,
                 proxy,
                 generation_params=generation_params,
+                stream=bool(self.config.get("use_stream", False)),
             )
 
         custom_kind = ""
@@ -1513,6 +1552,7 @@ class ApiManager:
                 proxy,
                 generation_params=generation_params,
                 exact_endpoint=(interface_mode == "custom_endpoint"),
+                stream=bool(self.config.get("use_stream", False)),
             )
 
         # 对于明确使用 Generic 图片接口的站点，可配置为优先直连 Images API
@@ -1530,6 +1570,7 @@ class ApiManager:
                     base,
                     proxy,
                     generation_params=generation_params,
+                    stream=bool(self.config.get("use_stream", False)),
                 )
                 if not (
                     images
@@ -1558,6 +1599,9 @@ class ApiManager:
                 # 无论用户填了域名、v1、v1beta 还是完整接口路径，都先还原为基础地址，
                 # 再由 gemini_official 模式统一补全官方 v1beta generateContent 路径。
                 url = self._build_gemini_api_url(url, model)
+                if self.config.get("use_stream", False):
+                    url = url.replace(":generateContent", ":streamGenerateContent")
+                    url += "&alt=sse" if "?" in url else "?alt=sse"
                 logger.info(f"Gemini API 地址已按接口模式规范化为: {url}")
             headers["x-goog-api-key"] = key
 
@@ -1721,6 +1765,7 @@ class ApiManager:
                                         base,
                                         proxy,
                                         generation_params=generation_params,
+                                        stream=bool(self.config.get("use_stream", False)),
                                     )
 
                                 return f"API Error {resp.status}: {err_msg} | URL: {active_url}"
@@ -1749,6 +1794,7 @@ class ApiManager:
                                         base,
                                         proxy,
                                         generation_params=generation_params,
+                                        stream=bool(self.config.get("use_stream", False)),
                                     )
 
                                 return f"API Error {resp.status}: {err_msg} | URL: {active_url}"
@@ -1780,6 +1826,7 @@ class ApiManager:
                                 base,
                                 proxy,
                                 generation_params=generation_params,
+                                stream=bool(self.config.get("use_stream", False)),
                             )
 
                         return (
@@ -1797,7 +1844,11 @@ class ApiManager:
                 res_data = json.loads(resp_text)
             except json.JSONDecodeError:
                 # 兼容：处理被强制流式返回的情况 (SSE format)
-                if "data: " in resp_text:
+                if mode == "gemini_official":
+                    res_data = self._parse_gemini_stream_response(resp_text)
+                    if res_data is None:
+                        return f"数据解析失败: Gemini 流式响应无法解析. 内容: {resp_text[:100]}..."
+                elif "data: " in resp_text:
                     full_content = ""
                     tool_calls_buffer = {}  # {index: "arguments"}
 

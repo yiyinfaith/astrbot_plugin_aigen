@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Any, ClassVar
 
 from astrbot.api import logger
@@ -22,14 +23,14 @@ from astrbot.core import AstrBotConfig
 from .api_manager import ApiManager
 from .data_manager import DataManager
 from .image_manager import ImageManager
-from .utils import extract_image_urls_from_text, norm_id, normalize_model_list
+from .utils import extract_image_urls_from_text, norm_id
 
 
 @register(
     "astrbot_plugin_aigen",
     "yiyinfaith",
-    "支持多种图片接口的文生图、图生图与关键词预设插件",
-    "3.1.0",
+    "统一图片生成、图生图与关键词预设插件",
+    "1.0.0",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -62,6 +63,7 @@ class ImageGeneratorPlugin(Star):
         self.data_mgr = DataManager(data_dir, config)
         self.img_mgr = ImageManager(config)
         self.api_mgr = ApiManager(config)
+        self._llm_last_call: dict[str, float] = {}
 
     async def initialize(self):
         """Load persistent quotas and user presets after plugin injection."""
@@ -116,16 +118,9 @@ class ImageGeneratorPlugin(Star):
         return re.sub(r"^(?:[/#！!])", "", (text or "").strip()).strip()
 
     def _model_for_request(self, text: str) -> tuple[str, str]:
-        """Resolve an optional ``关键词(序号)`` model override."""
+        """Resolve the configured default model for a request."""
         model = str(self.conf.get("model", "nano-banana") or "nano-banana")
-        match = re.match(r"^(.*?)[（(](\d+)[）)]$", text.strip())
-        if not match:
-            return text.strip(), model
-        candidate = normalize_model_list(self.conf.get("model_list", []))
-        index = int(match.group(2)) - 1
-        if 0 <= index < len(candidate):
-            model = candidate[index]
-        return match.group(1).strip(), model
+        return text.strip(), model
 
     def _resolve_preset_prompt(self, text: str) -> tuple[str, str, str] | None:
         """Resolve a keyword preset and preserve text appended after it."""
@@ -177,34 +172,18 @@ class ImageGeneratorPlugin(Star):
         return images
 
     def _quota(self, event: AstrMessageEvent, uid: str, gid: str, cost: int) -> dict:
-        """Apply access lists and return the account that will be charged."""
-        if uid in {norm_id(x) for x in (self.conf.get("user_blacklist") or [])}:
-            return {"allowed": False, "msg": "你暂时没有使用图片生成功能的权限。"}
-        if gid and gid in {
-            norm_id(x) for x in (self.conf.get("group_blacklist") or [])
-        }:
-            return {"allowed": False, "msg": "当前群组暂时没有使用图片生成功能的权限。"}
+        """Check credits and return the account that will be charged.
+
+        Administrators remain free.  Other requests use personal credits first
+        and fall back to group credits when a group is available.
+        """
         if self._is_admin(event):
             return {"allowed": True, "source": "free"}
-
-        users = {norm_id(x) for x in (self.conf.get("user_whitelist") or [])}
-        groups = {norm_id(x) for x in (self.conf.get("group_whitelist") or [])}
-        if users and uid not in users:
-            return {"allowed": False, "msg": "你还没有使用权限，请联系管理员开通。"}
-        if groups and (not gid or gid not in groups):
-            return {
-                "allowed": False,
-                "msg": "当前群组还没有使用权限，请联系管理员开通。",
-            }
-        use_user = bool(self.conf.get("enable_user_limit", True))
-        use_group = bool(self.conf.get("enable_group_limit", False))
-        if not use_user and not use_group:
-            return {"allowed": True, "source": "free"}
         user_balance = self.data_mgr.get_user_count(uid)
-        if use_user and user_balance >= cost:
+        if user_balance >= cost:
             return {"allowed": True, "source": "user"}
         group_balance = self.data_mgr.get_group_count(gid) if gid else 0
-        if use_group and gid and group_balance >= cost:
+        if gid and group_balance >= cost:
             return {"allowed": True, "source": "group"}
         return {
             "allowed": False,
@@ -232,6 +211,7 @@ class ImageGeneratorPlugin(Star):
         preset_name: str,
         model: str,
         images: list[bytes],
+        show_progress: bool = True,
     ) -> list[Any]:
         """Charge one request, call the selected API mode, and build a reply."""
         uid = norm_id(event.get_sender_id())
@@ -249,16 +229,14 @@ class ImageGeneratorPlugin(Star):
         feedback = template.replace("{preset}", display_name)
         if not display_name:
             feedback = feedback.replace(" [{preset}]", "").replace("[{preset}]", "")
-        await event.send(event.chain_result([Plain(feedback)]))
+        if show_progress:
+            await event.send(event.chain_result([Plain(feedback)]))
 
         if deduction.get("source") == "user":
             await self.data_mgr.decrease_user_count(uid)
         elif deduction.get("source") == "group":
             await self.data_mgr.decrease_group_count(gid)
 
-        use_text_to_image_api = not images
-        if use_text_to_image_api:
-            model = str(self.conf.get("text_to_image_model") or model)
         try:
             start = datetime.now(timezone.utc)
             result = await self.api_mgr.call_api(
@@ -266,7 +244,6 @@ class ImageGeneratorPlugin(Star):
                 prompt,
                 model,
                 proxy=self.img_mgr.proxy,
-                use_text_to_image_api=use_text_to_image_api,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Image generation request failed")
@@ -311,6 +288,59 @@ class ImageGeneratorPlugin(Star):
         yield event.chain_result(
             await self._generate(event, prompt, preset_name, model, images)
         )
+
+    @filter.llm_tool(name="generate_image")
+    async def generate_image_tool(
+        self, event: AstrMessageEvent, prompt: str, image_url: str = ""
+    ):
+        """使用统一图片生成入口生成或编辑图片。
+
+        Args:
+            prompt(string): 图片生成或编辑提示词。
+            image_url(string): 可选的参考图片 URL、本地路径或 base64:// 数据。为空时进行文生图，传入后进行图生图。
+        """
+        if not self.conf.get("enable_llm_tool", True):
+            yield "图片生成函数工具当前已在插件配置中停用。"
+            return
+
+        uid = norm_id(event.get_sender_id())
+        cooldown = max(0, int(self.conf.get("llm_cooldown_seconds", 60) or 0))
+        now = monotonic()
+        if cooldown:
+            elapsed = now - self._llm_last_call.get(uid, 0.0)
+            if elapsed < cooldown:
+                yield f"图片生成工具冷却中，请 {int(cooldown - elapsed) + 1} 秒后再试。"
+                return
+        self._llm_last_call[uid] = now
+
+        prompt = str(prompt or "").strip()
+        if not prompt:
+            yield "请提供图片生成或编辑提示词。"
+            return
+
+        images: list[bytes] = []
+        sources = [
+            item.strip()
+            for item in re.split(r"[\s,，]+", str(image_url or ""))
+            if item.strip()
+        ]
+        for source in sources:
+            image = await self.img_mgr.load_bytes(source)
+            if image:
+                images.append(image)
+        if image_url and not images:
+            yield "参考图片无法读取，请提供可访问的图片 URL、本地路径或 base64:// 数据。"
+            return
+
+        result = await self._generate(
+            event,
+            prompt,
+            "自定义",
+            str(self.conf.get("model", "nano-banana") or "nano-banana"),
+            images,
+            show_progress=bool(self.conf.get("llm_show_progress", True)),
+        )
+        yield event.chain_result(result)
 
     @filter.command("画图", aliases={"文生图"}, prefix_optional=True)
     async def draw_command(self, event: AstrMessageEvent):
@@ -465,12 +495,9 @@ class ImageGeneratorPlugin(Star):
         raw = self._clean_message(event.message_str)
         parts = raw.split(maxsplit=1)
         if len(parts) == 1:
-            models = normalize_model_list(self.conf.get("model_list", []))
             yield event.chain_result(
                 [
-                    Plain(
-                        f"当前模型：{self.conf.get('model')}\n可选：{', '.join(models)}"
-                    )
+                    Plain(f"当前模型：{self.conf.get('model')}")
                 ]
             )
             return

@@ -24,57 +24,11 @@
         "hint": "可填写一个或多个 key，多个 key 建议按行填写。",
         "default": ""
     },
-    "model_list": {
-        "description": "【核心】模型列表配置（仅用于展示/序号切换）",
-        "type": "list",
-        "hint": "这里只是给 #切换模型 命令和序号切换功能提供候选列表，可留空。它不会限制【通用】默认模型名称、【通用】文生图专用模型的填写，这些字段都可以直接填写任意模型名称，即使不在本列表中也能正常使用。",
-        "items": {
-            "type": "string",
-            "description": "模型名称 (如 nano-banana, gemini-1.5-pro)"
-        },
-        "default": [
-            "nano-banana",
-            "nano-banana-2-4k",
-            "nano-banana-2-2k",
-            "nano-banana-2-1k",
-            "gemini-4k",
-            "gemini-2k",
-            "gemini-1k",
-            "gemini-1.5-pro",
-            "gemini-1.5-flash",
-            "gemini-3-pro-image-preview",
-            "gemini-2.5-flash-image",
-            "nano-banana-hd",
-            "gemini-2.5-flash-image-preview"
-        ]
-    },
     "model": {
         "description": "【通用】默认模型名称",
         "type": "string",
         "hint": "当前默认使用的模型ID。这里可以直接填写任意模型名称，不需要出现在【核心】模型列表配置中。",
         "default": "nano-banana"
-    },
-    "text_to_image_model": {
-        "description": "【通用】文生图专用模型",
-        "type": "string",
-        "hint": "文生图功能使用的专用模型ID。这里也可以直接填写任意模型名称，不需要出现在【核心】模型列表配置中。【非必填】留空时会自动回退使用【通用】默认模型名称，不会影响文生图功能正常使用。",
-        "default": ""
-    },
-    "text_to_image_api_url": {
-        "description": "【通用】文生图专用接口地址",
-        "type": "string",
-        "hint": "仅用于文生图功能的专用 API 基础地址。只需填写 https://api.example.com 一类基础 URL，版本段和接口路径会被忽略，并按当前接口模式自动补全。【非必填】留空时自动使用统一接口地址。",
-        "default": ""
-    },
-    "text_to_image_api_keys": {
-        "description": "【通用】文生图专用 API Key 池",
-        "type": "list",
-        "hint": "仅用于文生图功能的专用 Key 轮询池。【非必填】留空时会自动回退使用当前模式下的普通 API Key 池，不会导致文生图不可用。",
-        "items": {
-            "type": "string",
-            "description": "API Key"
-        },
-        "default": []
     },
     "image_resolution": {
         "description": "【画质】图像分辨率",
@@ -86,38 +40,6 @@
             "2K",
             "4K"
         ]
-    },
-    "image_aspect_ratio": {
-        "description": "【画面】文生图默认比例",
-        "type": "string",
-        "hint": "提示词没有写比例时使用。文生图默认 4:3；图生图会优先读取上传图片尺寸并自动匹配最接近的常规比例。",
-        "default": "4:3",
-        "options": [
-            "1:1",
-            "16:9",
-            "9:16",
-            "5:4",
-            "4:5",
-            "4:3",
-            "3:4",
-            "3:2",
-            "2:3",
-            "21:9"
-        ]
-    },
-    "enable_luxury_mode": {
-        "description": "【全局】启用奢侈模式",
-        "type": "bool",
-        "hint": "开启后，每次图片请求都会并发发送多次，只取其中第一张成功图片，其余结果直接丢弃。适合用更多消耗换更高成功率。",
-        "default": false
-    },
-    "luxury_request_count": {
-        "description": "【全局】奢侈模式并发次数",
-        "type": "int",
-        "hint": "奢侈模式下同一请求并发发送的次数。例如设为3，则一次请求会并发发起3次，只取其中成功的一张图片，其余全部丢弃。",
-        "default": 3,
-        "min": 1,
-        "max": 16
     },
     "show_model_info": {
         "description": "【显示】显示模型信息",
@@ -174,9 +96,9 @@
         "default": 4
     },
     "use_stream": {
-        "description": "【网络】启用流式请求（仅generic模式）",
+        "description": "【网络】启用流式请求",
         "type": "bool",
-        "hint": "开启后使用SSE流式请求，避免Cloudflare 100秒超时限制（524错误）。推荐开启，仅对generic模式生效。",
+        "hint": "开启后，在支持流式响应的接口中使用 SSE 流式请求；不限制接口模式。上游不支持流式时会自动按普通响应处理。",
         "default": false
     },
     "download_retries": {
@@ -198,162 +120,23 @@
         "hint": "自定义开始生成时的提示语。{preset}将被替换为预设名称或'自定义'。",
         "default": "🎨 收到请求，正在生成 [{preset}]..."
     },
-    "user_whitelist": {
-        "description": "【权限】用户白名单",
-        "type": "list",
-        "hint": "只允许列表内的用户使用（管理员除外）。",
-        "items": {
-            "type": "string",
-            "description": "用户QQ号"
-        },
-        "default": []
-    },
-    "user_blacklist": {
-        "description": "【权限】用户黑名单",
-        "type": "list",
-        "hint": "禁止列表内的用户使用。",
-        "items": {
-            "type": "string",
-            "description": "用户QQ号"
-        },
-        "default": []
-    },
-    "enable_obedient_mode": {
-        "description": "【权限】启用顺从模式",
+    "enable_llm_tool": {
+        "description": "【LLM】启用LLM工具调用",
         "type": "bool",
-        "hint": "开启后，顺从白名单中的用户将获得VIP主人待遇，Bot会对他们百依百顺、温柔撒娇。",
-        "default": false
-    },
-    "obedient_whitelist": {
-        "description": "【权限】顺从白名单（主人）",
-        "type": "list",
-        "hint": "只对列表内的用户百依百顺（不触发叛逆模式，且不显示生成成功等提示信息）。需要先开启顺从模式。",
-        "items": {
-            "type": "string",
-            "description": "用户QQ号"
-        },
-        "default": []
-    },
-    "group_whitelist": {
-        "description": "【权限】群聊白名单",
-        "type": "list",
-        "hint": "在白名单内的群聊将不限制使用次数且允许使用。",
-        "items": {
-            "type": "string",
-            "description": "群号"
-        },
-        "default": []
-    },
-    "group_blacklist": {
-        "description": "【权限】群聊黑名单",
-        "type": "list",
-        "hint": "禁止列表内的群聊使用。",
-        "items": {
-            "type": "string",
-            "description": "群号"
-        },
-        "default": []
-    },
-    "enable_user_limit": {
-        "description": "【次数】启用用户限制",
-        "type": "bool",
-        "hint": "开启后，限制每个用户的调用次数。",
+        "hint": "是否允许LLM通过工具调用触发图片生成",
         "default": true
     },
-    "enable_group_limit": {
-        "description": "【次数】启用群组限制",
-        "type": "bool",
-        "hint": "开启后，限制每个群组的总调用次数。",
-        "default": false
-    },
-    "enable_checkin": {
-        "description": "【签到】启用每日签到",
-        "type": "bool",
-        "hint": "开启后用户可通过 #手办化签到 获取次数。",
-        "default": false
-    },
-    "checkin_fixed_reward": {
-        "description": "【签到】固定奖励",
-        "type": "int",
-        "hint": "关闭随机奖励时，每次签到获得的次数。",
-        "default": 3
-    },
-    "enable_random_checkin": {
-        "description": "【签到】启用随机奖励",
-        "type": "bool",
-        "default": false
-    },
-    "checkin_random_reward_max": {
-        "description": "【签到】随机奖励最大值",
-        "type": "int",
-        "default": 5
-    },
-    "preset_table_quality": {
-        "description": "【显示】预设表格清晰度",
-        "type": "string",
-        "hint": "控制#lm列表命令生成的表格图片清晰度。标准: 200x250px; 高清: 300x380px; 超清: 400x500px",
-        "default": "高清",
-        "options": [
-            "标准",
-            "高清",
-            "超清"
-        ]
-    },
-    "preset_table_columns": {
-        "description": "【显示】预设表格列数",
-        "type": "int",
-        "hint": "控制#lm列表命令生成的表格每行显示几个预设，建议3-6列。",
-        "default": 5,
-        "min": 1,
-        "max": 10086
-    },
-    "enable_llm_tool": {
-      "description": "【LLM】启用LLM工具调用",
-      "type": "bool",
-      "hint": "是否允许LLM通过工具调用触发图片生成",
-      "default": true
-    },
     "llm_show_progress": {
-      "description": "【LLM】调用显示进度",
-      "type": "bool",
-      "hint": "LLM工具调用时是否发送生成状态提示（如'正在生成...'），关闭后直接发送结果图片",
-      "default": true
+        "description": "【LLM】调用显示进度",
+        "type": "bool",
+        "hint": "LLM工具调用时是否发送生成状态提示（如'正在生成...'），关闭后直接发送结果图片",
+        "default": true
     },
     "llm_cooldown_seconds": {
-      "description": "【LLM】工具调用冷却时间(秒)",
-      "type": "int",
-      "hint": "LLM工具调用后的冷却时间，防止用户无节制刷图。设为0则不限制。",
-      "default": 60
-    },
-    "enable_llm_auto_detect": {
-        "description": "【LLM】启用智能判断",
-        "type": "bool",
-        "hint": "开启后，LLM结合上下文自动判断是文生图还是图生图。",
-        "default": false
-    },
-    "context_rounds": {
-        "description": "【LLM】上下文轮数",
+        "description": "【LLM】工具调用冷却时间(秒)",
         "type": "int",
-        "hint": "智能判断时获取的聊天记录轮数。",
-        "default": 20
-    },
-    "auto_detect_confidence": {
-        "description": "【LLM】智能判断置信度阈值",
-        "type": "float",
-        "hint": "低于此值时会提示用户明确指定任务类型。建议设置0.7-0.9，值越高越严格，可减少误触发。",
-        "default": 0.8
-    },
-    "context_max_messages": {
-        "description": "【上下文】每会话最大消息数",
-        "type": "int",
-        "hint": "每个会话保存的最大消息数量。",
-        "default": 50
-    },
-    "context_max_sessions": {
-        "description": "【上下文】最大会话数",
-        "type": "int",
-        "hint": "同时保存的最大会话数量。",
-        "default": 100
+        "hint": "LLM工具调用后的冷却时间，防止用户无节制刷图。设为0则不限制。",
+        "default": 60
     },
     "batch_max_images": {
         "description": "【批量】批量处理最大图片数",
@@ -372,74 +155,6 @@
         "type": "int",
         "hint": "批量处理中单张图片生成失败时自动重试的次数。设为0则不重试。",
         "default": 2
-    },
-    "enable_preset_ref_images": {
-        "description": "【预设】启用预设参考图",
-        "type": "bool",
-        "hint": "开启后，触发预设时会自动加载该预设的参考图一起发送给API，可以提高生成效果的一致性。",
-        "default": true
-    },
-    "enable_persona_mode": {
-        "description": "【人设】启用人设模式",
-        "type": "bool",
-        "hint": "开启后，Bot可以基于预设的人物参考图生成场景图片。",
-        "default": false
-    },
-    "persona_name": {
-        "description": "【人设】人设名称",
-        "type": "string",
-        "hint": "Bot的人设角色名称。",
-        "default": "小助手"
-    },
-    "persona_description": {
-        "description": "【人设】人设描述",
-        "type": "text",
-        "hint": "详细描述Bot的外貌特征、穿着风格等。",
-        "default": "一个可爱的二次元女孩"
-    },
-    "persona_trigger_keywords": {
-        "description": "【人设】触发关键词",
-        "type": "list",
-        "hint": "触发人设拍照的关键词列表。",
-        "items": {
-            "type": "string",
-            "description": "关键词"
-        },
-        "default": ["拍照", "自拍", "看看你"]
-    },
-    "persona_scene_prompts": {
-        "description": "【人设】场景提示词映射",
-        "type": "list",
-        "hint": "格式：场景关键词:提示词。用于匹配不同场景。",
-        "items": {
-            "type": "string",
-            "description": "场景:提示词"
-        },
-        "default": ["咖啡店:在咖啡店里悠闲地喝咖啡", "家里:在房间里的日常生活场景", "公园:在公园里散步或休息", "学校:在校园里的日常"]
-    },
-    "persona_default_prompt": {
-        "description": "【人设】默认场景提示词",
-        "type": "string",
-        "hint": "未匹配到场景时使用的默认提示词。",
-        "default": "一张日常生活照片，自然的姿态和表情"
-    },
-    "persona_photo_style": {
-        "description": "【人设】照片风格",
-        "type": "string",
-        "hint": "人设照片的整体风格描述。",
-        "default": "日常生活风格，自然光线，真实感"
-    },
-    "enable_rebellious_mode": {
-        "description": "【叛逆】启用叛逆模式",
-        "type": "bool",
-        "hint": "开启后，LLM工具调用时会随机返回叛逆提示，让Bot可以用傲娇/调侃/吐槽的语气回复用户。",
-        "default": true
-    },
-    "rebellious_probability": {
-        "description": "【叛逆】叛逆触发概率",
-        "type": "float",
-        "hint": "没有触发关键词时，随机触发叛逆模式的概率（0-1之间）。设为0则只有触发关键词才会叛逆，设为1则每次都叛逆。",
-        "default": 0.3
     },
     "prompt_list": {
         "description": "提示词预设列表",

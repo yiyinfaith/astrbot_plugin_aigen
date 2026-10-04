@@ -1,30 +1,51 @@
-# AstrBot AIGen 图片生成器
+# AstrBot AIGen 多模态图片生成插件
 
-这是一个面向当前 AstrBot 插件加载机制的图片生成插件。它只保留生产环境需要的功能：
+`astrbot_plugin_aigen` 面向 AstrBot 4.x，提供一个统一的图片生成入口。插件保留普通生图、预设关键词、帮助文字和次数计费，并兼容五种请求模式：
 
-- `/画图 <自定义提示词>`（`/文生图` 兼容别名）支持纯文生图；附带图片、引用图片或 `@` 用户时支持图生图。
-- 发送配置中的预设关键词触发预设提示词，例如 `#手办化`、`#三视图` 或自定义关键词。
-- `/画图帮助`、`/发图帮助`、`/手办化帮助`、`/lm帮助` 发送插件配置里的 `help_text`。
-- 用户/群组次数计费、查询和管理员增加次数。
-- 保留 `openai_image`、`openai_chat`、`openai_response`、`gemini_official` 和 `custom_endpoint` 五种请求模式，以及模型、专用文生图接口、代理、分辨率和比例设置。
+- `openai_image`
+- `openai_chat`
+- `openai_response`
+- `gemini_official`
+- `custom_endpoint`
 
-批量生成、PDF、上下文记忆、LLM 工具、人设拍照、签到、叛逆回复和预设参考图管理等旧功能已从运行代码中移除，避免旧版事件处理器重复触发。
+## 使用方式
+
+- `/画图 <提示词>`：自定义提示词。`/文生图 <提示词>` 是兼容别名。
+- 在消息中附带图片、引用图片或 `@` 用户后使用 `/画图 <提示词>`：使用统一入口进行图生图。
+- 发送已配置的预设关键词：触发对应的预设提示词；预设后的文字会追加到提示词末尾。
+- `/画图帮助`、`/发图帮助`、`/手办化帮助`、`/lm帮助`：发送插件配置中的 `help_text`。
+- `/lm列表`、`/lm查看 <关键词>`、`/lm添加 <关键词>:<提示词>`、`/lm删除 <关键词>`：管理用户自定义预设。
+- `/画图查询次数`：查询个人和当前群组余额。
+- `/画图增加用户次数 <用户ID> <次数>`、`/画图增加群组次数 <次数>`：管理员增加余额。
+- `/切换API模式 <模式>`、`/切换模型 <模型名>`：管理员切换当前请求模式或默认模型。
+
+## LLM 函数工具
+
+插件按 AstrBot 当前函数工具规范注册 `generate_image`。它只有一个图片生成调用入口：
+
+- `prompt` 必填，图片生成或编辑提示词。
+- `image_url` 可选，可填写图片 URL、本地路径或 `base64://` 数据。参数为空时是文生图，传入后是图生图。
+
+插件不会再根据上下文猜测文生图或图生图，也不会维护额外的上下文、人设、签到、叛逆或预设参考图功能。`enable_llm_tool`、`llm_show_progress` 和 `llm_cooldown_seconds` 仍可用于控制函数工具。
 
 ## 配置和数据安全
 
-插件使用 AstrBot 的配置文件 `data/config/astrbot_plugin_aigen_config.json`。从旧版迁移时只需把原配置中的 `prompt_list` 原样复制到新配置；现有 44 个预设提示词不会被重写或删除。通过 `/lm添加` 新建的预设保存到 AstrBot 数据目录的 `user_prompts.json`，通过 `/lm删除` 只能删除这类用户预设，配置文件里的原始预设不会被误删。
+基础配置在 AstrBot 管理面板中填写：统一的 `base_url`、`api_keys`、`model`、`image_resolution`、代理、超时、`use_stream` 和 `help_text` 等。文生图与图生图共用同一套接口地址、模型和 Key 池；是否为图生图只由请求中是否带有图片决定。
 
-运行时计数和预设文件全部位于 AstrBot 数据目录，不写入插件仓库。仓库的 `.gitignore` 也会阻止这些运行时文件进入 Git。
+`use_stream` 对所有请求模式开放。OpenAI Chat、Responses、Gemini 流式端点以及支持该选项的自定义/Images 接口会使用 SSE 或流式标记；上游不支持流式时由接口返回兼容错误，插件不会改变请求类型。
+
+配置中的 `prompt_list` 会原样加载。当前仓库中的默认预设为 44 条，插件不会在启动、热重载或同步时重写它。通过 `/lm添加` 保存的用户预设位于 AstrBot 数据目录的 `user_prompts.json`，计费数据位于 `user_counts.json`、`group_counts.json` 和 `daily_stats.json`。
 
 ## 开发和热重载
 
 ```bash
-python -m py_compile main.py api_manager.py data_manager.py image_manager.py
+python -m py_compile main.py api_manager.py data_manager.py image_manager.py generation_params.py utils.py
 python -m unittest discover -s tests -v
+ruff check main.py api_manager.py data_manager.py image_manager.py generation_params.py utils.py tests
 ```
 
-在 AstrBot WebUI 的插件管理中选择“重载插件”即可应用修改，无需重启 AstrBot。插件实现了 `terminate()`，热重载时会关闭旧的 HTTP 会话，避免旧实例残留。
+插件实现了 `terminate()`，热重载时会关闭 HTTP 会话。修改后在 AstrBot WebUI 的插件管理中重载本插件即可，不需要重启 AstrBot。
 
 ## 借鉴和许可
 
-项目地址：[yiyinfaith/astrbot_plugin_aigen](https://github.com/yiyinfaith/astrbot_plugin_aigen)。本项目借鉴了早期图片生成插件的请求适配思路，并按 AstrBot 当前插件开发文档重构。请按仓库中的许可证要求使用和发布。
+项目地址：[yiyinfaith/astrbot_plugin_aigen](https://github.com/yiyinfaith/astrbot_plugin_aigen)。本项目借鉴了早期图片生成插件的请求适配思路，并按照 AstrBot 当前插件开发文档重构。请遵守仓库许可证及上游项目的使用要求。
