@@ -797,7 +797,10 @@ class ImageManager:
         # 有些平台 At 可能表现为纯文本
         getter = getattr(event, "get_message_str", None)
         try:
-            event_text = str(getter() if callable(getter) else getattr(event, "message_str", "") or "")
+            raw_event_text = (
+                getter() if callable(getter) else getattr(event, "message_str", "")
+            )
+            event_text = str(raw_event_text or "")
         except (AttributeError, TypeError, RuntimeError, ValueError):
             event_text = str(getattr(event, "message_str", "") or "")
         text_ats = re.findall(r"@(\d+)", event_text)
