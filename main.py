@@ -204,8 +204,14 @@ class ImageGeneratorPlugin(Star):
         model: str,
         images: list[bytes],
         show_progress: bool = True,
+        include_result_text: bool = True,
     ) -> list[Any]:
-        """Call the selected API mode, record usage, and build a reply."""
+        """Call the selected API mode, record usage, and build a reply.
+
+        LLM function-tool calls can request an image-only response by setting
+        ``include_result_text`` to ``False`` and disabling progress output.
+        Normal commands keep the configured success text.
+        """
         uid = norm_id(event.get_sender_id())
         gid = norm_id(event.get_group_id())
 
@@ -244,10 +250,10 @@ class ImageGeneratorPlugin(Star):
         suffix = f" | 预设：{preset_name}" if preset_name not in {"", "自定义"} else ""
         if self.conf.get("show_model_info", False):
             suffix += f" | 模型：{model}"
-        return [
-            Image.fromBytes(result),
-            Plain(f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}"),
-        ]
+        reply: list[Any] = [Image.fromBytes(result)]
+        if include_result_text:
+            reply.append(Plain(f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}"))
+        return reply
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=5)
     async def on_preset_request(self, event: AstrMessageEvent, ctx=None):
@@ -330,7 +336,8 @@ class ImageGeneratorPlugin(Star):
             "自定义",
             str(self.conf.get("model", "nano-banana") or "nano-banana"),
             images,
-            show_progress=bool(self.conf.get("llm_show_progress", True)),
+            show_progress=False,
+            include_result_text=False,
         )
         yield event.chain_result(result)
 

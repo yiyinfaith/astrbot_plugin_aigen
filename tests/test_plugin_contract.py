@@ -58,8 +58,16 @@ class PluginContractTest(unittest.TestCase):
     def test_single_tool_and_unified_generation_path_are_present(self):
         main = (ROOT / "main.py").read_text(encoding="utf-8")
         api = (ROOT / "api_manager.py").read_text(encoding="utf-8")
+        schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
         self.assertEqual(main.count("@filter.llm_tool"), 1)
         self.assertIn('@filter.llm_tool(name="generate_image")', main)
+        self.assertIn("async def generate_image(", main)
+        self.assertNotIn("generate_image_tool", main)
+        self.assertTrue(schema["enable_llm_tool"]["default"])
+        tool_start = main.index('@filter.llm_tool(name="generate_image")')
+        tool_source = main[tool_start:]
+        self.assertIn("show_progress=False", tool_source)
+        self.assertIn("include_result_text=False", tool_source)
         self.assertNotIn("use_text_to_image_api", main + api)
         self.assertNotIn("text_to_image_model", main + api)
 

@@ -133,10 +133,10 @@
         "default": true
     },
     "llm_show_progress": {
-        "description": "【LLM】调用显示进度",
+        "description": "【LLM】调用进度提示（已停用）",
         "type": "bool",
-        "hint": "LLM工具调用时是否发送生成状态提示（如'正在生成...'），关闭后直接发送结果图片",
-        "default": true
+        "hint": "函数工具调用现在固定只返回生成图片；此项仅为兼容旧配置保留，不再影响结果。",
+        "default": false
     },
     "llm_cooldown_seconds": {
         "description": "【LLM】工具调用冷却时间(秒)",
