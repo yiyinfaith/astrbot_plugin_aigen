@@ -509,9 +509,10 @@ class ImageGeneratorPlugin(Star):
     ):
         """按图片、音频、视频的组合自动选择管理员配置的模型生成视频，成功仅发送视频。
 
+        媒体不需要填写 URL；工具会读取当前消息和引用中的 QQ 图片、文件、语音和视频公网链接。
+
         Args:
             prompt(string): 视频提示词；图片＋视频/图片音频同步可留空。
-            消息媒体：不需要填写 URL；工具会读取当前消息和引用中的 QQ 图片、文件、语音和视频公网链接。
             duration(number): 正整数秒；0 使用提示词或配置时长。10秒以上可自动选择配置的长视频模型。图片＋视频路线通常跟随参考视频时长。
             resolution(string): 可选分辨率档位，如480p、768p；留空使用所选路线的配置值，不自动降档。
             aspect_ratio(string): 可选16:9、9:16、1:1、4:3、3:4、21:9、adaptive；留空使用配置值。
@@ -597,9 +598,10 @@ class ImageGeneratorPlugin(Star):
     ):
         """使用统一图片生成入口生成或编辑图片。
 
+        媒体不需要填写 URL；工具会读取当前消息和引用中的图片或图片文件。
+
         Args:
             prompt(string): 图片生成或编辑提示词。
-            消息媒体：不需要填写 URL；工具会读取当前消息和引用中的图片或图片文件。
         """
         if not self.conf.get("enable_llm_tool", True):
             yield "图片生成函数工具当前已在插件配置中停用。"
