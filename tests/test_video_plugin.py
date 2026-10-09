@@ -12,7 +12,7 @@ from time import monotonic
 from unittest.mock import AsyncMock
 
 from test_api_manager_urls import PACKAGE, load_api_manager
-from test_image_input_order import At, FakeEvent, Image, ImageManager, Reply
+from test_image_input_order import At, FakeEvent, File, Image, ImageManager, Reply
 
 load_api_manager()
 router = importlib.import_module(PACKAGE + ".video_router")
@@ -153,13 +153,13 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(result[0][0], Video)
         args = self.plugin.video_mgr.generate.await_args.args
         self.assertEqual(
-            args[1:4], ([b"https://i.test/ref.png"], ["https://m.test/ref.wav"], [])
+            args[1:4], (["https://i.test/ref.png"], ["https://m.test/ref.wav"], [])
         )
 
-    async def test_explicit_tool_media_replaces_same_type_message_media(self):
+    async def test_tool_uses_message_media_public_urls(self):
         event = Event(
             [
-                Image("message-img"),
+                Image("https://i.test/message.png"),
                 Record("https://m.test/message.wav"),
                 Video("https://m.test/ref.mp4"),
             ]
@@ -169,17 +169,34 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             async for reply in self.plugin.generate_video(
                 event,
                 "run",
-                image_url="https://explicit/a.png",
-                audio_url="https://explicit/a.wav",
             )
         ]
         args = self.plugin.video_mgr.generate.await_args.args
         self.assertEqual(
             args[1:4],
             (
-                [b"https://explicit/a.png"],
-                ["https://explicit/a.wav"],
+                ["https://i.test/message.png"],
+                ["https://m.test/message.wav"],
                 ["https://m.test/ref.mp4"],
+            ),
+        )
+
+    async def test_tool_reads_qq_file_components_without_touching_file_property(self):
+        event = Event(
+            [
+                File("photo.png", url="https://qq.test/photo.png"),
+                File("voice.mp3", url="https://qq.test/voice.mp3"),
+                File("clip.mp4", url="https://qq.test/clip.mp4"),
+            ]
+        )
+        [reply async for reply in self.plugin.generate_video(event, "animate")]
+        args = self.plugin.video_mgr.generate.await_args.args
+        self.assertEqual(
+            args[1:4],
+            (
+                ["https://qq.test/photo.png"],
+                ["https://qq.test/voice.mp3"],
+                ["https://qq.test/clip.mp4"],
             ),
         )
 
@@ -195,31 +212,49 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             self.plugin.video_mgr.generate.await_args.args[1:4], ([], [], [])
         )
 
-    async def test_explicit_audio_skips_unreadable_message_audio_token(self):
+    async def test_command_reads_quoted_audio_and_ignores_unquoted_audio(self):
         event = Event(
-            [Record("unreadable-silk-token"), Video("https://m.test/ref.mp4")]
+            [
+                Record("https://m.test/unquoted.wav"),
+                Reply([Record("https://m.test/quoted.wav")]),
+            ]
         )
-        [
-            reply
-            async for reply in self.plugin.generate_video(
-                event, "dance", audio_url="https://m.test/valid.mp3"
-            )
-        ]
-        self.plugin.video_mgr.generate.assert_awaited_once()
+        _, _, audios, videos = await self.plugin._video_command_inputs(
+            event, "dance", "自定义"
+        )
         self.assertEqual(
-            self.plugin.video_mgr.generate.await_args.args[2:4],
-            (["https://m.test/valid.mp3"], ["https://m.test/ref.mp4"]),
+            (audios, videos),
+            (["https://m.test/quoted.wav"], []),
         )
 
-    async def test_command_quoted_signed_media_urls_keep_signature_and_do_not_duplicate(
-        self,
-    ):
+    async def test_command_accepts_image_file_and_quoted_audio_video_files(self):
+        event = Event(
+            [
+                File("photo.png", url="https://qq.test/photo.png"),
+                File("voice.mp3", url="https://qq.test/unquoted.mp3"),
+                Reply(
+                    [
+                        File("voice.mp3", url="https://qq.test/quoted.mp3"),
+                        File("clip.mp4", url="https://qq.test/quoted.mp4"),
+                    ]
+                ),
+            ]
+        )
+        _, images, audios, videos = await self.plugin._video_command_inputs(
+            event, "animate", "自定义"
+        )
+        self.assertEqual(images, ["https://qq.test/photo.png"])
+        self.assertEqual(audios, ["https://qq.test/quoted.mp3"])
+        self.assertEqual(videos, ["https://qq.test/quoted.mp4"])
+
+    async def test_command_rejects_media_urls_in_text(self):
         url = "https://m.test/ref.wav?signature=abc&expires=123"
         event = Event([Plain(f'--audio "{url}"')])
-        _, _, audios, _ = await self.plugin._video_command_inputs(
-            event, f'dance --audio "{url}"', "自定义"
-        )
-        self.assertEqual(audios, [url])
+        with self.assertRaisesRegex(router.VideoError, "不接受媒体 URL"):
+            await self.plugin._video_command_inputs(
+                event, f'dance --audio "{url}"', "自定义"
+            )
+        self.plugin.video_mgr.generate.assert_not_awaited()
 
     async def test_command_can_have_no_prompt_for_motion_transfer(self):
         event = Event(
@@ -263,9 +298,14 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             event, "跳舞 --duration 1", "自定义"
         )
         self.assertEqual(
-            images, [b"https://i.test/sent.png", b"2", b"https://i.test/quoted.png"]
+            images,
+            [
+                "https://i.test/sent.png",
+                "https://q1.qlogo.cn/g?b=qq&nk=2&s=640",
+                "https://i.test/quoted.png",
+            ],
         )
-        self.assertEqual(videos, ["https://m.test/one.mp4", "https://m.test/two.mp4"])
+        self.assertEqual(videos, ["https://m.test/one.mp4"])
         self.assertEqual(audios, ["https://m.test/audio.wav"])
         self.assertEqual(options.duration, 1)
 
@@ -281,7 +321,7 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         result = [reply async for reply in self.plugin.on_preset_request(event)]
         self.assertEqual(
             self.plugin.video_mgr.generate.await_args.args[1],
-            [b"https://i.test/quoted.png"],
+            ["https://i.test/quoted.png"],
         )
         self.assertTrue(result)
         self.plugin.video_conf["preset_need_prefix"] = True

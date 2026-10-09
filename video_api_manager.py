@@ -133,6 +133,25 @@ def image_data_url(raw: bytes) -> str:
     return f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
 
 
+def image_source(value: bytes | str) -> str:
+    """Preserve QQ's public image URL; encode only byte/local inputs."""
+    if isinstance(value, (bytes, bytearray)):
+        return image_data_url(bytes(value))
+    source = str(value or "").strip()
+    if source.startswith(("http://", "https://", "data:image/")):
+        return source
+    if source.startswith("base64://"):
+        try:
+            raw = base64.b64decode(source[9:], validate=True)
+        except ValueError as exc:
+            raise VideoError("参考图片 Base64 无效。") from exc
+        return image_data_url(raw)
+    if source.startswith("file://"):
+        raw = Path(source[8:]).read_bytes()
+        return image_data_url(raw)
+    raise VideoError("参考图片必须来自消息公网 URL。")
+
+
 def media_sources(value: str, kind: str = "") -> list[str]:
     # Commas are part of Data URLs: split on newlines/whitespace only.
     sources = [part for part in re.split(r"\s+", str(value or "").strip()) if part]
@@ -272,7 +291,7 @@ class VideoApiManager(ApiManager):
         manager.get_key = self.get_key
         manager.build_request(
             prompt,
-            [image_data_url(i) for i in images],
+            [image_source(i) for i in images],
             audios,
             videos,
             options.duration,
@@ -754,7 +773,7 @@ class VideoApiManager(ApiManager):
     async def _generate(self, prompt, images, audios, videos, duration) -> VideoResult:
         create, query, body, headers = self.build_request(
             prompt,
-            [image_data_url(i) for i in images],
+            [image_source(i) for i in images],
             audios or [],
             videos or [],
             duration,

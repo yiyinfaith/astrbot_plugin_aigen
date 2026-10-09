@@ -23,6 +23,16 @@ def _install_astrbot_stubs():
             self.file = None
             self.path = None
 
+    class File:
+        def __init__(self, name, url="", file_=""):
+            self.name = name
+            self.url = url
+            self.file_ = file_
+
+        @property
+        def file(self):
+            raise AssertionError("File.file must not trigger a download")
+
     class Reply:
         def __init__(self, chain=None, reply_id=None):
             self.chain = chain or []
@@ -34,6 +44,7 @@ def _install_astrbot_stubs():
 
     event_module.AstrMessageEvent = AstrMessageEvent
     components.Image = Image
+    components.File = File
     components.Reply = Reply
     components.At = At
     api.event = event_module
@@ -54,10 +65,10 @@ def _install_astrbot_stubs():
             "astrbot.api.message_components": components,
         }
     )
-    return Image, Reply, At
+    return Image, Reply, At, File
 
 
-Image, Reply, At = _install_astrbot_stubs()
+Image, Reply, At, File = _install_astrbot_stubs()
 sys.path.insert(0, str(ROOT))
 from image_manager import ImageManager  # noqa: E402
 
@@ -150,6 +161,12 @@ class ImageInputOrderTest(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(self.avatars_requested, ["2"])
+
+    async def test_file_image_uses_public_url_without_downloading(self):
+        result = await self.manager.extract_image_sources_from_event(
+            FakeEvent([File("photo.png", url="https://qq.test/photo.png")])
+        )
+        self.assertEqual(result, ["https://qq.test/photo.png"])
 
 
 if __name__ == "__main__":

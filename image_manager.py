@@ -282,7 +282,7 @@ class ImageManager:
                 for item in payload.get("message", []):
                     if not isinstance(item, dict):
                         continue
-                    cls = getattr(message_components, {"image": "Image", "record": "Record", "video": "Video", "text": "Plain", "at": "At"}.get(item.get("type"), ""), None)
+                    cls = getattr(message_components, {"image": "Image", "record": "Record", "video": "Video", "file": "File", "text": "Plain", "at": "At"}.get(item.get("type"), ""), None)
                     if cls:
                         components.append(cls(**item.get("data", {})))
                 return components
@@ -319,6 +319,141 @@ class ImageManager:
                 continue
 
         return []
+
+    @staticmethod
+    def _image_component_source(segment) -> str:
+        """Read an image URL while avoiding the async File.file downloader."""
+        if type(segment).__name__ == "File":
+            values = (getattr(segment, "url", ""), getattr(segment, "file_", ""))
+        else:
+            values = (
+                getattr(segment, "url", ""),
+                getattr(segment, "file", ""),
+                getattr(segment, "path", ""),
+            )
+        return next((str(value).strip() for value in values if value), "")
+
+    @classmethod
+    def _is_image_component(cls, segment) -> bool:
+        if isinstance(segment, Image):
+            return True
+        if type(segment).__name__ != "File":
+            return False
+        values = [
+            getattr(segment, "name", ""),
+            getattr(segment, "content_type", ""),
+            getattr(segment, "mime_type", ""),
+            cls._image_component_source(segment),
+        ]
+        text = " ".join(str(value or "").lower() for value in values)
+        return "image/" in text or bool(
+            re.search(r"\.(?:jpg|jpeg|png|gif|webp|bmp|avif)(?:[?#]|$)", text)
+        )
+
+    async def _quoted_image_sources(self, event, reply) -> list[str]:
+        """Resolve quoted image tokens to URLs without downloading image bytes."""
+        try:
+            from astrbot.core.utils.quoted_message.image_resolver import ImageResolver
+            from astrbot.core.utils.quoted_message_parser import (
+                extract_quoted_message_images,
+            )
+        except (ImportError, ModuleNotFoundError):
+            return []
+        try:
+            refs = list(await extract_quoted_message_images(event, reply))
+            if getattr(event, "get_platform_name", lambda: "")() == "aiocqhttp":
+                refs = await ImageResolver(event).resolve_for_llm(refs)
+            return [str(ref).strip() for ref in refs if str(ref).strip()]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Quoted image URL resolution failed: %s", exc)
+            return []
+
+    async def extract_image_sources_from_event(
+        self,
+        event: AstrMessageEvent,
+        ignore_id: str = None,
+        context=None,
+        include_at_avatar: bool = True,
+        max_images: int | None = None,
+        include_sender_avatar: bool = False,
+        strict: bool = False,
+    ) -> List[str]:
+        """Collect image URLs from Image/File components and quoted messages."""
+        quoted: list[str] = []
+        message: list[str] = []
+        at_images: list[str] = []
+        ordered: list[str] = []
+        at_users: set[str] = set()
+        seen_image_component = False
+        ignore_id = str(ignore_id or "").strip()
+
+        def add(target: list[str], source: str):
+            source = str(source or "").strip()
+            if source and source not in target:
+                target.append(source)
+                if source not in ordered:
+                    ordered.append(source)
+
+        def add_at(user_id):
+            qq = str(user_id or "").strip()
+            if not qq or qq == ignore_id or qq in at_users or not include_at_avatar:
+                return
+            at_users.add(qq)
+            add(at_images, f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=640")
+
+        async def collect(chain):
+            nonlocal seen_image_component
+            for seg in chain:
+                if isinstance(seg, Reply):
+                    found = False
+                    nested = getattr(seg, "chain", None) or []
+                    for child in nested:
+                        if self._is_image_component(child):
+                            seen_image_component = True
+                            source = self._image_component_source(child)
+                            if source:
+                                add(quoted, source)
+                                found = True
+                        elif isinstance(child, At):
+                            add_at(getattr(child, "qq", getattr(child, "user_id", "")))
+                    if not found:
+                        for source in await self._quoted_image_sources(event, seg):
+                            add(quoted, source)
+                    if not found and context and getattr(seg, "id", None):
+                        try:
+                            components = await self._fetch_reply_components(context, seg.id)
+                            for child in components:
+                                if self._is_image_component(child):
+                                    seen_image_component = True
+                                    add(quoted, self._image_component_source(child))
+                        except Exception as exc:  # noqa: BLE001
+                            logger.debug("Quoted image component fetch failed: %s", exc)
+                elif self._is_image_component(seg):
+                    seen_image_component = True
+                    add(message, self._image_component_source(seg))
+                elif isinstance(seg, At):
+                    add_at(getattr(seg, "qq", getattr(seg, "user_id", "")))
+
+        await collect(self._event_chain(event))
+        if max_images == 1:
+            for bucket in (quoted, message, at_images):
+                if bucket:
+                    return bucket[:1]
+            if strict and seen_image_component:
+                raise ValueError(
+                    "参考图片或 @头像读取失败，请检查媒体是否可访问；未提交生成任务。"
+                )
+            if include_sender_avatar:
+                sender_id = str(event.get_sender_id() or "").strip()
+                if sender_id:
+                    return [f"https://q1.qlogo.cn/g?b=qq&nk={sender_id}&s=640"]
+            return []
+        result = ordered
+        if max_images is not None and max_images > 0:
+            result = result[:max_images]
+        if strict and not result and seen_image_component:
+            raise ValueError("参考图片或 @头像读取失败，请检查媒体是否可访问；未提交生成任务。")
+        return result
 
     @staticmethod
     def _event_chain(event: AstrMessageEvent) -> list:
@@ -531,10 +666,9 @@ class ImageManager:
                     pending_extra_sources.remove(source)
 
         def image_source(segment) -> str | None:
-            for attr in ("url", "file", "path"):
-                source = getattr(segment, attr, None)
-                if source and self._is_probably_valid_source(source):
-                    return str(source)
+            source = self._image_component_source(segment)
+            if source and self._is_probably_valid_source(source):
+                return source
             return None
 
         # 2. 收集引用图片、当前消息图片和 @头像。ordered_tasks 保留多图
@@ -544,7 +678,7 @@ class ImageManager:
                 found_in_chain = False
                 if seg.chain:
                     for s_chain in seg.chain:
-                        if isinstance(s_chain, Image):
+                        if self._is_image_component(s_chain):
                             source = image_source(s_chain)
                             if source and add_image_task(source, quoted_tasks):
                                 found_in_chain = True
@@ -570,14 +704,14 @@ class ImageManager:
                         components = await self._fetch_reply_components(context, seg.id)
 
                         for comp in components:
-                            if isinstance(comp, Image):
+                            if self._is_image_component(comp):
                                 source = image_source(comp)
                                 if source:
                                     add_image_task(source, quoted_tasks)
                     except Exception as e:
                         logger.warning(f"Failed to fetch reply message {seg.id}: {e}")
 
-            elif isinstance(seg, Image):
+            elif self._is_image_component(seg):
                 source = image_source(seg)
                 if source:
                     add_image_task(source, message_tasks)

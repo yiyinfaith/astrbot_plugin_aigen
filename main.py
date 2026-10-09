@@ -28,7 +28,7 @@ from .data_manager import DataManager
 from .image_manager import ImageManager
 from .utils import extract_image_urls_from_text, match_keyword_in_text, norm_id
 from .video_api_manager import VideoApiManager
-from .video_inputs import collect_media, resolve_media, strip_media_text, text_media
+from .video_inputs import collect_media, text_media
 from .video_router import VideoError, VideoOptions, parse_video_command
 
 
@@ -413,30 +413,32 @@ class ImageGeneratorPlugin(Star):
 
     async def _video_command_inputs(self, event, prompt, preset_name):
         options = parse_video_command(prompt)
-        # Explicit image flags are added at their text position by ImageManager;
-        # command syntax is stripped only after media extraction.
-        sources = list(
-            dict.fromkeys([*extract_image_urls_from_text(prompt), *options.images])
-        )
-        for source in options.images:
-            if not self.img_mgr._is_probably_valid_source(source):
-                raise VideoError("--image 地址或本地文件无效；未提交生成任务。")
-        images = await self._extract_images(
-            event, prompt, preset_name, strict=True, extra_sources=sources
-        )
-        audios, videos = await collect_media(event, self.img_mgr)
-        a, v = text_media(prompt)
-        for kind, explicit, found, target in (
-            ("audio", options.audios, a, audios),
-            ("video", options.videos, v, videos),
+        if (
+            options.images
+            or options.audios
+            or options.videos
+            or extract_image_urls_from_text(prompt)
+            or text_media(prompt)[0]
+            or text_media(prompt)[1]
         ):
-            for source in [*explicit, *found]:
-                resolved = await resolve_media(source, kind, event)
-                if resolved not in target:
-                    target.append(resolved)
-        options.prompt = strip_media_text(options.prompt)
-        for source in extract_image_urls_from_text(options.prompt):
-            options.prompt = options.prompt.replace(source, "").strip()
+            raise VideoError(
+                "生视频不接受媒体 URL 参数；请直接发送图片/文件，或引用已发送的图片、音频、视频。"
+            )
+        is_preset = preset_name not in {"", "自定义"}
+        images = await self.img_mgr.extract_image_sources_from_event(
+            event,
+            ignore_id=self._bot_id(event),
+            context=event,
+            include_at_avatar=True,
+            max_images=1 if is_preset else None,
+            include_sender_avatar=is_preset,
+            strict=True,
+        )
+        # Audio/video are accepted from a quoted standalone message. This
+        # keeps command text and file uploads separate on QQ.
+        audios, videos = await collect_media(
+            event, self.img_mgr, quoted_only=True
+        )
         return options, images, audios, videos
 
     async def _generate_video(
@@ -497,9 +499,6 @@ class ImageGeneratorPlugin(Star):
         self,
         event: AstrMessageEvent,
         prompt: str = "",
-        image_url: str = "",
-        audio_url: str = "",
-        video_url: str = "",
         duration: int = 0,
         resolution: str = "",
         aspect_ratio: str = "",
@@ -512,9 +511,7 @@ class ImageGeneratorPlugin(Star):
 
         Args:
             prompt(string): 视频提示词；图片＋视频/图片音频同步可留空。
-            image_url(string): 参考图片 URL、本地路径或 base64:// 数据，多张用空格分隔。留空时可读取消息、引用图片和 @用户头像。
-            audio_url(string): 参考音频 URL、标准 Data URL 或本地文件，多段用空格分隔。留空时可读取发送或引用的音频。
-            video_url(string): 参考视频 URL、标准 Data URL 或本地文件，多段用空格分隔。留空时可读取发送或引用的视频。
+            消息媒体：不需要填写 URL；工具会读取当前消息和引用中的 QQ 图片、文件、语音和视频公网链接。
             duration(number): 正整数秒；0 使用提示词或配置时长。10秒以上可自动选择配置的长视频模型。图片＋视频路线通常跟随参考视频时长。
             resolution(string): 可选分辨率档位，如480p、768p；留空使用所选路线的配置值，不自动降档。
             aspect_ratio(string): 可选16:9、9:16、1:1、4:3、3:4、21:9、adaptive；留空使用配置值。
@@ -543,38 +540,17 @@ class ImageGeneratorPlugin(Star):
                 generate_audio=generate_audio,
             )
             options.overrides()
-            images = []
-            if image_url:
-                for source in re.split(r"\s+", image_url.strip()):
-                    raw = await self.img_mgr.load_bytes(source)
-                    if not raw:
-                        raise VideoError("参考图片无法读取；未提交生成任务。")
-                    images.append(raw)
-            elif use_message_media:
-                images = await self._extract_images(event, options.prompt, strict=True)
-            audios, videos = (
-                await collect_media(
+            if use_message_media:
+                images = await self.img_mgr.extract_image_sources_from_event(
                     event,
-                    self.img_mgr,
-                    kinds={
-                        kind
-                        for kind, value in (("audio", audio_url), ("video", video_url))
-                        if not value
-                    },
+                    ignore_id=self._bot_id(event),
+                    context=event,
+                    include_at_avatar=True,
+                    strict=True,
                 )
-                if use_message_media and (not audio_url or not video_url)
-                else ([], [])
-            )
-            for kind, value in (("audio", audio_url), ("video", video_url)):
-                if value:
-                    sources = [
-                        await resolve_media(s, kind, event)
-                        for s in re.split(r"\s+", value.strip())
-                    ]
-                    if kind == "audio":
-                        audios = sources
-                    else:
-                        videos = sources
+                audios, videos = await collect_media(event, self.img_mgr)
+            else:
+                images, audios, videos = [], [], []
         except (VideoError, ValueError, TypeError, OSError) as exc:
             yield str(exc)
             return
@@ -617,13 +593,13 @@ class ImageGeneratorPlugin(Star):
 
     @filter.llm_tool(name="generate_image")
     async def generate_image(
-        self, event: AstrMessageEvent, prompt: str, image_url: str = ""
+        self, event: AstrMessageEvent, prompt: str
     ):
         """使用统一图片生成入口生成或编辑图片。
 
         Args:
             prompt(string): 图片生成或编辑提示词。
-            image_url(string): 可选的参考图片 URL、本地路径或 base64:// 数据。为空时进行文生图，传入后进行图生图。
+            消息媒体：不需要填写 URL；工具会读取当前消息和引用中的图片或图片文件。
         """
         if not self.conf.get("enable_llm_tool", True):
             yield "图片生成函数工具当前已在插件配置中停用。"
@@ -645,18 +621,9 @@ class ImageGeneratorPlugin(Star):
             return
 
         images: list[bytes] = []
-        sources = [
-            item.strip()
-            for item in re.split(r"[\s,，]+", str(image_url or ""))
-            if item.strip()
-        ]
-        for source in sources:
-            image = await self.img_mgr.load_bytes(source)
-            if image:
-                images.append(image)
-        if image_url and not images:
-            yield "参考图片无法读取，请提供可访问的图片 URL、本地路径或 base64:// 数据。"
-            return
+        images = await self._extract_images(
+            event, prompt, "自定义", strict=True, extra_sources=[]
+        )
 
         result = await self._generate(
             event,

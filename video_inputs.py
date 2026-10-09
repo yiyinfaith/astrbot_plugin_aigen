@@ -16,6 +16,46 @@ MEDIA_URL = re.compile(
     re.IGNORECASE,
 )
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".amr", ".silk"}
+VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"}
+
+
+def _component_source(segment) -> str:
+    """Read a component's URL without touching File.file (which may download)."""
+    if type(segment).__name__ == "File":
+        values = (getattr(segment, "url", ""), getattr(segment, "file_", ""))
+    else:
+        values = (
+            getattr(segment, "url", ""),
+            getattr(segment, "file", ""),
+            getattr(segment, "path", ""),
+        )
+    return next((str(value).strip() for value in values if value), "")
+
+
+def component_media_kind(segment) -> str:
+    """Classify Record/Video/File components using MIME/name/URL metadata."""
+    name = type(segment).__name__
+    if name == "Record" or name == "Audio":
+        return "audio"
+    if name == "Video":
+        return "video"
+    if name != "File":
+        return ""
+    values = [
+        getattr(segment, "name", ""),
+        getattr(segment, "content_type", ""),
+        getattr(segment, "mime_type", ""),
+        _component_source(segment),
+    ]
+    text = " ".join(str(value or "").lower() for value in values)
+    if "audio/" in text or any(ext in text for ext in AUDIO_EXTENSIONS):
+        return "audio"
+    if "video/" in text or any(ext in text for ext in VIDEO_EXTENSIONS):
+        return "video"
+    return "image" if "image/" in text or any(ext in text for ext in IMAGE_EXTENSIONS) else ""
+
 
 def text_media(text: str) -> tuple[list[str], list[str]]:
     audio, video = [], []
@@ -117,12 +157,12 @@ async def resolve_media(source: str, kind: str, event=None) -> str:
 
 
 async def collect_media(
-    event, image_manager, kinds=None
+    event, image_manager, kinds=None, quoted_only=False
 ) -> tuple[list[str], list[str]]:
     audios, videos = [], []
     kinds = {"audio", "video"} if kinds is None else set(kinds)
 
-    async def collect(chain):
+    async def collect(chain, quoted=False):
         for seg in chain:
             name = type(seg).__name__
             if name == "Reply":
@@ -132,29 +172,25 @@ async def collect_media(
                     event, getattr(seg, "id", None)
                 )
                 await collect(
-                    [item for item in chain if type(item).__name__ != "Reply"]
+                    [item for item in chain if type(item).__name__ != "Reply"], True
                 )
-            elif name in {"Record", "Audio", "Video"}:
-                kind = "video" if name == "Video" else "audio"
+            elif name in {"Record", "Audio", "Video", "File"}:
+                kind = component_media_kind(seg)
                 if kind not in kinds:
                     continue
-                source = (
-                    getattr(seg, "url", "")
-                    or getattr(seg, "file", "")
-                    or getattr(seg, "path", "")
-                )
+                if quoted_only and not quoted:
+                    continue
+                source = _component_source(seg)
                 source = await resolve_media(source, kind, event)
                 target = videos if kind == "video" else audios
                 if source not in target:
                     target.append(source)
             elif name == "Plain":
-                a, v = text_media(str(getattr(seg, "text", "")))
-                if "audio" in kinds:
-                    audios.extend(s for s in a if s not in audios)
-                if "video" in kinds:
-                    videos.extend(s for s in v if s not in videos)
+                # Media must come from a message component. Text URLs are not
+                # accepted as command/tool media parameters.
+                continue
 
-    await collect(image_manager._event_chain(event))
+    await collect(image_manager._event_chain(event), False)
     return audios, videos
 
 

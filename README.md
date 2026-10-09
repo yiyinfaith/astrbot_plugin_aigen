@@ -55,7 +55,7 @@ AstrBot 在插件初始化前会清理 Schema 以外的配置字段，因此升�
 
 这些默认 ID 来自 [AutoDL API 文档](https://github.com/yiyinfaith/new-api-plugin-autodl/blob/main/API.md)。渠道必须允许所选模型并配置价格；有路线不代表上游一定支持。空模型、媒体数量不符、时长越界、不支持的分辨率等会在提交前明确报错，插件不丢弃参考媒体，也不改时长或降档。两张普通参考图不会自动变成首尾帧，需要 `--frames`。
 
-直接发图片、引用图片和 @用户取头像都可作为视频参考图。视频预设仍只取一张图片并采用上述单图优先级；视频自定义提示词可收集多图并保持消息组件顺序，不自动使用发送者头像。可直接发送或引用音频/视频，也可填写媒体 URL。引用链为空时会尝试通过平台读取原消息；OneBot 语音文件 token 会尝试导出 MP3。不支持或无法转换的 SILK/AMR 会说明原因，请提供 WAV/MP3 等支持的音频文件。可读的媒体必须来自平台或有效地址。
+直接发送图片、图片文件、引用图片和 @用户取头像都可作为视频参考图。视频预设仍只取一张图片并采用上述单图优先级；视频自定义提示词可收集多图并保持组件顺序，不自动使用发送者头像。音频和视频必须先作为 QQ 语音/视频或文件单独发送，再在 `/生视频` 消息中引用；命令消息中直接附带的音频/视频会被忽略。图片、音频和视频组件都会优先使用 QQ 提供的公网 URL，文件组件按 MIME、文件名和扩展名识别。引用链为空时会尝试通过平台读取原消息；OneBot 语音文件 token 会尝试导出 MP3。不支持或无法转换的 SILK/AMR 会说明原因。命令和工具都不接受用户填写媒体 URL。
 
 ### 命令参数
 
@@ -64,23 +64,22 @@ AstrBot 在插件初始化前会清理 Schema 以外的配置字段，因此升�
 | `--duration 1` | 正整数秒；也可在提示词中写 `1秒` |
 | `--resolution 480p` | 显式分辨率；也可写在提示词中 |
 | `--ratio 16:9` | 比例，支持 16:9、9:16、1:1、4:3、3:4、21:9、adaptive |
-| `--image URL` | 参考图片，可重复；也可用本地路径或 base64:// |
-| `--audio URL` | 参考音频，可重复；支持 URL、标准 Data URL 和本地文件 |
-| `--video URL` | 参考视频，可重复；支持 URL、标准 Data URL 和本地文件 |
 | `--frames` | 恰好两张图片作为首尾帧，不允许混入音频/视频 |
 | `--reference-mode reference` | 普通参考；另支持 first_frame、first_last_frame |
 | `--seed -1` | 不发送种子；其他整数范围由模型决定 |
 | `--generate-audio true` | Seedance 同时生成音频；另支持 false、auto |
 
-显式参数优先于提示词中的画质/比例和配置默认值。带空格的路径用双引号括起来；参数错误会指出具体项目。图片＋视频路线通常不使用 prompt 或可控时长，可以仅发送 `/生视频` 并附带一图一视频。
+显式参数优先于提示词中的画质/比例和配置默认值。`--image`、`--audio`、`--video` 仍会被识别并明确提示“请直接发送或引用媒体”，但不会读取其中的 URL；提示词中的裸媒体 URL 也会被拒绝。图片＋视频路线通常不使用 prompt 或可控时长，可以仅发送 `/生视频` 并附带一图一视频。
 
 ```text
 /生视频 一朵云慢慢飘过 --duration 1 --resolution 480p
 /生视频 让人物挥手 --duration 1   （同时发图，或引用图片、@他人）
-/生视频 人物唱歌 --audio https://media.example.com/song.wav --duration 5   （附带图片）
-/生视频 一段自然的镜头过渡 --frames --image https://media.example.com/start.png --image https://media.example.com/end.png --duration 1
-/生视频 --image https://media.example.com/person.png --video https://media.example.com/motion.mp4
+/生视频 人物唱歌 --duration 5   （引用一条单独发送的音频消息，可同时发送或引用图片）
+/生视频 一段自然的镜头过渡 --frames --duration 1   （同时发送或引用两张图片）
+/生视频   （引用一条单独发送的视频消息，可同时发送或引用图片）
 ```
+
+图片可以和命令文字一起发送，也可以引用图片消息；QQ 图片和图片文件均可。音频、视频必须单独发送后引用，QQ 语音/视频和作为文件发送的音视频文件均可。命令只从引用中收集音频、视频，图片按组件顺序收集；预设关键词只取一张图片，优先级为 **引用 > 同消息图片 > @用户头像 > 发送者头像**。
 
 视频拥有独立关键词预设、自定义前缀（默认“生视频”）、两个前缀触发开关，规则和图片相同；自定义默认需前缀、预设默认无需前缀。相同关键词在图片和视频都配置时，最长关键词优先，相同长度优先图片。`/生视频帮助`、`/生视频菜单` 也显示全局帮助。
 
@@ -107,14 +106,12 @@ AstrBot 在插件初始化前会清理 Schema 以外的配置字段，因此升�
 
 ```json
 {
-  "prompt": "一只戴红围巾的猫，电影感光影",
-  "image_url": "https://example.com/reference.png"
+  "prompt": "一只戴红围巾的猫，电影感光影"
 }
 ```
 
 - `prompt`（`string`，必填）：提示词。
-- `image_url`（`string`，可选）：一张参考图 URL 或标准 Data URL；省略或空字符串为文生图，传入后为图生图。
-- 函数只接受这两个参数；多图、当前消息图片和引用图片由普通命令 `/生图`、`/画图` 处理。
+- 函数不接受 `image_url` 等媒体 URL 参数。调用工具时，插件从当前消息和引用消息读取 QQ 图片、图片文件和 @用户头像；没有图片就是文生图，有图片就是图生图。图片来源顺序与普通自定义提示词相同，按消息组件顺序支持多图。
 
 ### `generate_video`
 
@@ -123,9 +120,6 @@ AstrBot 在插件初始化前会清理 Schema 以外的配置字段，因此升�
 ```json
 {
   "prompt": "人物在海边慢慢转身，镜头平稳推进",
-  "image_url": "https://example.com/person.png",
-  "audio_url": "",
-  "video_url": "",
   "duration": 5,
   "resolution": "480p",
   "aspect_ratio": "16:9",
@@ -139,16 +133,15 @@ AstrBot 在插件初始化前会清理 Schema 以外的配置字段，因此升�
 | 参数 | 类型与取值 | 作用 |
 | --- | --- | --- |
 | `prompt` | `string`，可空 | 文生、图生和多媒体提示词；只做图片＋视频参考时可留空。 |
-| `image_url` | `string`，可选；多张用空格分隔 | 图片 URL 或标准 Data URL。工具参数中的图片按空格拆分并保持顺序。 |
-| `audio_url` | `string`，可选；多段用空格分隔 | 音频 URL 或标准 Data URL。 |
-| `video_url` | `string`，可选；多段用空格分隔 | 视频 URL 或标准 Data URL。 |
 | `duration` | `integer`，`0` 或正整数 | `0` 使用提示词/配置默认时长；正整数覆盖默认时长。 |
 | `resolution` | `string`，如 `480p`、`768p` | 覆盖路线分辨率；留空使用路线配置。 |
 | `aspect_ratio` | `string` | 支持 `16:9`、`9:16`、`1:1`、`4:3`、`3:4`、`21:9`、`adaptive`。 |
 | `reference_mode` | `auto`、`reference`、`first_frame`、`first_last_frame` | `auto` 使用路线配置；`first_frame` 要求恰好一图；`first_last_frame` 要求恰好两图。 |
 | `seed` | `integer` | `-2` 使用配置，`-1` 不发送种子，非负数发送给支持该字段的接口。 |
 | `generate_audio` | `auto`、`true`、`false` | `auto` 使用配置；主要用于支持生成音频的模型。 |
-| `use_message_media` | `boolean` | 默认 `true`。某类显式 URL 为空时读取当前消息、引用和 @用户头像；设为 `false` 忽略消息附带媒体。 |
+| `use_message_media` | `boolean` | 默认 `true`。读取当前消息、引用和 @用户头像中的媒体；设为 `false` 忽略所有消息附带媒体。工具没有媒体 URL 参数。 |
+
+工具调用时，用户只需把提示词和媒体一起发给 QQ，或引用已经发送的媒体；不需要把 QQ 公网 URL 复制到参数中。图片、图片文件、QQ 语音、音频文件、QQ 视频和视频文件都会被转换为组件来源，视频接口收到 QQ 公网 URL 原值。工具会按当前消息和引用中的组件顺序收集图片、音频和视频，不自动加入发送者头像；没有图片时可用 @用户头像作为图片参考。无媒体时根据配置路由为文生视频。
 
 媒体组合与自动路由如下；模型和接口格式均可在“生视频设置 → 自动路由模型”中改为管理员实际可用的值：
 
@@ -162,19 +155,19 @@ AstrBot 在插件初始化前会清理 Schema 以外的配置字段，因此升�
 | 有视频，无图片、音频 | 视频生视频 | 使用管理员配置的模型 |
 | 有图片＋视频（可再带音频） | 图片视频多媒体路线 | 默认 `wan2.2-animate-move`（DashScope Wan），也可改成任意已接入模型 ID |
 
-工具媒体优先使用显式 `image_url`/`audio_url`/`video_url`；缺少的类型才从消息中补充。图片来自消息时沿用：引用 > 发送图片 > @用户头像；工具不自动加入发送者头像。每种协议仍使用自己的请求体，模型是否接受某种媒体组合由上游服务决定。
+工具没有 `image_url`、`audio_url`、`video_url` 参数，也不会从提示词中的 URL 读取媒体。每种协议仍使用自己的请求体，模型是否接受某种媒体组合由上游服务决定。
 
 普通命令的参数写法：
 
 ```text
 /生视频 海边日落 --duration 1 --resolution 480p
-/生视频 人物挥手 --image https://example.com/person.png --duration 5
-/生视频 首尾帧过渡 --frames --image https://example.com/start.png --image https://example.com/end.png
-/生视频 人物唱歌 --image https://example.com/person.png --audio https://example.com/song.wav
-/生视频 --image https://example.com/person.png --video https://example.com/motion.mp4
+/生视频 人物挥手 --duration 5   （同时发送或引用图片）
+/生视频 首尾帧过渡 --frames   （同时发送或引用两张图片）
+/生视频 人物唱歌 --duration 5   （引用单独发送的音频）
+/生视频   （引用单独发送的视频，可同时发送或引用图片）
 ```
 
-`--image`、`--audio`、`--video` 可重复；`--frames` 等于 `--reference-mode first_last_frame`。命令行还支持 `--ratio`、`--reference-mode`、`--seed`、`--generate-audio`。带空格的 URL 或路径请用引号。直接发送、引用图片/音频/视频和 @用户取头像都支持；引用链为空时插件会尝试读取原消息。
+`--frames` 等于 `--reference-mode first_last_frame`。命令行还支持 `--ratio`、`--reference-mode`、`--seed`、`--generate-audio`。媒体必须通过 QQ 消息组件或引用传入；`--image`、`--audio`、`--video` 以及提示词中的媒体 URL 都会返回提示，不会提交任务。引用链为空时插件会尝试读取原消息。
 
 ## 任务、计费与数据
 
