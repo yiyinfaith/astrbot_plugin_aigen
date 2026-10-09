@@ -342,4 +342,3 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
             await self.manager.generate("hello", [])
         self.assertEqual(len(self.requests), 1)
         self.assertTrue(list(self.manager.data_dir.glob("*.json")))
-

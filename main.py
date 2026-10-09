@@ -700,4 +700,3 @@ class ImageGeneratorPlugin(Star):
         """Send the help text configured in the plugin settings."""
         text = str(self.conf.get("help_text", "帮助文档未配置。"))
         yield event.chain_result([Plain(text)])
-

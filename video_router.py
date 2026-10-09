@@ -217,4 +217,3 @@ def select_route(
                 effective[key] = value
     effective.update(overrides)
     return route, effective
-
