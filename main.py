@@ -404,6 +404,7 @@ class ImageGeneratorPlugin(Star):
                     images,
                     audios,
                     videos,
+                    dispatch_result=True,
                     options=options,
                 )
             except (VideoError, OSError, ValueError) as exc:
@@ -411,7 +412,8 @@ class ImageGeneratorPlugin(Star):
         else:
             images = await self._extract_images(event, prompt, preset_name)
             result = await self._generate(event, prompt, preset_name, model, images)
-        yield event.chain_result(result)
+        if result:
+            yield event.chain_result(result)
 
     async def _video_command_inputs(self, event, prompt, preset_name):
         options = parse_video_command(prompt)
@@ -453,6 +455,7 @@ class ImageGeneratorPlugin(Star):
         videos=None,
         *,
         tool_call=False,
+        dispatch_result=False,
         duration=0,
         options=None,
     ) -> list[Any]:
@@ -494,7 +497,51 @@ class ImageGeneratorPlugin(Star):
             reply.append(
                 Plain(f"\n✅ 视频生成成功（{monotonic() - start:.1f}s）{suffix}")
             )
+        if dispatch_result:
+            return await self._deliver_video_result(event, result, reply)
         return reply
+
+    @staticmethod
+    def _video_expiry_note(result) -> str:
+        expiry = str(getattr(result, "url_expires_at", "") or "").strip()
+        if expiry:
+            return f"链接失效时间：{expiry}"
+        return "链接失效时间：AutoDL 未返回明确时间，请以 AutoDL 上游链接有效期为准"
+
+    async def _deliver_video_result(
+        self, event: AstrMessageEvent, result, local_chain: list[Any]
+    ) -> list[Any]:
+        """Send a real video first and fall back only after an adapter error."""
+        try:
+            # Keep the video send isolated: a later success-text failure must
+            # never be mistaken for a failed video delivery.
+            await event.send(event.chain_result(local_chain[:1]))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("本地视频消息发送失败，准备使用公网链接回退：%s", exc)
+        else:
+            if len(local_chain) > 1:
+                try:
+                    await event.send(event.chain_result(local_chain[1:]))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("视频已发送，但成功提示发送失败：%s", exc)
+            return []
+
+        url = str(getattr(result, "url", "") or "").strip()
+        if not url:
+            return [Plain("视频已生成，但本地视频消息发送失败，接口也未返回可用公网链接。")]
+        fallback = (
+            "视频文件消息发送失败，改用 AutoDL 公网链接：\n"
+            f"{url}\n"
+            f"{self._video_expiry_note(result)}"
+        )
+        fallback_chain = [Plain(fallback)]
+        try:
+            await event.send(event.chain_result(fallback_chain))
+            return []
+        except Exception as fallback_exc:  # noqa: BLE001
+            logger.exception("公网视频链接回退发送失败：%s", fallback_exc)
+            # Let AstrBot's normal result stage make one last delivery attempt.
+            return fallback_chain
 
     @filter.llm_tool(name="generate_video")
     async def generate_video(
@@ -566,9 +613,11 @@ class ImageGeneratorPlugin(Star):
             audios,
             videos,
             tool_call=True,
+            dispatch_result=True,
             options=options,
         )
-        yield event.chain_result(result)
+        if result:
+            yield event.chain_result(result)
 
     @filter.command("生视频", aliases={"生成视频"}, prefix_optional=False)
     async def video_command(self, event: AstrMessageEvent):
@@ -588,11 +637,13 @@ class ImageGeneratorPlugin(Star):
                 images,
                 audios,
                 videos,
+                dispatch_result=True,
                 options=options,
             )
         except (VideoError, OSError, ValueError) as exc:
             result = [Plain(str(exc))]
-        yield event.chain_result(result)
+        if result:
+            yield event.chain_result(result)
 
     @filter.llm_tool(name="generate_image")
     async def generate_image(

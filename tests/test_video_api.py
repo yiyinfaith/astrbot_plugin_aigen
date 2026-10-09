@@ -308,6 +308,8 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
     async def test_submit_once_poll_twice_download_without_key_and_record(self):
         result = await self.manager.generate("hello", [])
         self.assertEqual(result.path.read_bytes(), MP4)
+        self.assertEqual(result.url, self.base + "/result.mp4")
+        self.assertEqual(result.url_expires_at, "")
         self.assertEqual(len(self.requests), 1)
         self.assertEqual(self.polls, 2)
         self.assertNotIn("stream", self.requests[0])
@@ -316,6 +318,20 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(info["task_id"], "task")
         self.assertEqual(info["status"], "completed")
         self.assertNotIn("do-not-send-to-media", json.dumps(info))
+
+    def test_url_expiry_is_read_without_inventing_a_ttl(self):
+        self.assertEqual(
+            module._url_expiry(
+                {"output": {"expires_at": 1_800_000_000}},
+                "https://media.test/result.mp4",
+            ),
+            "2027-01-15 08:00:00 UTC",
+        )
+        self.assertEqual(
+            module._url_expiry({}, "https://media.test/result.mp4?expires=123"),
+            "123",
+        )
+        self.assertEqual(module._url_expiry({}, "https://media.test/result.mp4"), "")
 
     async def test_sse_heartbeat_does_not_lose_task_id(self):
         self.sse = True

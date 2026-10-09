@@ -85,6 +85,10 @@ class VideoResult:
     path: Path
     task_id: str
     model: str
+    # The upstream artifact URL is kept for delivery fallback.  It is never
+    # used for the normal path while the downloaded MP4 is available.
+    url: str = ""
+    url_expires_at: str = ""
 
 
 def json_path(value, path: str):
@@ -96,6 +100,59 @@ def json_path(value, path: str):
         else:
             return None
     return value
+
+
+def _url_expiry(data: dict, url: str) -> str:
+    """Extract an upstream expiry hint without inventing a TTL.
+
+    AutoDL-compatible endpoints do not share one response schema.  Keep the
+    value as returned when it is textual; convert Unix timestamps to an
+    unambiguous UTC ISO value.  Signed URLs without an explicit expiry remain
+    unknown and are reported as such by the sender.
+    """
+    if not isinstance(data, dict):
+        data = {}
+    keys = (
+        "expires_at",
+        "expire_at",
+        "expiration_time",
+        "expiration",
+        "expires",
+        "expire_time",
+        "expiry",
+    )
+
+    def find(value):
+        if isinstance(value, dict):
+            for key in keys:
+                if value.get(key) not in (None, ""):
+                    return value[key]
+            for child in value.values():
+                found = find(child)
+                if found not in (None, ""):
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = find(child)
+                if found not in (None, ""):
+                    return found
+        return None
+
+    value = find(data)
+    if value in (None, "") and url:
+        query = urlsplit(url).query
+        for part in query.split("&"):
+            name, _, item = part.partition("=")
+            if name.lower() in {"expires", "expire", "expires_at", "expire_at"}:
+                value = item
+                break
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (int, float)) or str(value).isdigit():
+        number = float(value)
+        if number >= 1_000_000_000:
+            return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(number))
+    return str(value)
 
 
 def endpoint(base: str, path: str) -> str:
@@ -797,6 +854,7 @@ class VideoApiManager(ApiManager):
                 "视频提交连接中断，任务可能已创建；请先核对上游任务记录，勿立即重复提交。"
             ) from exc
         task_id, status, url, error = self.parse_task(data)
+        url_expires_at = _url_expiry(data, url)
         if not task_id and not url:
             raise VideoError("接口没有返回任务 ID 或视频地址；请核对任务记录后再提交。")
         info = {
@@ -851,6 +909,7 @@ class VideoApiManager(ApiManager):
                     self._json_request("GET", poll_url, key, headers), remaining
                 )
                 _, status, url, error = self.parse_task(data)
+                url_expires_at = _url_expiry(data, url) or url_expires_at
                 transient_errors = 0
             except (aiohttp.ClientError, asyncio.TimeoutError, VideoError) as exc:
                 transient_errors += 1
@@ -859,6 +918,8 @@ class VideoApiManager(ApiManager):
                         f"视频查询中断；任务 ID：{task_id}。任务仍可在上游查询，请勿重复提交。"
                     ) from exc
         info.update(status="completed", url=url)
+        if url_expires_at:
+            info["url_expires_at"] = url_expires_at
         await asyncio.to_thread(
             job.write_text, json.dumps(info, ensure_ascii=False), "utf-8"
         )
@@ -872,7 +933,13 @@ class VideoApiManager(ApiManager):
         await asyncio.to_thread(
             job.write_text, json.dumps(info, ensure_ascii=False), "utf-8"
         )
-        return VideoResult(path, task_id, str(self.config.get("model")))
+        return VideoResult(
+            path,
+            task_id,
+            str(self.config.get("model")),
+            url,
+            url_expires_at,
+        )
 
     async def download_video(self, url: str, key: str, base: str) -> Path:
         parsed = urlsplit(url)

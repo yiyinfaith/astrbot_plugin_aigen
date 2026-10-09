@@ -43,11 +43,15 @@ class Event(FakeEvent):
         super().__init__(chain, text=text)
         self.sent = []
         self.stopped = False
+        self.fail_video_send = False
 
     def chain_result(self, chain):
         return chain
 
     async def send(self, result):
+        if self.fail_video_send and result and isinstance(result[0], Video):
+            self.fail_video_send = False
+            raise RuntimeError("video adapter rejected local file")
         self.sent.append(result)
 
     def stop_event(self):
@@ -147,9 +151,9 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             reply
             async for reply in self.plugin.generate_video(event, "说话", duration=1)
         ]
-        self.assertEqual(event.sent, [])
-        self.assertEqual(len(result[0]), 1)
-        self.assertIsInstance(result[0][0], Video)
+        self.assertEqual(result, [])
+        self.assertEqual(len(event.sent), 1)
+        self.assertTrue(any(isinstance(chain[0], Video) for chain in event.sent))
         args = self.plugin.video_mgr.generate.await_args.args
         self.assertEqual(
             args[1:4], (["https://i.test/ref.png"], ["https://m.test/ref.wav"], [])
@@ -265,7 +269,8 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         )
         result = [reply async for reply in self.plugin.video_command(event)]
         self.assertTrue(event.stopped)
-        self.assertIsInstance(result[0][0], Video)
+        self.assertEqual(result, [])
+        self.assertTrue(any(isinstance(chain[0], Video) for chain in event.sent))
         self.assertEqual(
             self.plugin.video_mgr.generate.await_args.args[3],
             ["https://m.test/motion.mp4"],
@@ -322,7 +327,8 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             self.plugin.video_mgr.generate.await_args.args[1],
             ["https://i.test/quoted.png"],
         )
-        self.assertTrue(result)
+        self.assertEqual(result, [])
+        self.assertTrue(any(isinstance(chain[0], Video) for chain in event.sent))
         self.plugin.video_conf["preset_need_prefix"] = True
         self.plugin.video_mgr.generate.reset_mock()
         result = [
@@ -330,6 +336,30 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(result, [])
         self.plugin.video_mgr.generate.assert_not_awaited()
+
+    async def test_local_video_send_falls_back_to_upstream_url_with_expiry(self):
+        event = Event([])
+        event.fail_video_send = True
+        self.plugin.video_mgr.generate.return_value = api.VideoResult(
+            Path("generated.mp4"),
+            "task",
+            "routed-model",
+            "https://media.test/video.mp4",
+            "2026-10-10 12:00:00 UTC",
+        )
+        result = await self.plugin._generate_video(
+            event,
+            "cloud",
+            "自定义",
+            [],
+            [],
+            [],
+            dispatch_result=True,
+        )
+        self.assertEqual(result, [])
+        self.assertEqual(len(event.sent), 2)  # progress notice + URL fallback
+        self.assertIn("https://media.test/video.mp4", event.sent[-1][0].text)
+        self.assertIn("2026-10-10 12:00:00 UTC", event.sent[-1][0].text)
 
     async def test_media_data_url_type_and_local_magic_validation(self):
         with self.assertRaises(router.VideoError):
