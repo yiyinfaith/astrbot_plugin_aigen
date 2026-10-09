@@ -272,6 +272,23 @@ class ImageManager:
         if not bot:
             return []
 
+        action = getattr(bot, "call_action", None) or getattr(getattr(bot, "api", None), "call_action", None)
+        if callable(action):
+            try:
+                payload = await action("get_msg", message_id=int(reply_id))
+                payload = payload.get("data", payload)
+                from astrbot.api import message_components
+                components = []
+                for item in payload.get("message", []):
+                    if not isinstance(item, dict):
+                        continue
+                    cls = getattr(message_components, {"image": "Image", "record": "Record", "video": "Video", "text": "Plain", "at": "At"}.get(item.get("type"), ""), None)
+                    if cls:
+                        components.append(cls(**item.get("data", {})))
+                return components
+            except Exception as exc:
+                logger.debug("Could not fetch OneBot quoted media: %s", exc)
+
         for method_name in (
             "get_message",
             "fetch_message",
@@ -443,6 +460,7 @@ class ImageManager:
         max_images: int | None = None,
         include_sender_avatar: bool = False,
         extra_sources: List[str] | None = None,
+        strict: bool = False,
     ) -> List[bytes]:
         """按请求类型收集图片，并保留消息中的参数顺序。
 
@@ -597,6 +615,10 @@ class ImageManager:
                     images.append(result)
                 elif isinstance(result, Exception):
                     logger.warning(f"Image extraction error: {result}")
+                    if strict:
+                        raise ValueError("参考图片或 @头像读取失败，请检查媒体是否可访问；未提交生成任务。") from result
+                elif strict:
+                    raise ValueError("参考图片或 @头像读取失败，请检查媒体是否可访问；未提交生成任务。")
             return images
 
         if max_images == 1:

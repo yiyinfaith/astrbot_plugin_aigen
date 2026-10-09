@@ -22,3 +22,10 @@ preset_ref_images.json
 preset_images/
 preset_ref_images/
 fonts/
+config_backups/
+video/
+.env
+.env.*
+*.mp4
+*.webm
+artifacts/

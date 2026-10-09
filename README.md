@@ -1,50 +1,139 @@
-# AstrBot AIGen 多模态图片生成插件
+# AstrBot AIGen 多模态生成器
 
-`astrbot_plugin_aigen` 面向 AstrBot 4.x，提供一个统一的图片生成入口。插件保留普通生图、预设关键词、帮助文字和使用统计，并兼容五种请求模式：
+`astrbot_plugin_aigen` 为 AstrBot 4.16+ 提供图片和视频生成、独立关键词预设、可配置帮助与使用统计。当前版本 **v1.0.1**，支持热重载，不需要重启 AstrBot。不设置个人或群组次数限制。
 
-- `openai_image`
-- `openai_chat`
-- `openai_response`
-- `gemini_official`
-- `custom_endpoint`
+## 安装和升级
 
-## 使用方式
+在 AstrBot 插件管理中使用仓库 URL 安装，已有安装点击本插件的“更新”即可从 GitHub 获取代码并热重载：
 
-- `/画图 <提示词>`、`/生图 <提示词>`：自定义提示词。
-- 在消息中附带图片、引用图片或 `@` 用户后使用 `/画图 <提示词>`：使用统一入口进行图生图。
-- 发送已配置的预设关键词：触发对应的预设提示词。匹配采用模糊规则，关键词出现在消息任意位置都可以触发，例如 `@小明手办化`；关键词前后的普通文字会追加到提示词末尾。
-- 自定义提示词默认需要 AstrBot 前缀：`/生图 一只猫`。关闭“自定义提示词需要 AstrBot 前缀”后，`生图 一只猫` 也可以触发。
-- 预设关键词默认不需要 AstrBot 前缀：`手办化` 或 `手办化 请保持原图姿势` 都可以触发。开启“预设关键词需要 AstrBot 前缀”后，改用 `/手办化 ...` 或 @机器人触发。
-- 图片参数规则：预设关键词只接收一张图片，选择顺序为“引用图片 > 消息中发送的图片 > @用户头像 > 发送者头像”；`/生图`、`/画图` 的自定义提示词支持多张图片，引用图片、发送图片和 @用户头像按照消息组件出现顺序依次传入，不自动加入发送者头像。
-- `/ai生成帮助`、`/生图帮助`、`/画图帮助`、`/生图菜单`、`/画图菜单`：发送插件配置中的 `help_text`。
+https://github.com/yiyinfaith/astrbot_plugin_aigen
+
+首次从 v1.0.0 升级时，插件会把原有配置迁移到新的分组，**完整保留图片预设的顺序和所有提示词文字**，也保留接口、Key、帮助文案与开关值。迁移前会在插件数据目录 `config_backups/` 保存一份原配置；以后热重载不重新迁移，不用默认预设覆盖你的列表。仓库默认 44 条只用于新安装。
+
+AstrBot 在插件初始化前会清理 Schema 以外的配置字段，因此升级所需的旧字段暂时以隐藏快照保留，页面只显示三个新分组；运行时仅使用分组内的设置。如新旧预设同时存在且内容不同，插件停止自动迁移并保留备份，保护两份内容。
+
+## 配置界面
+
+插件使用 AstrBot 原生带边框的分组，模型路由采用可折叠卡片：
+
+| 分组 | 内容 |
+| --- | --- |
+| 🌐 全局设置 | 代理、HTTP 超时、流式请求、调试、普通回复显示、帮助文案、函数工具冷却 |
+| 🎨 生图设置 | 图片专用的接口格式、地址、Key 池、模型、画质、触发规则、预设和图片下载 |
+| 🎬 生视频设置 | 视频专用的六种接口格式、地址、Key 池、自动路由模型、时长、画质、触发规则、预设、任务轮询和视频缓存 |
+
+图片和视频的接口地址、Key、模型、预设分别配置。视频 API 地址填写基础地址（例如 `https://api.example.com`），不能把图片接口路径用作视频接口。
+
+流式开关适用于全部接口类型。图片保留相应接口的流式行为；标准视频接口按文档创建异步任务并轮询，支持解析 JSON/SSE 响应，不额外添加协议禁止的 `stream` 请求体字段。自定义视频模板可以使用 `{stream}`。
+
+## 图片使用
+
+- `/生图 <提示词>`、`/画图 <提示词>`：无图片是文生图，传图片是图生图，支持多图。
+- 预设关键词可出现在消息任意位置，例如 `@小明手办化`，关键词以外的文字追加到预设提示词。重叠关键词选最长的。
+- 自定义提示词默认需要 AstrBot 前缀；关闭对应开关后 `生图 <提示词>` 可以触发。
+- 预设默认无需 AstrBot 前缀；开启对应开关后需要前缀或唤醒机器人。
+- 图片预设只取一图，优先 **引用图片 > 同时发送的图片 > @用户头像 > 发送者头像**。
+- 自定义提示词按消息组件顺序收集引用图片、发送图片、@用户头像，不自动添加发送者头像。
+- `/ai生成帮助`、`/生图帮助`、`/画图帮助`、`/生图菜单`、`/画图菜单` 显示配置的帮助文字。
+
+图片保留 `openai_image`、`openai_chat`、`openai_response`、`gemini_official`、`custom_endpoint` 五种请求格式。
+
+## 视频使用和自动路由
+
+`/生视频 <提示词及参数>`，也支持 `/生成视频`。提示词、图片、音频、视频共同决定任务类型，工具、指令、视频预设使用同一路由。打开“根据输入媒体自动路由”后，在“自动路由模型”中按类型配置模型、接口格式、可选分辨率和比例。每种路线可再指定 **10 秒以上使用的模型**。关闭自动路由后使用固定模型，仍会校验已知工作流的输入约束。
+
+| 输入 | 路线 | 默认模型 |
+| --- | --- | --- |
+| 只有文字 | 文生视频 | `minimax_h3_lightx2v_no_pic` |
+| 一张或多张图片 | 图生视频 | `minimax_h3_lightx2v_v5`，超过 10 秒用 `minimax_h3_lightx2v_v5_15s` |
+| 明确指定两张首尾帧 | 首尾帧生视频 | `minimax_h3_lightx2v` |
+| 明确指定首帧 | 首帧生视频 | 留空，由管理员配置支持首帧的 Seedance/自定义模型 |
+| 音频 | 音频生视频 | `minimax_h3_image_audio_to_video_v2`，超过 10 秒用对应 `_15s` 模型 |
+| 图片＋音频 | 图音生视频 | `minimax_h3_image_audio_to_video_v2`，超过 10 秒用对应 `_15s` 模型 |
+| 图片＋视频 | 动作迁移 | `wan2.2-animate-move`，默认使用 DashScope 格式 |
+| 视频 / 音频＋视频 / 图音视频 | 相应多媒体路线 | 留空，由管理员配置支持该组合的模型，例如合适的 Seedance 模型 |
+
+这些默认 ID 来自 [AutoDL API 文档](https://github.com/yiyinfaith/new-api-plugin-autodl/blob/main/API.md)。渠道必须允许所选模型并配置价格；有路线不代表上游一定支持。空模型、媒体数量不符、时长越界、不支持的分辨率等会在提交前明确报错，插件不丢弃参考媒体，也不改时长或降档。两张普通参考图不会自动变成首尾帧，需要 `--frames`。
+
+直接发图片、引用图片和 @用户取头像都可作为视频参考图。视频预设仍只取一张图片并采用上述单图优先级；视频自定义提示词可收集多图并保持消息组件顺序，不自动使用发送者头像。可直接发送或引用音频/视频，也可填写媒体 URL。引用链为空时会尝试通过平台读取原消息；OneBot 语音文件 token 会尝试导出 MP3。不支持或无法转换的 SILK/AMR 会说明原因，请提供 WAV/MP3 等支持的音频文件。可读的媒体必须来自平台或有效地址。
+
+### 命令参数
+
+| 参数 | 用法 |
+| --- | --- |
+| `--duration 1` | 正整数秒；也可在提示词中写 `1秒` |
+| `--resolution 480p` | 显式分辨率；也可写在提示词中 |
+| `--ratio 16:9` | 比例，支持 16:9、9:16、1:1、4:3、3:4、21:9、adaptive |
+| `--image URL` | 参考图片，可重复；也可用本地路径或 base64:// |
+| `--audio URL` | 参考音频，可重复；支持 URL、标准 Data URL 和本地文件 |
+| `--video URL` | 参考视频，可重复；支持 URL、标准 Data URL 和本地文件 |
+| `--frames` | 恰好两张图片作为首尾帧，不允许混入音频/视频 |
+| `--reference-mode reference` | 普通参考；另支持 first_frame、first_last_frame |
+| `--seed -1` | 不发送种子；其他整数范围由模型决定 |
+| `--generate-audio true` | Seedance 同时生成音频；另支持 false、auto |
+
+显式参数优先于提示词中的画质/比例和配置默认值。带空格的路径用双引号括起来；参数错误会指出具体项目。动作迁移不使用 prompt 或可控时长，可以仅发送 `/生视频` 并附带一图一视频。
+
+```text
+/生视频 一朵云慢慢飘过 --duration 1 --resolution 480p
+/生视频 让人物挥手 --duration 1   （同时发图，或引用图片、@他人）
+/生视频 人物唱歌 --audio https://media.example.com/song.wav --duration 5   （附带图片）
+/生视频 一段自然的镜头过渡 --frames --image https://media.example.com/start.png --image https://media.example.com/end.png --duration 1
+/生视频 --image https://media.example.com/person.png --video https://media.example.com/motion.mp4
+```
+
+视频拥有独立关键词预设、自定义前缀（默认“生视频”）、两个前缀触发开关，规则和图片相同；自定义默认需前缀、预设默认无需前缀。相同关键词在图片和视频都配置时，最长关键词优先，相同长度优先图片。`/生视频帮助`、`/生视频菜单` 也显示全局帮助。
+
+### 六种视频接口
+
+| 格式 | 创建路径 | 查询路径 |
+| --- | --- | --- |
+| OpenAI Videos | `/v1/videos` | `/v1/videos/{task_id}` |
+| MiniMax V2 | `/v2/video_generation` | `/v2/query/video_generation/{task_id}` |
+| AutoDL 原生 | `/api/v1/comfyui/comfyui_workflow/{model}` | `/api/v1/comfyui/comfyui_workflow/result/{task_id}` |
+| DashScope Wan | `/api/v1/services/aigc/image2video/video-synthesis` | `/api/v1/tasks/{task_id}` |
+| Seedance | `/api/v3/contents/generations/tasks` | `/api/v3/contents/generations/tasks/{task_id}` |
+| 自定义路径 | 配置 `custom_create_path` | 配置 `custom_query_path`，必须含 `{task_id}` |
+
+各模式使用独立请求体，不混写协议字段。DashScope 固定一图一动作视频；Seedance 的 reference/首帧/首尾帧用途不能混用。MiniMax 两个官方别名仍遵守文档中 4/5 秒最低时长和档位限制，直接工作流 ID 可按自身能力请求 1 秒。任意模型的能力以对应服务文档为准，不能保证所有六种协议都能调用所有模型。
+
+自定义模式还提供 JSON 请求模板、额外请求头、任务 ID/状态/视频 URL/错误字段的 JSON 点路径（支持数组索引），以及成功/失败状态列表。模板占位：`{model}`、`{prompt}`、`{duration}`、`{resolution}`、`{ratio}`、`{size}`、`{image}`、`{images}`、`{audios}`、`{videos}`、`{stream}`。占位独占一个 JSON 字符串时会保留列表、数字、布尔值类型，避免模板字符串破坏 JSON。
 
 ## LLM 函数工具
 
-插件按 AstrBot 当前函数工具规范注册 `generate_image`。它只有一个图片生成调用入口：
+`generate_image` **保持原名**：`prompt` 必填，`image_url` 可选，为空文生图，传入图生图；不自动猜测上下文。
 
-- `prompt` 必填，图片生成或编辑提示词。
-- `image_url` 可选，可填写图片 URL、本地路径或 `base64://` 数据。参数为空时是文生图，传入后是图生图。
+视频只提供一个 **`generate_video`**，根据输入媒体自动路由：
 
-插件不会再根据上下文猜测文生图或图生图，也不会维护额外的上下文、人设、签到、叛逆或预设参考图功能。函数工具调用成功后只返回图片，不发送生成中或生成成功文字；普通 `/生图`、`/画图` 和预设关键词仍按原配置发送提示文字。`enable_llm_tool` 默认开启，`llm_cooldown_seconds` 仍可控制函数工具冷却时间；`llm_show_progress` 仅为兼容旧配置保留。
+| 参数 | 说明 |
+| --- | --- |
+| `prompt` | 视频提示词；动作迁移/图片音频同步可留空 |
+| `image_url`、`audio_url`、`video_url` | 相应参考媒体，多项用空格分隔 |
+| `duration` | 0 使用提示词或配置默认值，其他为正整数秒 |
+| `resolution`、`aspect_ratio` | 留空使用路线配置；显式值优先 |
+| `reference_mode` | auto 使用配置；reference、first_frame、first_last_frame 指定图片用途 |
+| `seed` | -2 使用配置，-1 不发送种子，其他按模型范围 |
+| `generate_audio` | auto 使用配置，true/false 控制 Seedance 音频生成 |
+| `use_message_media` | 默认 true；某类显式媒体为空时自动读取当前消息、引用和 @头像。设为 false 可请求纯文生视频而忽略消息附带媒体 |
 
-## 配置和数据安全
+两个工具默认开启，**成功时只发送图片/视频，没有进度、成功、耗时或模型文字**。错误仍提供可操作的原因。LLM 后续自己的回答由 AstrBot/模型控制。普通命令和预设保留生成进度和成功提示。AstrBot 面板的工具开关也需处于启用状态。
 
-基础配置在 AstrBot 管理面板中填写：统一的 `base_url`、`api_keys`、`model`、`image_resolution`、代理、超时、`use_stream` 和 `help_text` 等。文生图与图生图共用同一套接口地址、模型和 Key 池；是否为图生图只由请求中是否带有图片决定。
+## 任务、计费与数据
 
-`use_stream` 对所有请求模式开放。OpenAI Chat、Responses、Gemini 流式端点以及支持该选项的自定义/Images 接口会使用 SSE 或流式标记；上游不支持流式时由接口返回兼容错误，插件不会改变请求类型。
+每次调用只创建一次收费任务；POST 连接中断也不自动重新生成，避免重复扣费。后续仅轮询原任务，下载失败仅重试下载。等待或查询失败时显示任务 ID，任务记录保存在插件数据目录 `video/*.json`；视频完成但下载失败时保留结果地址，可从上游取回，不必再次付费。公开视频下载不附带 API Key。
 
-配置中的 `prompt_list` 会原样加载。当前仓库中的默认预设为 44 条，插件不会在启动、热重载或同步时重写它。使用统计位于 AstrBot 数据目录的 `daily_stats.json`。插件不设置个人或群组次数限制，任何用户都可以使用生图功能。
+费用由上游接口扣取，插件不额外收费、不设置次数额度。`daily_stats.json` 保留旧统计并新增 image/video 分类。MP4 缓存默认保留 24 小时，仅清理插件自己的文件；任务记录和配置备份保留。缓存大小、下载重试/超时、查询间隔和最大等待时间均可配置。热重载关闭 HTTP 会话和清理任务，不重启 AstrBot。
 
-## 开发和热重载
+## 开发验证
 
 ```bash
-python -m py_compile main.py api_manager.py data_manager.py image_manager.py generation_params.py utils.py
+python -m py_compile main.py api_manager.py data_manager.py image_manager.py generation_params.py config_manager.py video_router.py video_inputs.py video_api_manager.py utils.py
 python -m unittest discover -s tests -v
-ruff check main.py api_manager.py data_manager.py image_manager.py generation_params.py utils.py tests
+ruff check main.py config_manager.py data_manager.py video_router.py video_inputs.py video_api_manager.py tests/test_video* tests/test_config_migration.py
 ```
 
-插件实现了 `terminate()`，热重载时会关闭 HTTP 会话。修改后在 AstrBot WebUI 的插件管理中重载本插件即可，不需要重启 AstrBot。
+测试覆盖六种协议请求结构、媒体路由、引用与头像、参数错误、工具输出、一次提交和轮询下载、配置/预设迁移。宿主配置加载器集成测试需要旁边的 AstrBot 源码；没有源码时该项自动跳过，其余测试独立运行。低成本真实测试仅提交一条 1 秒 480p 文生视频任务；其他模式用本机模拟服务验证，不需要逐模式产生费用。
 
-## 借鉴和许可
+## 参考与许可
 
-项目地址：[yiyinfaith/astrbot_plugin_aigen](https://github.com/yiyinfaith/astrbot_plugin_aigen)。本项目借鉴了早期图片生成插件的请求适配思路，并按照 AstrBot 当前插件开发文档重构。请遵守仓库许可证及上游项目的使用要求。
+项目：[yiyinfaith/astrbot_plugin_aigen](https://github.com/yiyinfaith/astrbot_plugin_aigen)。配置、消息组件和函数工具依照 AstrBot 当前开发文档实现。视频适配参考 [AutoDL API](https://github.com/yiyinfaith/new-api-plugin-autodl/blob/main/API.md) 和 [Seedance 创建任务文档](https://docs.volcengine.com/docs/ark/create-video-generation-task-api?lang=zh)。遵守本仓库许可证及上游服务的使用要求。

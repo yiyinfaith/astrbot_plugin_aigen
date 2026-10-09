@@ -50,20 +50,24 @@ class PluginContractTest(unittest.TestCase):
             "batch_retries",
         }
         self.assertFalse(removed.intersection(schema))
-        self.assertIn("model", schema)
-        self.assertIn("image_resolution", schema)
-        self.assertEqual(len(schema["prompt_list"]["default"]), 44)
+        image_schema = schema["image_settings"]["items"]
+        self.assertIn("model", image_schema)
+        self.assertIn("image_resolution", image_schema)
+        self.assertEqual(len(image_schema["prompt_list"]["default"]), 44)
+        visible = [name for name, node in schema.items() if not node.get("invisible")]
+        self.assertEqual(visible, ["global_settings", "image_settings", "video_settings"])
         self.assertNotIn("仅generic模式", json.dumps(schema, ensure_ascii=False))
 
     def test_single_tool_and_unified_generation_path_are_present(self):
         main = (ROOT / "main.py").read_text(encoding="utf-8")
         api = (ROOT / "api_manager.py").read_text(encoding="utf-8")
         schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
-        self.assertEqual(main.count("@filter.llm_tool"), 1)
+        self.assertEqual(main.count("@filter.llm_tool"), 2)
         self.assertIn('@filter.llm_tool(name="generate_image")', main)
         self.assertIn("async def generate_image(", main)
         self.assertNotIn("generate_image_tool", main)
-        self.assertTrue(schema["enable_llm_tool"]["default"])
+        self.assertTrue(schema["image_settings"]["items"]["enable_llm_tool"]["default"])
+        self.assertTrue(schema["video_settings"]["items"]["enable_llm_tool"]["default"])
         tool_start = main.index('@filter.llm_tool(name="generate_image")')
         tool_source = main[tool_start:]
         self.assertIn("show_progress=False", tool_source)
@@ -73,12 +77,13 @@ class PluginContractTest(unittest.TestCase):
 
     def test_new_trigger_switches_replace_legacy_prefix_setting(self):
         schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+        image_schema = schema["image_settings"]["items"]
         main = (ROOT / "main.py").read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertNotIn("prefix", schema)
-        self.assertEqual(schema["extra_prefix"]["default"], "生图")
-        self.assertTrue(schema["custom_prompt_need_prefix"]["default"])
-        self.assertFalse(schema["preset_need_prefix"]["default"])
+        self.assertEqual(image_schema["extra_prefix"]["default"], "生图")
+        self.assertTrue(image_schema["custom_prompt_need_prefix"]["default"])
+        self.assertFalse(image_schema["preset_need_prefix"]["default"])
         self.assertNotIn("memelite", json.dumps(schema, ensure_ascii=False).lower())
         self.assertNotIn("memelite", main.lower())
         self.assertNotIn("memelite", readme.lower())
