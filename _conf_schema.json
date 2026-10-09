@@ -230,8 +230,8 @@
                 "labels": [
                     "OpenAI Videos",
                     "MiniMax V2",
-                    "AutoDL 原生",
-                    "DashScope Wan 动作迁移",
+                    "AutoDL",
+                    "DashScope Wan",
                     "Seedance / 火山方舟",
                     "用户自定义路径"
                 ]
@@ -303,8 +303,8 @@
                                     "跟随主接口",
                                     "OpenAI Videos",
                                     "MiniMax V2",
-                                    "AutoDL 原生",
-                                    "DashScope Wan 动作迁移",
+                                    "AutoDL",
+                                    "DashScope Wan",
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
@@ -358,8 +358,8 @@
                                     "跟随主接口",
                                     "OpenAI Videos",
                                     "MiniMax V2",
-                                    "AutoDL 原生",
-                                    "DashScope Wan 动作迁移",
+                                    "AutoDL",
+                                    "DashScope Wan",
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
@@ -413,8 +413,8 @@
                                     "跟随主接口",
                                     "OpenAI Videos",
                                     "MiniMax V2",
-                                    "AutoDL 原生",
-                                    "DashScope Wan 动作迁移",
+                                    "AutoDL",
+                                    "DashScope Wan",
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
@@ -468,8 +468,8 @@
                                     "跟随主接口",
                                     "OpenAI Videos",
                                     "MiniMax V2",
-                                    "AutoDL 原生",
-                                    "DashScope Wan 动作迁移",
+                                    "AutoDL",
+                                    "DashScope Wan",
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
@@ -523,8 +523,8 @@
                                     "跟随主接口",
                                     "OpenAI Videos",
                                     "MiniMax V2",
-                                    "AutoDL 原生",
-                                    "DashScope Wan 动作迁移",
+                                    "AutoDL",
+                                    "DashScope Wan",
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
@@ -578,8 +578,8 @@
                                     "跟随主接口",
                                     "OpenAI Videos",
                                     "MiniMax V2",
-                                    "AutoDL 原生",
-                                    "DashScope Wan 动作迁移",
+                                    "AutoDL",
+                                    "DashScope Wan",
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
@@ -633,8 +633,8 @@
                                     "跟随主接口",
                                     "OpenAI Videos",
                                     "MiniMax V2",
-                                    "AutoDL 原生",
-                                    "DashScope Wan 动作迁移",
+                                    "AutoDL",
+                                    "DashScope Wan",
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
@@ -654,8 +654,8 @@
                         }
                     },
                     "image_video_to_video": {
-                        "name": "图片＋视频生视频（动作迁移）",
-                        "description": "图片＋视频生视频（动作迁移）",
+                        "name": "图片＋视频生视频",
+                        "description": "图片＋视频生视频",
                         "hint": "按输入组合自动选择，媒体保持顺序。",
                         "items": {
                             "model": {
@@ -688,8 +688,8 @@
                                     "跟随主接口",
                                     "OpenAI Videos",
                                     "MiniMax V2",
-                                    "AutoDL 原生",
-                                    "DashScope Wan 动作迁移",
+                                    "AutoDL",
+                                    "DashScope Wan",
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
@@ -743,8 +743,8 @@
                                     "跟随主接口",
                                     "OpenAI Videos",
                                     "MiniMax V2",
-                                    "AutoDL 原生",
-                                    "DashScope Wan 动作迁移",
+                                    "AutoDL",
+                                    "DashScope Wan",
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
@@ -798,8 +798,8 @@
                                     "跟随主接口",
                                     "OpenAI Videos",
                                     "MiniMax V2",
-                                    "AutoDL 原生",
-                                    "DashScope Wan 动作迁移",
+                                    "AutoDL",
+                                    "DashScope Wan",
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
@@ -906,13 +906,13 @@
                 "description": "视频时长（秒）",
                 "type": "int",
                 "default": 5,
-                "hint": "可在提示词写“1秒”覆盖；支持的范围由模型决定，插件不擅自延长时长。动作迁移时长跟随参考视频，此项不发送。"
+                "hint": "可在提示词写“1秒”覆盖；支持的范围由模型决定，插件不擅自延长时长。图片＋视频路线时长跟随参考视频，此项不发送。"
             },
             "resolution": {
                 "description": "视频分辨率",
                 "type": "string",
                 "default": "480p",
-                "hint": "填写模型支持的档位；AutoDL 会转换成该工作流的原生标签。",
+                "hint": "填写模型支持的档位；AutoDL 会转换成该工作流标签。",
                 "options": [
                     "480p",
                     "464p",
@@ -1339,3 +1339,4 @@
         "invisible": true
     }
 }
+

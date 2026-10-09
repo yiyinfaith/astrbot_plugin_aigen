@@ -511,11 +511,11 @@ class ImageGeneratorPlugin(Star):
         """按图片、音频、视频的组合自动选择管理员配置的模型生成视频，成功仅发送视频。
 
         Args:
-            prompt(string): 视频提示词；动作迁移/图片音频同步可留空。
+            prompt(string): 视频提示词；图片＋视频/图片音频同步可留空。
             image_url(string): 参考图片 URL、本地路径或 base64:// 数据，多张用空格分隔。留空时可读取消息、引用图片和 @用户头像。
             audio_url(string): 参考音频 URL、标准 Data URL 或本地文件，多段用空格分隔。留空时可读取发送或引用的音频。
             video_url(string): 参考视频 URL、标准 Data URL 或本地文件，多段用空格分隔。留空时可读取发送或引用的视频。
-            duration(number): 正整数秒；0 使用提示词或配置时长。10秒以上可自动选择配置的长视频模型。动作迁移跟随参考视频时长。
+            duration(number): 正整数秒；0 使用提示词或配置时长。10秒以上可自动选择配置的长视频模型。图片＋视频路线通常跟随参考视频时长。
             resolution(string): 可选分辨率档位，如480p、768p；留空使用所选路线的配置值，不自动降档。
             aspect_ratio(string): 可选16:9、9:16、1:1、4:3、3:4、21:9、adaptive；留空使用配置值。
             reference_mode(string): auto使用配置，reference为普通参考，first_frame需一图，first_last_frame需两图；首尾帧不能带音频或视频。
@@ -700,3 +700,4 @@ class ImageGeneratorPlugin(Star):
         """Send the help text configured in the plugin settings."""
         text = str(self.conf.get("help_text", "帮助文档未配置。"))
         yield event.chain_result([Plain(text)])
+

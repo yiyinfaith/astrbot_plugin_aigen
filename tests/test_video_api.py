@@ -68,15 +68,35 @@ class VideoPayloadTest(unittest.TestCase):
                 body["seconds" if mode == "openai_video" else "audio_duration"], 1
             )
 
-    def test_dashscope_rejects_missing_media_and_sends_only_documented_fields(self):
-        m = self.manager("dashscope", "wan2.2-animate-move", use_stream=True)
-        with self.assertRaises(VideoError):
-            m.build_request("ignored", ["a"], [], [])
-        _, _, body, headers = m.build_request("ignored", ["a"], [], ["b"])
+    def test_dashscope_accepts_legacy_and_generic_wan_models(self):
+        legacy = self.manager("dashscope", "wan2.2-animate-move", use_stream=True)
+        _, _, body, headers = legacy.build_request("ignored", ["a"], [], ["b"])
         self.assertEqual(set(body), {"model", "input", "parameters"})
         self.assertEqual(body["parameters"], {"mode": "wan-std", "check_image": True})
         self.assertEqual(headers["X-DashScope-Async"], "enable")
         self.assertNotIn("stream", body)
+
+        generic = self.manager("dashscope", "wan3.0-video", use_stream=True)
+        _, _, body, headers = generic.build_request(
+            "人物向镜头挥手", ["a", "b"], ["c"], ["d"]
+        )
+        self.assertEqual(body["model"], "wan3.0-video")
+        self.assertEqual(body["input"]["img_url"], "a")
+        self.assertEqual(body["input"]["image_urls"], ["a", "b"])
+        self.assertEqual(body["input"]["audio_url"], "c")
+        self.assertEqual(body["input"]["video_url"], "d")
+        self.assertEqual(body["input"]["prompt"], "人物向镜头挥手")
+        self.assertEqual(headers["X-DashScope-Async"], "enable")
+
+    def test_autodl_accepts_forward_compatible_workflow_id(self):
+        m = self.manager("autodl_native", "my-custom-wan-model")
+        create, _, body, _ = m.build_request("hello", ["a"], ["b"], ["c"])
+        self.assertEqual(create, "/api/v1/comfyui/comfyui_workflow/my-custom-wan-model")
+        self.assertEqual(body["prompt"], "hello")
+        self.assertEqual(body["duration"], 1)
+        self.assertEqual(body["ref_image_0"], "a")
+        self.assertEqual(body["ref_audio_0"], "b")
+        self.assertEqual(body["ref_video_0"], "c")
 
     def test_seedance_reference_media_and_succeeded_result(self):
         m = self.manager("seedance", "doubao-seedance-1-0-pro", generate_audio=True)
@@ -322,3 +342,4 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
             await self.manager.generate("hello", [])
         self.assertEqual(len(self.requests), 1)
         self.assertTrue(list(self.manager.data_dir.glob("*.json")))
+

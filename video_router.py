@@ -30,7 +30,7 @@ ROUTES = {
         "minimax_h3_image_audio_to_video_v2_15s",
     ),
     "video_to_video": ("视频生视频", "", ""),
-    "image_video_to_video": ("图片＋视频生视频（动作迁移）", "wan2.2-animate-move", ""),
+    "image_video_to_video": ("图片＋视频生视频", "wan2.2-animate-move", ""),
     "audio_video_to_video": ("音频＋视频生视频", "", ""),
     "image_audio_video_to_video": ("图片＋音频＋视频生视频", "", ""),
 }
@@ -217,3 +217,4 @@ def select_route(
                 effective[key] = value
     effective.update(overrides)
     return route, effective
+

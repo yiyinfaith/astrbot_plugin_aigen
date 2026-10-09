@@ -211,7 +211,7 @@ def native_resolution(group: str, resolution: str, ratio: str) -> str:
         raise VideoError("该工作流不支持方形视频，请选择横向或竖向比例。")
     if group == "E":
         if (resolution, direction) not in {("832p", "portrait"), ("464p", "landscape")}:
-            raise VideoError("动作迁移仅支持 832p 竖向或 464p 横向。")
+            raise VideoError("图片＋视频路线仅支持 832p 竖向或 464p 横向。")
         return "464*832px(竖版)" if direction == "portrait" else "832*464px(横版)"
     if group in {"A", "B"}:
         width = int(resolution[:-1])
@@ -294,13 +294,10 @@ class VideoApiManager(ApiManager):
         model = str(c.get("model", "") or "").strip()
         if not model:
             raise VideoError("请配置生视频模型 ID。")
-        if c.get("reference_mode") == "first_frame" and mode not in {
-            "seedance",
-            "custom_endpoint",
-        }:
-            raise VideoError(
-                "首帧图片用途需选择 Seedance 或支持此用途的自定义接口；普通单图请使用 reference。"
-            )
+        # The selected protocol is an adapter, not a model allow-list.  A
+        # provider may expose first-frame and other reference modes through
+        # any of the six protocols, so leave that capability decision to the
+        # provider instead of rejecting it by interface name here.
         p = video_params(prompt, c, duration)
         caps = WORKFLOWS.get(model)
         if model == "wan2.2-animate-move":
@@ -507,10 +504,9 @@ class VideoApiManager(ApiManager):
                         else "duration"
                     ] = p["duration"]
         elif mode == "autodl_native":
-            if not caps:
-                raise VideoError(
-                    "原生模式需要文档中的工作流 ID；其他模型请使用自定义路径模式。"
-                )
+            # Known AutoDL workflows retain their documented native mapping;
+            # custom/forward-compatible workflow IDs use the same field names
+            # without requiring membership in WORKFLOWS.
             actual_model = (
                 "wan2.2animate-v4-motion_retargeting"
                 if model == "wan2.2-animate-move"
@@ -519,7 +515,7 @@ class VideoApiManager(ApiManager):
             model = actual_model
             if model not in NO_TEXT_MODELS:
                 body["prompt"] = prompt
-            if caps[5]:
+            if caps and caps[5]:
                 body[
                     "audio_duration"
                     if model == "minimax_h3_image_audio_to_video"
@@ -528,35 +524,71 @@ class VideoApiManager(ApiManager):
                 body["resolution"] = native_resolution(
                     caps[6], p["resolution"], p["ratio"]
                 )
-            elif caps[6] == "E":
+            elif caps and caps[6] == "E":
                 body["resolution"] = native_resolution("E", p["resolution"], p["ratio"])
-            if model in FRAME_MODELS:
+            else:
+                body.update(duration=p["duration"], resolution=p["resolution"])
+            if model in FRAME_MODELS and len(images) == 2:
                 body.update(first_frame=images[0], last_frame=images[1])
-            elif caps[4]:
+            elif caps and caps[4] and images and videos:
                 body.update(ref_image=images[0], ref_video=videos[0])
             else:
                 body.update({f"ref_image_{i}": value for i, value in enumerate(images)})
                 body.update({f"ref_audio_{i}": value for i, value in enumerate(audios)})
+                body.update({f"ref_video_{i}": value for i, value in enumerate(videos)})
         elif mode == "dashscope":
-            if (
-                model != "wan2.2-animate-move"
-                or len(images) != 1
-                or len(videos) != 1
-                or audios
-            ):
-                raise VideoError(
-                    "DashScope 动作迁移需要 wan2.2-animate-move、恰好一张图片和一个参考视频。"
-                )
             headers["X-DashScope-Async"] = "enable"
-            body = {
-                "model": model,
-                "input": {
-                    "image_url": images[0],
-                    "video_url": videos[0],
-                    "watermark": False,
-                },
-                "parameters": {"mode": "wan-std", "check_image": True},
-            }
+            # DashScope Wan has several generations of request shapes.  Keep
+            # the legacy action-move payload byte-compatible, while using the
+            # current generic Wan input names for every other model/media mix.
+            if model == "wan2.2-animate-move" and len(images) == 1 and len(videos) == 1 and not audios:
+                body = {
+                    "model": model,
+                    "input": {
+                        "image_url": images[0],
+                        "video_url": videos[0],
+                        "watermark": False,
+                    },
+                    "parameters": {"mode": "wan-std", "check_image": True},
+                }
+            else:
+                input_body = {}
+                if prompt.strip():
+                    input_body["prompt"] = prompt
+                reference_mode = c.get("reference_mode", "reference")
+                if reference_mode == "first_last_frame":
+                    if len(images) != 2:
+                        raise VideoError("首尾帧模式需要恰好两张图片。")
+                    input_body.update(
+                        first_frame_url=images[0], last_frame_url=images[1]
+                    )
+                elif reference_mode == "first_frame":
+                    if len(images) != 1:
+                        raise VideoError("首帧模式需要恰好一张图片。")
+                    input_body["first_frame_url"] = images[0]
+                elif images:
+                    input_body["img_url"] = images[0]
+                    if len(images) > 1:
+                        input_body["image_urls"] = images
+                if videos:
+                    input_body["video_url"] = videos[0]
+                    if len(videos) > 1:
+                        input_body["video_urls"] = videos
+                if audios:
+                    input_body["audio_url"] = audios[0]
+                    if len(audios) > 1:
+                        input_body["audio_urls"] = audios
+                if not input_body:
+                    raise VideoError("Wan 请求至少需要提示词或参考媒体。")
+                parameters = {
+                    "duration": p["duration"],
+                    "resolution": p["resolution"],
+                    "ratio": p["ratio"],
+                    "watermark": bool(c.get("watermark", False)),
+                }
+                if seed >= 0:
+                    parameters["seed"] = seed
+                body = {"model": model, "input": input_body, "parameters": parameters}
         else:
             try:
                 template = json.loads(c.get("custom_body_template", "{}"))
@@ -885,3 +917,4 @@ class VideoApiManager(ApiManager):
                 path.unlink(missing_ok=True)
                 raise
         raise VideoError("视频下载失败。")
+
