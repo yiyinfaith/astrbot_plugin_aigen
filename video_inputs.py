@@ -192,7 +192,3 @@ async def collect_media(
 
     await collect(image_manager._event_chain(event), False)
     return audios, videos
-
-
-def strip_media_text(prompt: str) -> str:
-    return re.sub(r"\s+", " ", MEDIA_URL.sub("", prompt)).strip()

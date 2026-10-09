@@ -91,7 +91,6 @@ def plugin_class():
         "parse_video_command": router.parse_video_command,
         "collect_media": inputs.collect_media,
         "resolve_media": inputs.resolve_media,
-        "strip_media_text": inputs.strip_media_text,
         "text_media": inputs.text_media,
         "norm_id": utils.norm_id,
         "match_keyword_in_text": utils.match_keyword_in_text,
