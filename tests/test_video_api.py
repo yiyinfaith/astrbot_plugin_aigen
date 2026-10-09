@@ -98,6 +98,18 @@ class VideoPayloadTest(unittest.TestCase):
         self.assertEqual(body["ref_audio_0"], "b")
         self.assertEqual(body["ref_video_0"], "c")
 
+    def test_forward_compatible_model_can_use_media_without_prompt(self):
+        for mode in ("openai_video", "minimax", "autodl_native", "seedance"):
+            with self.subTest(mode):
+                m = self.manager(mode, "provider-model-with-media-input")
+                _create, _query, body, _headers = m.build_request("", ["image"], [], [])
+                if mode == "openai_video":
+                    self.assertEqual(body["input_reference"], {"image_url": "image"})
+                elif mode == "minimax" or mode == "seedance":
+                    self.assertTrue(body["content"])
+                else:
+                    self.assertEqual(body["ref_image_0"], "image")
+
     def test_seedance_reference_media_and_succeeded_result(self):
         m = self.manager("seedance", "doubao-seedance-1-0-pro", generate_audio=True)
         _, query, body, _ = m.build_request("hello", ["a", "b"], ["c"], ["d"])

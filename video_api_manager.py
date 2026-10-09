@@ -357,7 +357,7 @@ class VideoApiManager(ApiManager):
                 raise VideoError(
                     f"模型 {model} 提示词最多 {text_limit} 字符，当前 {len(prompt)}；未提交收费任务。"
                 )
-        elif not prompt.strip() and mode != "dashscope":
+        elif not prompt.strip() and mode != "dashscope" and not (images or audios or videos):
             raise VideoError("请提供视频生成提示词。")
         headers = {
             "Accept": "application/json, text/event-stream"
