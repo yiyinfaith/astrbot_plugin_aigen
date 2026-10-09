@@ -70,7 +70,7 @@
                     "gemini_official",
                     "custom_endpoint"
                 ],
-                "hint": "只需选择接口模式并填写一个基础 URL：openai_image 自动补全 /v1/images/...；openai_chat 自动补全 /v1/chat/completions；openai_response 使用 Responses 生图请求体并自动补全单数 /v1/response；gemini_official 自动补全 /v1beta/models/...:generateContent。custom_endpoint 为自定义完整路径，不自动追加。",
+                "hint": "只需选择接口模式并填写一个基础 URL：openai_image 使用官方 Images API 的 /v1/images/generations 或 /v1/images/edits；openai_chat 使用标准 /v1/chat/completions 请求体（图片输出取决于兼容服务）；openai_response 使用官方 Responses API 的 /v1/responses 和 image_generation 工具；gemini_official 使用 /v1beta/models/...:generateContent；custom_endpoint 为自定义完整路径，不自动追加。",
                 "default": "openai_image"
             },
             "base_url": {
@@ -1174,7 +1174,7 @@
             "gemini_official",
             "custom_endpoint"
         ],
-        "hint": "只需选择接口模式并填写一个基础 URL：openai_image 自动补全 /v1/images/...；openai_chat 自动补全 /v1/chat/completions；openai_response 使用 Responses 生图请求体并自动补全单数 /v1/response；gemini_official 自动补全 /v1beta/models/...:generateContent。custom_endpoint 为自定义完整路径，不自动追加。",
+        "hint": "只需选择接口模式并填写一个基础 URL：openai_image 使用官方 Images API 的 /v1/images/generations 或 /v1/images/edits；openai_chat 使用标准 /v1/chat/completions 请求体（图片输出取决于兼容服务）；openai_response 使用官方 Responses API 的 /v1/responses 和 image_generation 工具；gemini_official 使用 /v1beta/models/...:generateContent；custom_endpoint 为自定义完整路径，不自动追加。",
         "default": null,
         "invisible": true
     },

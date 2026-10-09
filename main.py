@@ -275,6 +275,7 @@ class ImageGeneratorPlugin(Star):
         images: list[bytes],
         show_progress: bool = True,
         include_result_text: bool = True,
+        image_options: dict[str, object] | None = None,
     ) -> list[Any]:
         """Call the selected API mode, record usage, and build a reply.
 
@@ -304,6 +305,7 @@ class ImageGeneratorPlugin(Star):
                 prompt,
                 model,
                 proxy=self.img_mgr.proxy,
+                image_options=image_options,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Image generation request failed")
@@ -594,14 +596,44 @@ class ImageGeneratorPlugin(Star):
 
     @filter.llm_tool(name="generate_image")
     async def generate_image(
-        self, event: AstrMessageEvent, prompt: str
+        self,
+        event: AstrMessageEvent,
+        prompt: str = "",
+        resolution: str = "",
+        aspect_ratio: str = "",
+        size: str = "",
+        quality: str = "",
+        background: str = "",
+        output_format: str = "",
+        output_compression: int = 0,
+        moderation: str = "",
+        style: str = "",
+        n: int = 0,
+        max_num_results: int = 0,
+        input_fidelity: str = "",
+        partial_images: int = 0,
+        action: str = "",
     ):
         """使用统一图片生成入口生成或编辑图片。
 
         媒体不需要填写 URL；工具会读取当前消息和引用中的图片或图片文件。
 
         Args:
-            prompt(string): 图片生成或编辑提示词。
+            prompt(string): 可选的图片生成或编辑提示词。省略时优先使用当前消息文本；如果只有参考图，则使用通用编辑提示。
+            resolution(string): 可选插件画质档位：1K、2K、4K；留空使用配置或提示词。
+            aspect_ratio(string): 可选比例，如 1:1、16:9、9:16、4:3、3:4、2:3、3:2、4:5、5:4、21:9；留空使用配置或输入图片比例。
+            size(string): 可选 OpenAI Images 尺寸：auto、256x256、512x512、1024x1024、1536x1024、1024x1536、1792x1024、1024x1792，或符合模型约束的自定义 WIDTHxHEIGHT；填写后优先于 resolution/aspect_ratio 的 OpenAI size 映射。
+            quality(string): 可选 OpenAI 画质：auto、low、medium、high、xhigh、max；旧版 DALL-E 兼容接口可填写 standard、hd。
+            background(string): 可选背景：auto、transparent、opaque。
+            output_format(string): 可选输出格式：png、jpeg、webp。
+            output_compression(number): 可选输出压缩率 0-100；0 表示不发送此字段。
+            moderation(string): 可选内容审核级别：auto、low。
+            style(string): 可选风格：vivid、natural；主要适用于 DALL-E 3 兼容模型。
+            n(number): 可选生成数量；0 表示使用插件默认值 1，插件回复第一张图片。
+            max_num_results(number): 可选 Responses 图片工具生成数量，1-50；未填写时使用接口默认值。
+            input_fidelity(string): 可选编辑参考图保真度：low、high；没有输入图片时忽略。
+            partial_images(number): 可选流式中间图片数量：0-3；仅由支持该字段的 OpenAI 图片接口处理。
+            action(string): 可选 Responses 图片工具动作：auto、generate、edit；留空由接口自动判断。
         """
         if not self.conf.get("enable_llm_tool", True):
             yield "图片生成函数工具当前已在插件配置中停用。"
@@ -619,13 +651,36 @@ class ImageGeneratorPlugin(Star):
 
         prompt = str(prompt or "").strip()
         if not prompt:
-            yield "请提供图片生成或编辑提示词。"
-            return
+            # LLM 调用有时只传媒体而省略 prompt。先尝试使用当前消息的
+            # 文本，最后再由参考图编辑走一个明确但宽松的默认提示。
+            prompt = self._clean_message(self._event_message_text(event))
 
         images: list[bytes] = []
         images = await self._extract_images(
             event, prompt, "自定义", strict=True, extra_sources=[]
         )
+        if not prompt and images:
+            prompt = "请根据参考图片生成一张高质量图片，保留主体特征并自然完成画面。"
+        if not prompt:
+            yield "请提供图片生成或编辑提示词，或在消息中附带参考图片。"
+            return
+
+        image_options = {
+            "resolution": str(resolution or "").strip(),
+            "aspect_ratio": str(aspect_ratio or "").strip(),
+            "size": str(size or "").strip(),
+            "quality": str(quality or "").strip(),
+            "background": str(background or "").strip(),
+            "output_format": str(output_format or "").strip(),
+            "output_compression": output_compression,
+            "moderation": str(moderation or "").strip(),
+            "style": str(style or "").strip(),
+            "n": n,
+            "max_num_results": max_num_results,
+            "input_fidelity": str(input_fidelity or "").strip(),
+            "partial_images": partial_images,
+            "action": str(action or "").strip(),
+        }
 
         result = await self._generate(
             event,
@@ -635,6 +690,7 @@ class ImageGeneratorPlugin(Star):
             images,
             show_progress=False,
             include_result_text=False,
+            image_options=image_options,
         )
         yield event.chain_result(result)
 

@@ -44,6 +44,32 @@ IMAGE_SIZE_MAP = {
     },
 }
 
+# Sizes documented by the OpenAI Images API.  ``auto`` is accepted by the
+# newer GPT Image models; the two 1792 variants remain useful for DALL-E 3.
+OPENAI_IMAGE_SIZES = {
+    "auto",
+    "256x256",
+    "512x512",
+    "1024x1024",
+    "1536x1024",
+    "1024x1536",
+    "1792x1024",
+    "1024x1792",
+}
+_OPENAI_IMAGE_SIZE_RE = re.compile(r"^(\d{3,4})x(\d{3,4})$")
+OPENAI_ASPECT_RATIO_SIZES = {
+    "1:1": "1024x1024",
+    "16:9": "1536x1024",
+    "4:3": "1536x1024",
+    "3:2": "1536x1024",
+    "21:9": "1536x1024",
+    "9:16": "1024x1536",
+    "3:4": "1024x1536",
+    "2:3": "1024x1536",
+    "4:5": "1024x1536",
+    "5:4": "1536x1024",
+}
+
 SUPPORTED_ASPECT_RATIOS = tuple(IMAGE_SIZE_MAP["1K"].keys())
 _SIZE_TO_PARAMS = {
     size.lower(): (resolution, aspect_ratio)
@@ -59,6 +85,53 @@ def normalize_resolution(value: Optional[str], default: str = "1K") -> str:
         return f"{match.group(1)}K"
     normalized_default = str(default or "1K").strip().upper().replace(" ", "")
     return normalized_default if normalized_default in IMAGE_SIZE_MAP else "1K"
+
+
+def normalize_openai_image_size(value: Optional[str]) -> str:
+    """Return an official OpenAI Images ``size`` value or an empty string.
+
+    The plugin also accepts its own resolution/aspect-ratio controls.  This
+    helper deliberately keeps those controls separate from OpenAI's exact
+    ``size`` field so a caller can choose either representation.  Newer GPT
+    Image models also accept custom dimensions when both sides are divisible
+    by 16, the aspect ratio is between 1:3 and 3:1, and the request stays
+    within the documented maximum pixel budget.
+    """
+    text = str(value or "").strip().lower().replace(" ", "")
+    if text == "auto":
+        return "auto"
+    if text in {item.lower() for item in OPENAI_IMAGE_SIZES if item != "auto"}:
+        return text
+    match = _OPENAI_IMAGE_SIZE_RE.fullmatch(text)
+    if not match:
+        return ""
+
+    width, height = (int(part) for part in match.groups())
+    if width % 16 or height % 16:
+        return ""
+    if width <= 0 or height <= 0:
+        return ""
+    aspect_ratio = width / height
+    if not (1 / 3 <= aspect_ratio <= 3):
+        return ""
+    # GPT Image documents 3840x2160 as the maximum supported pixel budget.
+    # Applying the same area limit to portrait requests also permits the
+    # equivalent 2160x3840 orientation without allowing oversized requests.
+    if width > 3840 or height > 3840 or width * height > 3840 * 2160:
+        return ""
+    return f"{width}x{height}"
+
+
+def openai_size_for_generation(
+    generation_params: Dict[str, str], requested_size: Optional[str] = None
+) -> str:
+    """Map plugin resolution/ratio controls to an official OpenAI size."""
+    explicit = normalize_openai_image_size(requested_size)
+    if explicit:
+        return explicit
+    return OPENAI_ASPECT_RATIO_SIZES.get(
+        generation_params.get("aspect_ratio", "1:1"), "1024x1024"
+    )
 
 
 def normalize_aspect_ratio(value: Optional[str], default: str = "1:1") -> str:

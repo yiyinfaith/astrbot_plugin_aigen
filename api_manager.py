@@ -12,6 +12,7 @@ from typing import List, Dict
 from astrbot.api import logger
 from .generation_params import (
     detect_aspect_ratio_from_image,
+    openai_size_for_generation,
     resolve_image_generation_params,
 )
 from .utils import normalize_api_root
@@ -519,6 +520,157 @@ class ApiManager:
         ]
         return any(keyword in error_lower for keyword in keywords)
 
+    @staticmethod
+    def _optional_image_count(value) -> int | None:
+        """Return a valid optional OpenAI Images ``n`` value, if supplied."""
+        if value in (None, "", 0, "0"):
+            return None
+        try:
+            count = int(value)
+        except (TypeError, ValueError):
+            return None
+        return count if 1 <= count <= 10 else None
+
+    @staticmethod
+    def _openai_model_capabilities(model: str) -> tuple[bool, bool, set[str], set[str]]:
+        """Return model-specific Images API option support.
+
+        The public tool accepts a broad, optional set of controls.  We only
+        put fields on the wire when the selected OpenAI image family defines
+        them, so an accidental cross-model option does not make the request
+        fail validation.
+        """
+        lower = str(model or "").strip().lower()
+        is_gpt_image = lower.startswith("gpt-image")
+        is_dalle = lower.startswith("dall-e") or lower.startswith("dalle")
+        if is_gpt_image:
+            if "gpt-image-1-mini" in lower:
+                fidelity = {"low"}
+            elif "gpt-image-1" in lower:
+                fidelity = {"low", "high"}
+            else:
+                # Current GPT Image 2+ schemas explicitly omit input_fidelity.
+                fidelity = set()
+            quality = {"auto", "low", "medium", "high", "xhigh", "max"}
+        elif is_dalle:
+            fidelity = set()
+            quality = {"standard", "hd"}
+        else:
+            fidelity = set()
+            quality = set()
+        return is_gpt_image, is_dalle, quality, fidelity
+
+    @staticmethod
+    def _add_openai_image_options(
+        target,
+        options: Dict,
+        multipart: bool = False,
+        include_gpt_image_fields: bool = True,
+        include_style: bool = True,
+        include_input_fidelity: bool = False,
+        include_response_tool_fields: bool = False,
+        include_partial_images: bool = False,
+        allowed_quality: set[str] | None = None,
+        allowed_input_fidelity: set[str] | None = None,
+    ):
+        """Add optional official Images/Responses controls to a request.
+
+        ``target`` is either a JSON payload or ``aiohttp.FormData``.  The
+        controls are intentionally kept out of Gemini and Chat requests,
+        whose official schemas use different names or do not define them.
+        """
+        if not options:
+            return
+
+        values = {
+            "quality": str(options.get("quality") or "").strip().lower(),
+            "background": str(options.get("background") or "").strip().lower(),
+            "output_format": str(options.get("output_format") or "")
+            .strip()
+            .lower(),
+            "moderation": str(options.get("moderation") or "").strip().lower(),
+            "style": str(options.get("style") or "").strip().lower(),
+            "input_fidelity": str(options.get("input_fidelity") or "")
+            .strip()
+            .lower(),
+            "action": str(options.get("action") or "").strip().lower(),
+        }
+        allowed = {
+            # ``None`` means use the generic default; an empty set means the
+            # selected model family explicitly does not advertise the field.
+            "quality": (
+                allowed_quality if allowed_quality is not None else set()
+            ),
+            "background": {"auto", "transparent", "opaque"},
+            "output_format": {"png", "jpeg", "webp"},
+            "moderation": {"auto", "low"},
+            "style": {"vivid", "natural"},
+            "input_fidelity": (
+                allowed_input_fidelity
+                if allowed_input_fidelity is not None
+                else {"low", "high"}
+            ),
+            "action": {"auto", "generate", "edit"},
+        }
+        for name, value in values.items():
+            if (
+                name in {"background", "output_format", "moderation"}
+                and not include_gpt_image_fields
+            ):
+                continue
+            if name == "style" and not include_style:
+                continue
+            if name == "input_fidelity" and (
+                not include_gpt_image_fields or not include_input_fidelity
+            ):
+                continue
+            if name == "action" and not include_response_tool_fields:
+                continue
+            if value and value in allowed[name]:
+                if multipart:
+                    target.add_field(name, value)
+                else:
+                    target[name] = value
+
+        try:
+            partial_images = int(options.get("partial_images") or 0)
+        except (TypeError, ValueError):
+            partial_images = 0
+        if include_gpt_image_fields and include_partial_images and 0 < partial_images <= 3:
+            if multipart:
+                target.add_field("partial_images", str(partial_images))
+            else:
+                target["partial_images"] = partial_images
+
+        try:
+            compression = int(options.get("output_compression") or 0)
+        except (TypeError, ValueError):
+            compression = 0
+        if (
+            include_gpt_image_fields or include_response_tool_fields
+        ) and 0 <= compression <= 100 and compression:
+            if multipart:
+                target.add_field("output_compression", str(compression))
+            else:
+                target["output_compression"] = compression
+
+        if include_response_tool_fields:
+            # Responses calls name this control ``max_num_results``.  Accept
+            # the more familiar Images API ``n`` alias as a convenience, but
+            # keep the official field name on the wire.
+            raw_max_results = options.get("max_num_results")
+            if raw_max_results in (None, "", 0, "0"):
+                raw_max_results = options.get("n")
+            try:
+                max_results = int(raw_max_results or 0)
+            except (TypeError, ValueError):
+                max_results = 0
+            if 1 <= max_results <= 50:
+                if multipart:
+                    target.add_field("max_num_results", str(max_results))
+                else:
+                    target["max_num_results"] = max_results
+
     def _is_images_edits_unsupported_error(self, error_msg: str) -> bool:
         """Detect providers that do not implement /images/edits at all."""
         error_lower = (error_msg or "").lower()
@@ -588,6 +740,7 @@ class ApiManager:
         generation_params: Dict = None,
         exact_endpoint: bool = False,
         stream: bool | None = None,
+        image_options: Dict | None = None,
     ) -> bytes | str:
         """Call the Images edits endpoint with multipart form data.
 
@@ -621,6 +774,10 @@ class ApiManager:
         generation_params = generation_params or resolve_image_generation_params(
             prompt, self.config.get("image_resolution", "1K")
         )
+        image_options = image_options or {}
+        is_gpt_image, is_dalle, quality_values, fidelity_values = (
+            self._openai_model_capabilities(model)
+        )
         res_set = generation_params["resolution"]
         final_prompt = (
             f"(Masterpiece, Best Quality, {res_set} Resolution), {prompt}"
@@ -637,8 +794,26 @@ class ApiManager:
                 form = aiohttp.FormData()
                 form.add_field("model", model)
                 form.add_field("prompt", final_prompt)
-                form.add_field("n", "1")
-                form.add_field("size", generation_params["size"])
+                image_count = self._optional_image_count(image_options.get("n"))
+                if image_count is not None:
+                    form.add_field("n", str(image_count))
+                form.add_field(
+                    "size",
+                    openai_size_for_generation(
+                        generation_params, image_options.get("size")
+                    ),
+                )
+                self._add_openai_image_options(
+                    form,
+                    image_options,
+                    multipart=True,
+                    include_gpt_image_fields=is_gpt_image,
+                    include_style=is_dalle,
+                    include_input_fidelity=bool(images),
+                    include_partial_images=bool(stream),
+                    allowed_quality=quality_values,
+                    allowed_input_fidelity=fidelity_values,
+                )
                 if stream:
                     form.add_field("stream", "true")
                 if not str(model).lower().startswith("gpt-image"):
@@ -675,6 +850,7 @@ class ApiManager:
                             generation_params=generation_params,
                             exact_endpoint=exact_endpoint,
                             stream=False,
+                            image_options=image_options,
                         )
 
                     if "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
@@ -741,6 +917,7 @@ class ApiManager:
         generation_params: Dict = None,
         exact_endpoint: bool = False,
         stream: bool = False,
+        image_options: Dict | None = None,
     ) -> bytes | str:
         """Call an OpenAI-compatible Images API endpoint.
 
@@ -782,6 +959,7 @@ class ApiManager:
                 proxy,
                 generation_params=generation_params,
                 stream=stream,
+                image_options=image_options,
             )
 
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
@@ -789,6 +967,10 @@ class ApiManager:
         # 画质强化 Prompt
         generation_params = generation_params or resolve_image_generation_params(
             prompt, self.config.get("image_resolution", "1K")
+        )
+        image_options = image_options or {}
+        is_gpt_image, is_dalle, quality_values, fidelity_values = (
+            self._openai_model_capabilities(model)
         )
         res_set = generation_params["resolution"]
         final_prompt = (
@@ -801,10 +983,24 @@ class ApiManager:
         payload = {
             "model": model,
             "prompt": final_prompt,
-            "n": 1,
-            "size": generation_params["size"],
+            "size": openai_size_for_generation(
+                generation_params, image_options.get("size")
+            ),
         }
-        if not str(model).lower().startswith("gpt-image"):
+        image_count = self._optional_image_count(image_options.get("n"))
+        if image_count is not None:
+            payload["n"] = image_count
+        self._add_openai_image_options(
+            payload,
+            image_options,
+            include_gpt_image_fields=is_gpt_image,
+            include_style=is_dalle,
+            include_input_fidelity=bool(images),
+            include_partial_images=bool(stream),
+            allowed_quality=quality_values,
+            allowed_input_fidelity=fidelity_values,
+        )
+        if not is_gpt_image:
             payload["response_format"] = "b64_json"
         if stream:
             # Some compatible Images endpoints expose SSE as an optional
@@ -854,6 +1050,7 @@ class ApiManager:
                             generation_params=generation_params,
                             exact_endpoint=exact_endpoint,
                             stream=False,
+                            image_options=image_options,
                         )
 
                     if "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
@@ -900,6 +1097,8 @@ class ApiManager:
                                 proxy,
                                 generation_params=generation_params,
                                 exact_endpoint=exact_endpoint,
+                                stream=stream,
+                                image_options=image_options,
                             )
 
                         return f"Images API Error {resp.status}: {err_msg[:300]} | URL: {url}"
@@ -937,8 +1136,9 @@ class ApiManager:
         proxy: str = None,
         generation_params: dict | None = None,
         stream: bool = False,
+        image_options: Dict | None = None,
     ) -> bytes | str:
-        """Call a Responses-compatible image endpoint at ``/v1/response``.
+        """Call the official OpenAI Responses image-generation tool.
 
         Args:
             images: Input images used as image editing references.
@@ -956,7 +1156,7 @@ class ApiManager:
         if not root:
             return "API URL 未配置"
 
-        url = f"{root}/v1/response"
+        url = f"{root}/v1/responses"
         logger.info(f"OpenAI Response API endpoint: {url}")
         headers = {
             "Content-Type": "application/json",
@@ -966,6 +1166,8 @@ class ApiManager:
         generation_params = generation_params or resolve_image_generation_params(
             prompt, self.config.get("image_resolution", "1K")
         )
+        image_options = image_options or {}
+        _, _, quality_values, fidelity_values = self._openai_model_capabilities(model)
         resolution = generation_params["resolution"]
         final_prompt = (
             f"(Masterpiece, Best Quality, {resolution} Resolution), {prompt}"
@@ -984,10 +1186,26 @@ class ApiManager:
                 }
             )
 
+        image_tool = {
+            "type": "image_generation",
+            "size": openai_size_for_generation(
+                generation_params, image_options.get("size")
+            ),
+        }
+        self._add_openai_image_options(
+            image_tool,
+            image_options,
+            include_style=False,
+            include_input_fidelity=bool(images),
+            include_response_tool_fields=True,
+            include_partial_images=bool(stream),
+            allowed_quality=quality_values,
+            allowed_input_fidelity=fidelity_values,
+        )
         payload = {
             "model": model,
             "input": [{"role": "user", "content": content}],
-            "tools": [{"type": "image_generation"}],
+            "tools": [image_tool],
         }
         if stream:
             payload["stream"] = True
@@ -1021,6 +1239,7 @@ class ApiManager:
                             proxy,
                             generation_params=generation_params,
                             stream=False,
+                            image_options=image_options,
                         )
                     error_message = response_text
                     try:
@@ -1373,6 +1592,7 @@ class ApiManager:
         proxy: str = None,
         aspect_ratio: str = None,
         resolution: str = None,
+        image_options: Dict | None = None,
     ) -> bytes | str:
         return await self._call_api_once(
             images,
@@ -1381,6 +1601,7 @@ class ApiManager:
             proxy,
             aspect_ratio=aspect_ratio,
             resolution=resolution,
+            image_options=image_options,
         )
 
     async def _call_api_once(
@@ -1391,6 +1612,7 @@ class ApiManager:
         proxy: str = None,
         aspect_ratio: str = None,
         resolution: str = None,
+        image_options: Dict | None = None,
     ) -> bytes | str:
         """核心生成逻辑"""
 
@@ -1426,8 +1648,8 @@ class ApiManager:
             prompt,
             default_resolution=self.config.get("image_resolution", "1K"),
             default_aspect_ratio=default_aspect_ratio,
-            resolution=resolution,
-            aspect_ratio=aspect_ratio,
+            resolution=resolution or (image_options or {}).get("resolution"),
+            aspect_ratio=aspect_ratio or (image_options or {}).get("aspect_ratio"),
         )
         logger.info(
             f"图片参数已解析: aspect_ratio={generation_params['aspect_ratio']}, "
@@ -1444,6 +1666,7 @@ class ApiManager:
                 proxy,
                 generation_params=generation_params,
                 stream=bool(self.config.get("use_stream", False)),
+                image_options=image_options,
             )
 
         custom_kind = ""
@@ -1469,6 +1692,7 @@ class ApiManager:
                 generation_params=generation_params,
                 exact_endpoint=(interface_mode == "custom_endpoint"),
                 stream=bool(self.config.get("use_stream", False)),
+                image_options=image_options,
             )
 
         # 画质强化 Prompt
@@ -1505,8 +1729,7 @@ class ApiManager:
             payload = {
                 "contents": [{"parts": parts}],
                 "generationConfig": {
-                    "maxOutputTokens": 4096,
-                    "responseModalities": ["TEXT", "IMAGE"],
+                    "responseModalities": ["IMAGE"],
                     "imageConfig": {
                         "aspectRatio": generation_params["aspect_ratio"],
                         "imageSize": generation_params["resolution"],
@@ -1541,47 +1764,19 @@ class ApiManager:
 
             msgs = [{"role": "user", "content": content_list}]
 
-            use_stream = self.config.get("use_stream", False)
-
-            # [性能优化] 显式设置 max_tokens
-            # 如果不设置，某些中转接口可能会等待或者分配过大的 Tokens 空间，增加延迟
+            use_stream = bool(self.config.get("use_stream", False))
             pl = {
                 "model": model,
                 "messages": msgs,
-                "stream": use_stream,
-                "max_tokens": 4096,
             }
+            if use_stream:
+                pl["stream"] = True
             payload.update(pl)
 
-            # 针对 Gemini 系模型的 OpenAI 兼容层特殊处理
-            # 参考 bananic_ninjutsu: 如果模型名包含 pro/image/banana，显式添加 modalities
-            lower_model = model.lower()
-            if (
-                "gemini" in lower_model
-                or "pro" in lower_model
-                or "image" in lower_model
-            ):
-                # 无论何种模式，只要模型名看起来像 Gemini，就尝试注入 modalities
-                payload["modalities"] = ["image", "text"]
-
-                # 尝试强制注入 safetySettings (很多中转支持透传此参数)
-                # 这能有效防止 finish_reason: content_filter
-                payload["safetySettings"] = [
-                    {"category": c, "threshold": "BLOCK_NONE"}
-                    for c in [
-                        "HARM_CATEGORY_HARASSMENT",
-                        "HARM_CATEGORY_HATE_SPEECH",
-                        "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        "HARM_CATEGORY_DANGEROUS_CONTENT",
-                        "HARM_CATEGORY_CIVIC_INTEGRITY",
-                    ]
-                ]
-
-                # 兼容通过 OpenAI chat/completions 转发 Gemini 图片模型的中转站。
-                payload["image_config"] = {
-                    "aspect_ratio": generation_params["aspect_ratio"],
-                    "image_size": generation_params["resolution"],
-                }
+            # Chat Completions keeps the official OpenAI request shape.  Some
+            # gateways accept Gemini-specific ``modalities``/``image_config``
+            # extensions, but those are deliberately confined to their own
+            # custom endpoint mode rather than mixed into this protocol.
 
         # 4. 发送请求
         try:
@@ -1651,6 +1846,7 @@ class ApiManager:
                                         proxy,
                                         generation_params=generation_params,
                                         stream=bool(self.config.get("use_stream", False)),
+                                        image_options=image_options,
                                     )
 
                                 return f"API Error {resp.status}: {err_msg} | URL: {active_url}"
@@ -1680,6 +1876,7 @@ class ApiManager:
                                         proxy,
                                         generation_params=generation_params,
                                         stream=bool(self.config.get("use_stream", False)),
+                                        image_options=image_options,
                                     )
 
                                 return f"API Error {resp.status}: {err_msg} | URL: {active_url}"
@@ -1712,6 +1909,7 @@ class ApiManager:
                                 proxy,
                                 generation_params=generation_params,
                                 stream=bool(self.config.get("use_stream", False)),
+                                image_options=image_options,
                             )
 
                         return (

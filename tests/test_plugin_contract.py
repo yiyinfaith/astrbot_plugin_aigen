@@ -65,6 +65,23 @@ class PluginContractTest(unittest.TestCase):
         self.assertEqual(main.count("@filter.llm_tool"), 2)
         self.assertIn('@filter.llm_tool(name="generate_image")', main)
         self.assertIn("async def generate_image(", main)
+        for field in (
+            "resolution: str =",
+            "aspect_ratio: str =",
+            "size: str =",
+            "quality: str =",
+            "background: str =",
+            "output_format: str =",
+            "output_compression: int =",
+            "moderation: str =",
+            "style: str =",
+            "n: int =",
+            "max_num_results: int =",
+            "input_fidelity: str =",
+            "partial_images: int =",
+            "action: str =",
+        ):
+            self.assertIn(field, main)
         self.assertNotIn("generate_image_tool", main)
         self.assertTrue(schema["image_settings"]["items"]["enable_llm_tool"]["default"])
         self.assertTrue(schema["video_settings"]["items"]["enable_llm_tool"]["default"])

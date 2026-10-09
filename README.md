@@ -36,7 +36,7 @@ AstrBot 在插件初始化前会清理 Schema 以外的配置字段，因此升�
 - 自定义提示词按消息组件顺序收集引用图片、发送图片、@用户头像，不自动添加发送者头像。
 - `/ai生成帮助`、`/生图帮助`、`/画图帮助`、`/生图菜单`、`/画图菜单` 显示配置的帮助文字。
 
-图片保留 `openai_image`、`openai_chat`、`openai_response`、`gemini_official`、`custom_endpoint` 五种请求格式。
+图片保留 `openai_image`、`openai_chat`、`openai_response`、`gemini_official`、`custom_endpoint` 五种请求格式。`openai_image` 对应 OpenAI Images API（无图 `/v1/images/generations`、有图 `/v1/images/edits`）；`openai_response` 对应官方 Responses API 的 `/v1/responses` 和 `image_generation` 工具；`gemini_official` 对应 Gemini 官方 `generateContent`。`openai_chat` 只发送标准 Chat Completions 字段，图片输出依赖兼容服务自身，不再混入 Gemini 专用 `image_config` 等扩展字段。
 
 ## 视频使用和自动路由
 
@@ -106,12 +106,32 @@ AstrBot 在插件初始化前会清理 Schema 以外的配置字段，因此升�
 
 ```json
 {
-  "prompt": "一只戴红围巾的猫，电影感光影"
+  "prompt": "一只戴红围巾的猫，电影感光影",
+  "aspect_ratio": "16:9",
+  "quality": "high",
+  "background": "auto",
+  "output_format": "png"
 }
 ```
 
-- `prompt`（`string`，必填）：提示词。
+- `prompt`（`string`，可选）：提示词。省略时使用当前 QQ 消息文本；若消息只有参考图片，则使用通用图片编辑提示。没有提示词和参考图片时会返回用法提示。
+- `resolution`（`string`，可选）：插件画质档位 `1K`、`2K`、`4K`；留空使用配置或提示词中的画质。
+- `aspect_ratio`（`string`，可选）：比例，例如 `1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`2:3`、`3:2`、`4:5`、`5:4`、`21:9`。OpenAI 模式会将它映射为 `size`，Gemini 官方模式发送为 `imageConfig.aspectRatio`。
+- `size`（`string`，可选）：OpenAI 官方尺寸 `auto`、`256x256`、`512x512`、`1024x1024`、`1536x1024`、`1024x1536`、`1792x1024`、`1024x1792`，或 GPT Image 支持的自定义 `WIDTHxHEIGHT`；自定义尺寸要求宽高为 16 的倍数、比例在 1:3 到 3:1、总像素不超过 3840x2160。填写后优先于比例和画质档位生成 OpenAI `size`。
+- `quality`（`string`，可选）：GPT Image/Responses 使用 `auto`、`low`、`medium`、`high`、`xhigh`、`max`；旧版 DALL-E 兼容接口可使用 `standard`、`hd`。留空由接口使用默认值。
+- `background`（`string`，可选）：`auto`、`transparent`、`opaque`，发送为 OpenAI 的 `background`。
+- `output_format`（`string`，可选）：`png`、`jpeg`、`webp`，发送为 OpenAI 的 `output_format`。
+- `output_compression`（`number`，可选）：`1` 到 `100` 的压缩率；`0` 或省略不发送。
+- `moderation`（`string`，可选）：`auto` 或 `low`，发送为 OpenAI 的 `moderation`。
+- `style`（`string`，可选）：`vivid` 或 `natural`，主要适用于 DALL-E 3 兼容模型。
+- `n`（`number`，可选）：生成数量；`0` 或省略使用默认值 `1`。插件目前只回复第一张图片。
+- `max_num_results`（`number`，可选）：仅用于 OpenAI Responses 图片工具，生成数量范围 `1` 到 `50`；也可用 `n` 作为便捷别名。
+- `input_fidelity`（`string`，可选）：编辑参考图的保真度，`low` 或 `high`；没有输入图片时不会发送。具体支持情况取决于 GPT Image 模型。
+- `partial_images`（`number`，可选）：流式生成的中间图片数量，范围 `0` 到 `3`；设为 `1`、`2` 或 `3` 时发送该官方字段，插件仍只回复最终图片。
+- `action`（`string`，可选）：仅适用于 OpenAI Responses 图片工具，可填 `auto`、`generate` 或 `edit`；留空由接口根据是否有输入图片自动判断。
 - 函数不接受 `image_url` 等媒体 URL 参数。调用工具时，插件从当前消息和引用消息读取 QQ 图片、图片文件和 @用户头像；没有图片就是文生图，有图片就是图生图。图片来源顺序与普通自定义提示词相同，按消息组件顺序支持多图。
+
+除 `prompt` 外，上述控制字段全部可选。`resolution`/`aspect_ratio` 是插件的跨接口抽象；OpenAI 官方 Images API 本身没有独立 `aspect_ratio` 字段，因此插件把它转换为 `size`。Gemini 官方请求只发送其原生的 `responseModalities: ["IMAGE"]`、`imageConfig.aspectRatio` 和 `imageConfig.imageSize` 字段；Chat 模式不发送这些 Gemini 专用字段。
 
 ### `generate_video`
 

@@ -64,6 +64,103 @@ class StreamModeRequestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, IMAGE_DATA)
         self.assertTrue(captured["payload"]["stream"])
 
+    async def test_openai_chat_does_not_send_gemini_extension_fields(self):
+        captured = {}
+
+        async def handle(request):
+            captured["payload"] = await request.json()
+            return web.json_response(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "images": [
+                                    {
+                                        "url": "data:image/png;base64,"
+                                        + base64.b64encode(IMAGE_DATA).decode()
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            )
+
+        runner, port = await self._server(handle, "/v1/chat/completions")
+        manager_cls = load_api_manager()
+        manager = manager_cls(
+            {
+                "interface_mode": "openai_chat",
+                "base_url": f"http://127.0.0.1:{port}",
+                "api_keys": "test-key",
+                "timeout": 5,
+            }
+        )
+        try:
+            result = await manager.call_api([], "draw", "gemini-3-pro-image-preview")
+        finally:
+            if manager._session and not manager._session.closed:
+                await manager._session.close()
+            await runner.cleanup()
+
+        self.assertEqual(result, IMAGE_DATA)
+        self.assertEqual(set(captured["payload"]), {"model", "messages"})
+
+    async def test_gemini_official_requests_image_only_with_native_fields(self):
+        captured = {}
+
+        async def handle(request):
+            captured["path"] = request.path
+            captured["api_key"] = request.headers.get("x-goog-api-key")
+            captured["payload"] = await request.json()
+            return web.json_response(
+                {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "inlineData": {
+                                            "mimeType": "image/png",
+                                            "data": base64.b64encode(IMAGE_DATA).decode(),
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            )
+
+        runner, port = await self._server(
+            handle, "/v1beta/models/gemini-2.5-flash-image:generateContent"
+        )
+        manager_cls = load_api_manager()
+        manager = manager_cls(
+            {
+                "interface_mode": "gemini_official",
+                "base_url": f"http://127.0.0.1:{port}",
+                "api_keys": "test-key",
+                "timeout": 5,
+            }
+        )
+        try:
+            result = await manager.call_api(
+                [], "draw", "gemini-2.5-flash-image", image_options={"aspect_ratio": "16:9"}
+            )
+        finally:
+            if manager._session and not manager._session.closed:
+                await manager._session.close()
+            await runner.cleanup()
+
+        self.assertEqual(result, IMAGE_DATA)
+        self.assertEqual(captured["path"], "/v1beta/models/gemini-2.5-flash-image:generateContent")
+        self.assertEqual(captured["api_key"], "test-key")
+        config = captured["payload"]["generationConfig"]
+        self.assertEqual(config["responseModalities"], ["IMAGE"])
+        self.assertEqual(config["imageConfig"]["aspectRatio"], "16:9")
+        self.assertNotIn("image_config", captured["payload"])
+
     async def test_openai_response_stream_is_parsed(self):
         captured = {}
 
@@ -77,7 +174,7 @@ class StreamModeRequestTest(unittest.IsolatedAsyncioTestCase):
             )
             return web.Response(text=body, content_type="text/event-stream")
 
-        runner, port = await self._server(handle, "/v1/response")
+        runner, port = await self._server(handle, "/v1/responses")
         manager_cls = load_api_manager()
         manager = manager_cls(
             {

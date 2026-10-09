@@ -5,6 +5,7 @@ from PIL import Image
 
 from generation_params import (
     detect_aspect_ratio_from_image,
+    normalize_openai_image_size,
     resolve_image_generation_params,
 )
 
@@ -43,6 +44,13 @@ class GenerationParamsTest(unittest.TestCase):
         params = resolve_image_generation_params("小学课件正文页，4*3，1K")
         self.assertEqual(params["aspect_ratio"], "4:3")
         self.assertEqual(params["size"], "1024x768")
+
+    def test_openai_custom_sizes_follow_documented_constraints(self):
+        self.assertEqual(normalize_openai_image_size("1536x864"), "1536x864")
+        self.assertEqual(normalize_openai_image_size("2160x3840"), "2160x3840")
+        self.assertEqual(normalize_openai_image_size("2048 x 1152"), "2048x1152")
+        self.assertEqual(normalize_openai_image_size("1537x864"), "")
+        self.assertEqual(normalize_openai_image_size("4096x4096"), "")
 
 
 if __name__ == "__main__":
