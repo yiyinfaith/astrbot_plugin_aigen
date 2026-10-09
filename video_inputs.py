@@ -12,7 +12,7 @@ from .video_api_manager import media_sources
 from .video_router import VideoError
 
 MEDIA_URL = re.compile(
-    r"https?://[^\s<>]+\.(mp4|webm|mov|wav|mp3|flac|m4a|ogg)(?:\?[^\s<>]*)?",
+    r"https?://[^\s<>\"']+\.(mp4|webm|mov|wav|mp3|flac|m4a|ogg)(?:\?[^\s<>\"']*)?",
     re.IGNORECASE,
 )
 
@@ -116,8 +116,11 @@ async def resolve_media(source: str, kind: str, event=None) -> str:
     return f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
 
 
-async def collect_media(event, image_manager) -> tuple[list[str], list[str]]:
+async def collect_media(
+    event, image_manager, kinds=None
+) -> tuple[list[str], list[str]]:
     audios, videos = [], []
+    kinds = {"audio", "video"} if kinds is None else set(kinds)
 
     async def collect(chain):
         for seg in chain:
@@ -133,6 +136,8 @@ async def collect_media(event, image_manager) -> tuple[list[str], list[str]]:
                 )
             elif name in {"Record", "Audio", "Video"}:
                 kind = "video" if name == "Video" else "audio"
+                if kind not in kinds:
+                    continue
                 source = (
                     getattr(seg, "url", "")
                     or getattr(seg, "file", "")
@@ -144,8 +149,10 @@ async def collect_media(event, image_manager) -> tuple[list[str], list[str]]:
                     target.append(source)
             elif name == "Plain":
                 a, v = text_media(str(getattr(seg, "text", "")))
-                audios.extend(s for s in a if s not in audios)
-                videos.extend(s for s in v if s not in videos)
+                if "audio" in kinds:
+                    audios.extend(s for s in a if s not in audios)
+                if "video" in kinds:
+                    videos.extend(s for s in v if s not in videos)
 
     await collect(image_manager._event_chain(event))
     return audios, videos

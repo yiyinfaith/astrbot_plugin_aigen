@@ -553,7 +553,15 @@ class ImageGeneratorPlugin(Star):
             elif use_message_media:
                 images = await self._extract_images(event, options.prompt, strict=True)
             audios, videos = (
-                await collect_media(event, self.img_mgr)
+                await collect_media(
+                    event,
+                    self.img_mgr,
+                    kinds={
+                        kind
+                        for kind, value in (("audio", audio_url), ("video", video_url))
+                        if not value
+                    },
+                )
                 if use_message_media and (not audio_url or not video_url)
                 else ([], [])
             )

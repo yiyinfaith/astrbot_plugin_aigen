@@ -195,6 +195,32 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             self.plugin.video_mgr.generate.await_args.args[1:4], ([], [], [])
         )
 
+    async def test_explicit_audio_skips_unreadable_message_audio_token(self):
+        event = Event(
+            [Record("unreadable-silk-token"), Video("https://m.test/ref.mp4")]
+        )
+        [
+            reply
+            async for reply in self.plugin.generate_video(
+                event, "dance", audio_url="https://m.test/valid.mp3"
+            )
+        ]
+        self.plugin.video_mgr.generate.assert_awaited_once()
+        self.assertEqual(
+            self.plugin.video_mgr.generate.await_args.args[2:4],
+            (["https://m.test/valid.mp3"], ["https://m.test/ref.mp4"]),
+        )
+
+    async def test_command_quoted_signed_media_urls_keep_signature_and_do_not_duplicate(
+        self,
+    ):
+        url = "https://m.test/ref.wav?signature=abc&expires=123"
+        event = Event([Plain(f'--audio "{url}"')])
+        _, _, audios, _ = await self.plugin._video_command_inputs(
+            event, f'dance --audio "{url}"', "自定义"
+        )
+        self.assertEqual(audios, [url])
+
     async def test_command_can_have_no_prompt_for_motion_transfer(self):
         event = Event(
             [
