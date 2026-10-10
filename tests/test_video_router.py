@@ -53,6 +53,65 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(result["model"], "minimax_h3_image_audio_to_video_v2_15s")
         self.assertEqual(result["duration"], 12)
 
+    def test_long_model_can_select_an_independent_interface_mode(self):
+        route_config = self.config["routes"]["image_to_video"]
+        route_config.update(
+            model="short-model",
+            long_model="long-model",
+            interface_mode="minimax",
+            long_interface_mode="seedance",
+        )
+        _, short_result = select_route(self.config, ["img"], [], [], 5)
+        _, long_result = select_route(self.config, ["img"], [], [], 12)
+        self.assertEqual(short_result["model"], "short-model")
+        self.assertEqual(short_result["interface_mode"], "minimax")
+        self.assertEqual(long_result["model"], "long-model")
+        self.assertEqual(long_result["interface_mode"], "seedance")
+
+    def test_long_interface_mode_inherits_short_mode_when_unspecified(self):
+        route_config = self.config["routes"]["image_to_video"]
+        route_config.update(
+            model="short-model",
+            long_model="long-model",
+            interface_mode="minimax",
+            long_interface_mode="inherit",
+        )
+        _, result = select_route(self.config, ["img"], [], [], 12)
+        self.assertEqual(result["interface_mode"], "minimax")
+
+    def test_long_interface_mode_is_ignored_when_no_long_model_is_selected(self):
+        route_config = self.config["routes"]["text_to_video"]
+        route_config.update(
+            model="short-model",
+            long_model="",
+            interface_mode="minimax",
+            long_interface_mode="seedance",
+        )
+        _, result = select_route(self.config, [], [], [], 12)
+        self.assertEqual(result["model"], "short-model")
+        self.assertEqual(result["interface_mode"], "minimax")
+
+    def test_every_route_template_exposes_independent_short_and_long_modes(self):
+        expected_modes = {
+            "openai_video",
+            "minimax",
+            "autodl_native",
+            "dashscope",
+            "seedance",
+            "custom_endpoint",
+        }
+        schema = json.loads(
+            (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(
+                "utf-8"
+            )
+        )
+        templates = schema["video_settings"]["items"]["routes"]["templates"]
+        for name, template in templates.items():
+            with self.subTest(name=name):
+                for field in ("interface_mode", "long_interface_mode"):
+                    node = template["items"][field]
+                    self.assertEqual(set(node["options"]) - {"inherit"}, expected_modes)
+
     def test_two_reference_images_are_not_implicitly_first_last_frames(self):
         route, _ = select_route(self.config, ["a", "b"], [], [], 1)
         self.assertEqual(route, "image_to_video")

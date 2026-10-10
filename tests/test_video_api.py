@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from aiohttp import web
 from test_api_manager_urls import PACKAGE, load_api_manager
@@ -11,6 +11,7 @@ from test_api_manager_urls import PACKAGE, load_api_manager
 load_api_manager()
 module = importlib.import_module(PACKAGE + ".video_api_manager")
 VideoApiManager, VideoError = module.VideoApiManager, module.VideoError
+VideoDownloadError = module.VideoDownloadError
 MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2" + b"\0" * 32
 
 
@@ -250,6 +251,7 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.requests = []
         self.polls = 0
         self.fail = False
+        self.download_failures = 0
         self.sse = False
         self.app = web.Application()
         self.app.router.add_post("/v1/videos", self.create)
@@ -303,6 +305,9 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
     async def download(self, request):
         self.assertNotIn("Authorization", request.headers)
+        if self.download_failures:
+            self.download_failures -= 1
+            return web.Response(status=503, text="temporary media failure")
         return web.Response(body=MP4, content_type="video/mp4")
 
     async def test_submit_once_poll_twice_download_without_key_and_record(self):
@@ -318,6 +323,28 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(info["task_id"], "task")
         self.assertEqual(info["status"], "completed")
         self.assertNotIn("do-not-send-to-media", json.dumps(info))
+
+    async def test_download_retries_use_configured_total_attempts(self):
+        self.manager.config["video_delivery_retries"] = 2
+        self.download_failures = 1
+        result = await self.manager.generate("hello", [])
+        self.assertEqual(result.path.read_bytes(), MP4)
+        self.download_failures = 3
+        with self.assertRaises(VideoDownloadError):
+            await self.manager.generate("hello", [])
+
+    async def test_download_failure_keeps_upstream_url_for_fallback(self):
+        with patch.object(
+            VideoApiManager,
+            "download_video",
+            new=AsyncMock(side_effect=VideoError("download unavailable")),
+        ):
+            with self.assertRaises(VideoDownloadError) as raised:
+                await self.manager.generate("hello", [])
+        self.assertEqual(raised.exception.url, self.base + "/result.mp4")
+        self.assertEqual(raised.exception.url_expires_at, "")
+        info = json.loads(next(self.manager.data_dir.glob("*.json")).read_text("utf-8"))
+        self.assertEqual(info["url"], self.base + "/result.mp4")
 
     def test_url_expiry_is_read_without_inventing_a_ttl(self):
         self.assertEqual(

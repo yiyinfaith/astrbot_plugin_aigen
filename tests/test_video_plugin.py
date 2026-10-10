@@ -14,7 +14,10 @@ from unittest.mock import AsyncMock
 from test_api_manager_urls import PACKAGE, load_api_manager
 from test_image_input_order import At, FakeEvent, File, Image, ImageManager, Reply
 
+Image.fromBytes = staticmethod(lambda data: Image(data))
+
 load_api_manager()
+image_api = importlib.import_module(PACKAGE + ".api_manager")
 router = importlib.import_module(PACKAGE + ".video_router")
 api = importlib.import_module(PACKAGE + ".video_api_manager")
 inputs = importlib.import_module(PACKAGE + ".video_inputs")
@@ -44,14 +47,27 @@ class Event(FakeEvent):
         self.sent = []
         self.stopped = False
         self.fail_video_send = False
+        self.fail_video_send_always = False
+        self.fail_image_send_always = False
+        self.image_send_attempts = 0
+        self.video_send_attempts = 0
 
     def chain_result(self, chain):
         return chain
 
     async def send(self, result):
-        if self.fail_video_send and result and isinstance(result[0], Video):
-            self.fail_video_send = False
+        if (
+            (self.fail_video_send or self.fail_video_send_always)
+            and result
+            and isinstance(result[0], Video)
+        ):
+            self.video_send_attempts += 1
+            if not self.fail_video_send_always:
+                self.fail_video_send = False
             raise RuntimeError("video adapter rejected local file")
+        if self.fail_image_send_always and result and isinstance(result[0], Image):
+            self.image_send_attempts += 1
+            raise RuntimeError("image adapter rejected local file")
         self.sent.append(result)
 
     def stop_event(self):
@@ -91,6 +107,8 @@ def plugin_class():
         "Video": Video,
         "Image": Image,
         "VideoError": router.VideoError,
+        "VideoDownloadError": api.VideoDownloadError,
+        "ImageDownloadError": image_api.ImageDownloadError,
         "VideoOptions": router.VideoOptions,
         "parse_video_command": router.parse_video_command,
         "collect_media": inputs.collect_media,
@@ -339,7 +357,8 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_local_video_send_falls_back_to_upstream_url_with_expiry(self):
         event = Event([])
-        event.fail_video_send = True
+        event.fail_video_send_always = True
+        self.plugin.video_conf["video_delivery_retries"] = 2
         self.plugin.video_mgr.generate.return_value = api.VideoResult(
             Path("generated.mp4"),
             "task",
@@ -360,6 +379,43 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(event.sent), 2)  # progress notice + URL fallback
         self.assertIn("https://media.test/video.mp4", event.sent[-1][0].text)
         self.assertIn("2026-10-10 12:00:00 UTC", event.sent[-1][0].text)
+        self.assertEqual(event.video_send_attempts, 2)
+
+    async def test_local_image_send_retries_before_url_fallback(self):
+        event = Event([])
+        event.fail_image_send_always = True
+        self.plugin.conf["image_delivery_retries"] = 2
+        result = await self.plugin._deliver_image_result(
+            event,
+            b"image-bytes",
+            "https://media.test/image.png",
+            "2026-10-10 12:00:00 UTC",
+            include_result_text=False,
+        )
+        self.assertEqual(result, [])
+        self.assertEqual(event.image_send_attempts, 2)
+        self.assertEqual(len(event.sent), 1)
+        self.assertIn("https://media.test/image.png", event.sent[0][0].text)
+        self.assertIn("2026-10-10 12:00:00 UTC", event.sent[0][0].text)
+
+    async def test_local_download_failure_falls_back_to_upstream_url(self):
+        event = Event([])
+        self.plugin.video_mgr.generate.side_effect = api.VideoDownloadError(
+            "视频已完成但下载失败", "https://media.test/download-fallback.mp4", ""
+        )
+        result = await self.plugin._generate_video(
+            event,
+            "cloud",
+            "自定义",
+            [],
+            [],
+            [],
+            dispatch_result=True,
+        )
+        self.assertEqual(result, [])
+        self.assertEqual(len(event.sent), 2)  # progress notice + one fallback message
+        self.assertIn("https://media.test/download-fallback.mp4", event.sent[-1][0].text)
+        self.assertIn("AutoDL 未返回明确时间", event.sent[-1][0].text)
 
     async def test_media_data_url_type_and_local_magic_validation(self):
         with self.assertRaises(router.VideoError):

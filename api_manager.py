@@ -4,9 +4,11 @@ import ipaddress
 import json
 import re
 import socket
+from datetime import datetime, timezone
 from urllib.parse import quote
 from urllib.parse import urljoin
 from urllib.parse import urlparse
+from urllib.parse import parse_qs
 import aiohttp
 from typing import List, Dict
 from astrbot.api import logger
@@ -16,6 +18,73 @@ from .generation_params import (
     resolve_image_generation_params,
 )
 from .utils import normalize_api_root
+
+
+class ImageResult(bytes):
+    """Image bytes that retain the upstream URL for delivery fallback."""
+
+    def __new__(cls, value: bytes, url: str = "", url_expires_at: str = ""):
+        result = super().__new__(cls, value)
+        result.url = str(url or "")
+        result.url_expires_at = str(url_expires_at or "")
+        return result
+
+
+class ImageDownloadError(RuntimeError):
+    """The image was generated, but its public artifact could not be fetched."""
+
+    def __init__(self, message: str, url: str, url_expires_at: str = ""):
+        super().__init__(message)
+        self.url = str(url or "")
+        self.url_expires_at = str(url_expires_at or "")
+
+
+def _image_url_expiry(data: dict | None, url: str = "") -> str:
+    """Read an upstream expiry hint without inventing a lifetime."""
+    keys = (
+        "expires_at",
+        "expire_at",
+        "expiration_time",
+        "expiration",
+        "expires",
+        "expire_time",
+        "expiry",
+    )
+
+    def find(value):
+        if isinstance(value, dict):
+            for key in keys:
+                item = value.get(key)
+                if item not in (None, ""):
+                    return item
+            for child in value.values():
+                found = find(child)
+                if found not in (None, ""):
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = find(child)
+                if found not in (None, ""):
+                    return found
+        return None
+
+    value = find(data or {})
+    if value in (None, "") and url:
+        query = parse_qs(urlparse(url).query)
+        for name in ("expires", "expire", "expires_at", "expire_at"):
+            if query.get(name):
+                value = query[name][0]
+                break
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (int, float)) or str(value).isdigit():
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S UTC"
+            )
+        except (OverflowError, OSError, ValueError):
+            pass
+    return str(value)
 
 
 class ApiManager:
@@ -727,7 +796,9 @@ class ApiManager:
         if img_url.startswith("data:"):
             return base64.b64decode(img_url.split(",")[-1])
 
-        return await self._download_result_image(img_url, proxy)
+        return await self._download_result_image(
+            img_url, proxy, url_expires_at=_image_url_expiry(res_data, img_url)
+        )
 
     async def _call_images_api_multipart(
         self,
@@ -897,6 +968,8 @@ class ApiManager:
                     )
 
             return f"Images API Multipart Error: 未找到可用接口地址 | Candidates: {candidate_urls}"
+        except ImageDownloadError:
+            raise
         except asyncio.TimeoutError:
             return f"请求超时 ({timeout_val}s)，请稍后再试或检查网络。"
         except Exception as e:
@@ -1116,6 +1189,8 @@ class ApiManager:
                 f"Images API Error: 未找到可用接口地址 | Candidates: {candidate_urls}"
             )
 
+        except ImageDownloadError:
+            raise
         except asyncio.TimeoutError:
             timeout_val = self.config.get("timeout", 120)
             return f"请求超时 ({timeout_val}s)，请稍后再试或检查网络。"
@@ -1285,7 +1360,10 @@ class ApiManager:
                         result = result.strip()
                         if result.startswith(("http://", "https://", "/")):
                             return await self._download_result_image(
-                                result, proxy, base_url
+                                result,
+                                proxy,
+                                base_url,
+                                _image_url_expiry(response_data, result),
                             )
                         if result.startswith("data:") and "," in result:
                             result = result.split(",", 1)[1]
@@ -1307,7 +1385,12 @@ class ApiManager:
                             )
                         except Exception:
                             return "Response API 返回了无法解码的图片数据。"
-                    return await self._download_result_image(image_url, proxy, base_url)
+                    return await self._download_result_image(
+                        image_url,
+                        proxy,
+                        base_url,
+                        _image_url_expiry(response_data, image_url),
+                    )
 
                 output_text = response_data.get("output_text")
                 if isinstance(output_text, str) and output_text.strip():
@@ -1317,6 +1400,8 @@ class ApiManager:
                     "Response API 请求成功但未找到图片数据。"
                     f"Raw: {str(response_data)[:300]}..."
                 )
+        except ImageDownloadError:
+            raise
         except asyncio.TimeoutError:
             return f"请求超时 ({timeout_value}s)，请稍后再试或检查网络。"
         except Exception as error:
@@ -1399,11 +1484,15 @@ class ApiManager:
         return img_url
 
     async def _download_result_image(
-        self, img_url: str, proxy: str = None, base_url: str = None
-    ) -> bytes | str:
+        self,
+        img_url: str,
+        proxy: str = None,
+        base_url: str = None,
+        url_expires_at: str = "",
+    ) -> ImageResult:
         """下载模型返回的结果图片，增加重试与容错，避免外链偶发重置导致整次任务失败"""
         if not img_url:
-            return "结果图片地址为空"
+            raise ImageDownloadError("结果图片地址为空", "", url_expires_at)
 
         img_url = self._resolve_result_image_url(img_url, base_url)
         proxy = self._get_request_proxy(img_url, proxy)
@@ -1414,7 +1503,19 @@ class ApiManager:
             self.config.get("result_image_download_timeout", 0) or 0
         )
         timeout_val = max(30, configured_timeout or request_timeout, request_timeout)
-        retries = max(2, int(self.config.get("result_image_download_retries", 4)))
+        attempts = max(
+            1,
+            min(
+                5,
+                int(
+                    self.config.get(
+                        "image_delivery_retries",
+                        self.config.get("result_image_download_retries", 2),
+                    )
+                    or 2
+                ),
+            ),
+        )
         timeout = aiohttp.ClientTimeout(
             total=timeout_val,
             sock_read=timeout_val,
@@ -1488,7 +1589,7 @@ class ApiManager:
         last_error = ""
         if should_try_dual_route:
             logger.info(f"结果图下载启用直连/代理并发抢跑: {img_url[:120]}")
-            for attempt in range(1, retries + 1):
+            for attempt in range(1, attempts + 1):
                 tasks = [
                     asyncio.create_task(_download_once(None, "direct")),
                     asyncio.create_task(_download_once(proxy, "proxy")),
@@ -1505,7 +1606,11 @@ class ApiManager:
                                 logger.info(
                                     f"结果图下载通过直连优先成功: {img_url[:120]}"
                                 )
-                            return data
+                            return ImageResult(
+                                data,
+                                img_url,
+                                url_expires_at or _image_url_expiry({}, img_url),
+                            )
                         route_errors[route_name] = error_text
                 finally:
                     for pending in tasks:
@@ -1518,14 +1623,14 @@ class ApiManager:
                     or route_errors.get("proxy")
                     or "未知下载错误"
                 )
-                if attempt < retries:
+                if attempt < attempts:
                     logger.warning(
                         f"结果图并发下载失败，准备重试: {img_url[:120]} | {route_errors}"
                     )
                     await asyncio.sleep(min(2 * attempt, 5))
         elif should_try_ipv4_race:
             logger.info(f"结果图下载启用默认直连/IPv4直连并发抢跑: {img_url[:120]}")
-            for attempt in range(1, retries + 1):
+            for attempt in range(1, attempts + 1):
                 ipv4_session = aiohttp.ClientSession(
                     connector=aiohttp.TCPConnector(family=socket.AF_INET)
                 )
@@ -1547,7 +1652,11 @@ class ApiManager:
                                 logger.info(
                                     f"结果图下载通过 IPv4 直连优先成功: {img_url[:120]}"
                                 )
-                            return data
+                            return ImageResult(
+                                data,
+                                img_url,
+                                url_expires_at or _image_url_expiry({}, img_url),
+                            )
                         route_errors[route_name] = error_text
                 finally:
                     for pending in tasks:
@@ -1561,7 +1670,7 @@ class ApiManager:
                     or route_errors.get("direct-ipv4")
                     or "未知下载错误"
                 )
-                if attempt < retries:
+                if attempt < attempts:
                     logger.warning(
                         f"结果图直连/IPv4并发下载失败，准备重试: {img_url[:120]} | {route_errors}"
                     )
@@ -1570,19 +1679,27 @@ class ApiManager:
             proxy_candidates = [proxy]
             for proxy_index, current_proxy in enumerate(proxy_candidates, 1):
                 route_name = "proxy" if current_proxy else "direct"
-                for attempt in range(1, retries + 1):
+                for attempt in range(1, attempts + 1):
                     _, data, error_text = await _download_once(
                         current_proxy, route_name
                     )
                     if data:
-                        return data
+                        return ImageResult(
+                            data,
+                            img_url,
+                            url_expires_at or _image_url_expiry({}, img_url),
+                        )
                     last_error = error_text
 
-                    if attempt < retries:
+                    if attempt < attempts:
                         await asyncio.sleep(min(2 * attempt, 5))
 
         logger.error(f"结果图下载失败: {img_url[:120]} | {last_error}")
-        return f"结果图片下载失败: {last_error}"
+        raise ImageDownloadError(
+            f"结果图片下载失败: {last_error}",
+            img_url,
+            url_expires_at or _image_url_expiry({}, img_url),
+        )
 
     async def call_api(
         self,
@@ -2214,7 +2331,9 @@ class ApiManager:
 
             # 如果是 URL，需要再次下载（增加重试与容错，避免外链偶发失败）
             upstream_duration = asyncio.get_running_loop().time() - call_start
-            result = await self._download_result_image(img_url, proxy, base)
+            result = await self._download_result_image(
+                img_url, proxy, base, _image_url_expiry(res_data, img_url)
+            )
             total_duration = asyncio.get_running_loop().time() - call_start
             self._last_metrics = {
                 "upstream_duration": upstream_duration,

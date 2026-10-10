@@ -91,6 +91,15 @@ class VideoResult:
     url_expires_at: str = ""
 
 
+class VideoDownloadError(VideoError):
+    """The paid task completed, but the local artifact could not be fetched."""
+
+    def __init__(self, message: str, url: str, url_expires_at: str = ""):
+        super().__init__(message)
+        self.url = url
+        self.url_expires_at = url_expires_at
+
+
 def json_path(value, path: str):
     for part in str(path).split("."):
         if isinstance(value, list) and part.isdigit():
@@ -926,8 +935,10 @@ class VideoApiManager(ApiManager):
         try:
             path = await self.download_video(url, key, base)
         except (VideoError, OSError) as exc:
-            raise VideoError(
-                f"视频已完成但下载失败（ID：{task_id}）：{exc}。任务记录包含下载地址，请勿重复生成。"
+            raise VideoDownloadError(
+                f"视频已完成但下载失败（ID：{task_id}）：{exc}。",
+                url,
+                url_expires_at,
             ) from exc
         info.update(status="completed", path=str(path))
         await asyncio.to_thread(
@@ -950,8 +961,18 @@ class VideoApiManager(ApiManager):
         timeout = int(self.config.get("result_video_download_timeout", 300)) or int(
             self.config.get("timeout", 120)
         )
-        retries = max(
-            0, min(5, int(self.config.get("result_video_download_retries", 2)))
+        attempts = max(
+            1,
+            min(
+                5,
+                int(
+                    self.config.get(
+                        "video_delivery_retries",
+                        self.config.get("result_video_download_retries", 2),
+                    )
+                    or 2
+                ),
+            ),
         )
         max_size = max(1, int(self.config.get("max_video_size_mb", 100))) * 1024 * 1024
         # Public artifact URLs never receive the API key, even on the same host.
@@ -962,7 +983,7 @@ class VideoApiManager(ApiManager):
             b.netloc,
         ) and re.search(r"/v1/videos/[^/]+/content$", parsed.path)
         headers = {"Authorization": "Bearer " + key} if protected else {}
-        for attempt in range(retries + 1):
+        for attempt in range(attempts):
             try:
                 async with session.get(
                     url,
@@ -992,12 +1013,14 @@ class VideoApiManager(ApiManager):
                 if total < 12 or b"ftyp" not in head:
                     raise VideoError("下载结果不是有效 MP4 视频。")
                 return path
-            except (aiohttp.ClientError, asyncio.TimeoutError):
+            except (aiohttp.ClientError, asyncio.TimeoutError, VideoError) as exc:
                 path.unlink(missing_ok=True)
-                if attempt == retries:
+                if attempt + 1 >= attempts:
+                    if isinstance(exc, VideoError):
+                        raise
                     raise VideoError(
                         "视频已生成，但下载失败；任务记录已保留，可从上游取回视频。"
-                    )
+                    ) from exc
                 await asyncio.sleep(1)
             except BaseException:
                 path.unlink(missing_ok=True)

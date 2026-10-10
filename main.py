@@ -22,12 +22,12 @@ from astrbot.api.message_components import Image, Plain, Video
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core import AstrBotConfig
 
-from .api_manager import ApiManager
+from .api_manager import ApiManager, ImageDownloadError
 from .config_manager import media_config, migrate_config
 from .data_manager import DataManager
 from .image_manager import ImageManager
 from .utils import extract_image_urls_from_text, match_keyword_in_text, norm_id
-from .video_api_manager import VideoApiManager
+from .video_api_manager import VideoApiManager, VideoDownloadError
 from .video_inputs import collect_media, text_media
 from .video_router import VideoError, VideoOptions, parse_video_command
 
@@ -276,6 +276,7 @@ class ImageGeneratorPlugin(Star):
         show_progress: bool = True,
         include_result_text: bool = True,
         image_options: dict[str, object] | None = None,
+        dispatch_result: bool = False,
     ) -> list[Any]:
         """Call the selected API mode, record usage, and build a reply.
 
@@ -298,6 +299,8 @@ class ImageGeneratorPlugin(Star):
         if show_progress:
             await event.send(event.chain_result([Plain(feedback)]))
 
+        source_url = ""
+        source_expiry = ""
         try:
             start = datetime.now(timezone.utc)
             result = await self.api_mgr.call_api(
@@ -307,6 +310,13 @@ class ImageGeneratorPlugin(Star):
                 proxy=self.img_mgr.proxy,
                 image_options=image_options,
             )
+        except ImageDownloadError as exc:
+            logger.warning("图片本地下载失败，准备使用公网链接回退：%s", exc)
+            if dispatch_result:
+                return await self._deliver_image_fallback(
+                    event, exc.url, exc.url_expires_at
+                )
+            result = str(exc)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Image generation request failed")
             result = str(exc)
@@ -316,6 +326,8 @@ class ImageGeneratorPlugin(Star):
                 return [Plain(f"图片生成失败：{result}")]
             return [Plain("图片生成失败，请稍后重试。")]
 
+        source_url = str(getattr(result, "url", "") or "")
+        source_expiry = str(getattr(result, "url_expires_at", "") or "")
         result = await self.img_mgr.optimize_output_image(result)
         elapsed = (datetime.now(timezone.utc) - start).total_seconds()
         await self.data_mgr.record_usage(uid, gid)
@@ -325,7 +337,82 @@ class ImageGeneratorPlugin(Star):
         reply: list[Any] = [Image.fromBytes(result)]
         if include_result_text:
             reply.append(Plain(f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}"))
+        if dispatch_result:
+            return await self._deliver_image_result(
+                event,
+                result,
+                source_url,
+                source_expiry,
+                include_result_text,
+                suffix,
+                f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}",
+            )
         return reply
+
+    @staticmethod
+    def _image_expiry_note(expiry: str = "") -> str:
+        expiry = str(expiry or "").strip()
+        if expiry:
+            return f"链接失效时间：{expiry}"
+        return "链接失效时间：上游未返回明确时间，请以上游链接有效期为准"
+
+    async def _deliver_image_fallback(
+        self, event: AstrMessageEvent, url: str, expiry: str = ""
+    ) -> list[Any]:
+        """Send one concise public-link message when an image cannot be attached."""
+        url = str(url or "").strip()
+        if not url:
+            return [Plain("图片已生成，但发送失败，接口未提供公网链接。")]
+        fallback_chain = [
+            Plain(
+                "图片发送失败，使用公网链接：\n"
+                f"{url}\n"
+                f"{self._image_expiry_note(expiry)}"
+            )
+        ]
+        try:
+            await event.send(event.chain_result(fallback_chain))
+            return []
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("公网图片链接回退发送失败：%s", exc)
+            return fallback_chain
+
+    async def _deliver_image_result(
+        self,
+        event: AstrMessageEvent,
+        result: bytes,
+        source_url: str = "",
+        source_expiry: str = "",
+        include_result_text: bool = True,
+        suffix: str = "",
+        success_text: str = "",
+    ) -> list[Any]:
+        """Retry local image delivery before falling back to the public URL."""
+        chain: list[Any] = [Image.fromBytes(result)]
+        if include_result_text:
+            chain.append(Plain(success_text or f"\n✅ 生成成功{suffix}"))
+        attempts = max(
+            1,
+            min(
+                5,
+                int(
+                    self.conf.get(
+                        "image_delivery_retries",
+                        self.conf.get("result_image_download_retries", 2),
+                    )
+                    or 2
+                ),
+            ),
+        )
+        for attempt in range(attempts):
+            try:
+                await event.send(event.chain_result(chain))
+                return []
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("本地图片消息发送失败（第 %d/%d 次）：%s", attempt + 1, attempts, exc)
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(min(1.0 * (attempt + 1), 3.0))
+        return await self._deliver_image_fallback(event, source_url, source_expiry)
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=5)
     async def on_preset_request(self, event: AstrMessageEvent, ctx=None):
@@ -411,7 +498,14 @@ class ImageGeneratorPlugin(Star):
                 result = [Plain(str(exc))]
         else:
             images = await self._extract_images(event, prompt, preset_name)
-            result = await self._generate(event, prompt, preset_name, model, images)
+            result = await self._generate(
+                event,
+                prompt,
+                preset_name,
+                model,
+                images,
+                dispatch_result=True,
+            )
         if result:
             yield event.chain_result(result)
 
@@ -475,11 +569,17 @@ class ImageGeneratorPlugin(Star):
                 )
             ).replace("{preset}", name)
             await event.send(event.chain_result([Plain(feedback)]))
-        start = monotonic()
         try:
             result = await self.video_mgr.generate(
                 prompt, images, audios, videos, duration, options
             )
+        except VideoDownloadError as exc:
+            logger.warning("视频本地下载失败，准备使用公网链接回退：%s", exc)
+            if dispatch_result:
+                return await self._deliver_video_fallback(
+                    event, exc.url, exc.url_expires_at
+                )
+            return [Plain(str(exc))]
         except (VideoError, aiohttp.ClientError, OSError, ValueError) as exc:
             logger.warning("Video generation failed: %s", exc)
             # Task IDs and input validation are actionable even outside debug mode.
@@ -487,61 +587,80 @@ class ImageGeneratorPlugin(Star):
         await self.data_mgr.record_usage(
             event.get_sender_id(), event.get_group_id(), "video"
         )
+        # A successful delivery is one video message.  Progress, if enabled,
+        # was already sent before the paid request started.
         reply = [Video.fromFileSystem(str(result.path))]
-        if not tool_call:
-            suffix = (
-                f" | 预设：{preset_name}" if preset_name not in {"", "自定义"} else ""
-            )
-            if self.video_conf.get("show_model_info", False):
-                suffix += f" | 模型：{result.model}"
-            reply.append(
-                Plain(f"\n✅ 视频生成成功（{monotonic() - start:.1f}s）{suffix}")
-            )
         if dispatch_result:
             return await self._deliver_video_result(event, result, reply)
         return reply
 
     @staticmethod
-    def _video_expiry_note(result) -> str:
-        expiry = str(getattr(result, "url_expires_at", "") or "").strip()
+    def _video_expiry_note(expiry: str = "") -> str:
+        expiry = str(expiry or "").strip()
         if expiry:
             return f"链接失效时间：{expiry}"
         return "链接失效时间：AutoDL 未返回明确时间，请以 AutoDL 上游链接有效期为准"
 
-    async def _deliver_video_result(
-        self, event: AstrMessageEvent, result, local_chain: list[Any]
+    async def _deliver_video_fallback(
+        self, event: AstrMessageEvent, url: str, expiry: str = ""
     ) -> list[Any]:
-        """Send a real video first and fall back only after an adapter error."""
-        try:
-            # Keep the video send isolated: a later success-text failure must
-            # never be mistaken for a failed video delivery.
-            await event.send(event.chain_result(local_chain[:1]))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("本地视频消息发送失败，准备使用公网链接回退：%s", exc)
-        else:
-            if len(local_chain) > 1:
-                try:
-                    await event.send(event.chain_result(local_chain[1:]))
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("视频已发送，但成功提示发送失败：%s", exc)
-            return []
-
-        url = str(getattr(result, "url", "") or "").strip()
+        """Send one concise public-link message when a video cannot be attached."""
+        url = str(url or "").strip()
         if not url:
-            return [Plain("视频已生成，但本地视频消息发送失败，接口也未返回可用公网链接。")]
-        fallback = (
-            "视频文件消息发送失败，改用 AutoDL 公网链接：\n"
-            f"{url}\n"
-            f"{self._video_expiry_note(result)}"
-        )
-        fallback_chain = [Plain(fallback)]
+            return [Plain("视频已生成，但发送失败，接口未提供公网链接。")]
+        fallback_chain = [
+            Plain(
+                "视频发送失败，使用公网链接：\n"
+                f"{url}\n"
+                f"{self._video_expiry_note(expiry)}"
+            )
+        ]
         try:
             await event.send(event.chain_result(fallback_chain))
             return []
-        except Exception as fallback_exc:  # noqa: BLE001
-            logger.exception("公网视频链接回退发送失败：%s", fallback_exc)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("公网视频链接回退发送失败：%s", exc)
             # Let AstrBot's normal result stage make one last delivery attempt.
             return fallback_chain
+
+    async def _deliver_video_result(
+        self, event: AstrMessageEvent, result, local_chain: list[Any]
+    ) -> list[Any]:
+        """Retry a real video delivery before falling back to its public URL."""
+        attempts = max(
+            1,
+            min(
+                5,
+                int(
+                    self.video_conf.get(
+                        "video_delivery_retries",
+                        self.video_conf.get("result_video_download_retries", 2),
+                    )
+                    or 2
+                ),
+            ),
+        )
+        for attempt in range(attempts):
+            try:
+                # Keep the video send isolated: a later success-text failure
+                # must never be mistaken for a failed video delivery.
+                await event.send(event.chain_result(local_chain[:1]))
+                return []
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "本地视频消息发送失败（第 %d/%d 次）：%s",
+                    attempt + 1,
+                    attempts,
+                    exc,
+                )
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(min(1.0 * (attempt + 1), 3.0))
+
+        return await self._deliver_video_fallback(
+            event,
+            getattr(result, "url", ""),
+            getattr(result, "url_expires_at", ""),
+        )
 
     @filter.llm_tool(name="generate_video")
     async def generate_video(
@@ -742,8 +861,10 @@ class ImageGeneratorPlugin(Star):
             show_progress=False,
             include_result_text=False,
             image_options=image_options,
+            dispatch_result=True,
         )
-        yield event.chain_result(result)
+        if result:
+            yield event.chain_result(result)
 
     @filter.command("生图", aliases={"画图"}, prefix_optional=False)
     async def draw_command(self, event: AstrMessageEvent):
@@ -756,9 +877,16 @@ class ImageGeneratorPlugin(Star):
             return
         event.stop_event()
         images = await self._extract_images(event, prompt, preset_name)
-        yield event.chain_result(
-            await self._generate(event, prompt, preset_name, model, images)
+        result = await self._generate(
+            event,
+            prompt,
+            preset_name,
+            model,
+            images,
+            dispatch_result=True,
         )
+        if result:
+            yield event.chain_result(result)
 
     @filter.command(
         "ai生成帮助",

@@ -195,15 +195,23 @@ def select_route(
             rule = matches[0]
         else:
             rule = rules.get(route, {})
-        model = str(rule.get("model", default_model) or "").strip()
-        if seconds > 10:
-            model = str(rule.get("long_model", default_long) or model).strip()
+        short_model = str(rule.get("model", default_model) or "").strip()
+        configured_long_model = rule.get("long_model", default_long)
+        long_model = str(configured_long_model or "").strip()
+        # A long interface belongs to the concrete long-model selection.  If
+        # no long model is configured, keep using the short model and its
+        # interface even when the requested duration exceeds ten seconds.
+        is_long_model = seconds > 10 and bool(long_model)
+        model = long_model if is_long_model else short_model
         if not model:
             raise VideoError(
                 f"检测到{label}（图片 {len(images)}、音频 {len(audios)}、视频 {len(videos)}），请先在“生视频设置 → 自动路由模型 → {label}”配置模型和接口格式；未提交收费任务。"
             )
         effective["model"] = model
-        mode = rule.get("interface_mode", "inherit")
+        mode_key = "long_interface_mode" if is_long_model else "interface_mode"
+        mode = rule.get(mode_key, "inherit")
+        if mode == "inherit" and is_long_model:
+            mode = rule.get("interface_mode", "inherit")
         if mode != "inherit":
             effective["interface_mode"] = mode
         for key in ("resolution", "aspect_ratio"):

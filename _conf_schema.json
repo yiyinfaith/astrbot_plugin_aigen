@@ -132,6 +132,12 @@
                 "hint": "下载模型返回的结果图片失败时的自动重试次数。若启用了代理，针对部分 Google 外链还会额外尝试一次直连回退。",
                 "default": 4
             },
+            "image_delivery_retries": {
+                "description": "图片下载与发送尝试次数",
+                "type": "int",
+                "default": 2,
+                "hint": "生成结果图片最多下载和发送几次；全部失败后回退到公网链接。配置值是总尝试次数。"
+            },
             "generating_msg_template": {
                 "description": "【显示】生成过程提示文案",
                 "type": "string",
@@ -309,6 +315,30 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -356,6 +386,30 @@
                                 ],
                                 "labels": [
                                     "跟随主接口",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
                                     "OpenAI Videos",
                                     "MiniMax V2",
                                     "AutoDL",
@@ -419,6 +473,30 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -466,6 +544,30 @@
                                 ],
                                 "labels": [
                                     "跟随主接口",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
                                     "OpenAI Videos",
                                     "MiniMax V2",
                                     "AutoDL",
@@ -529,6 +631,30 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -576,6 +702,30 @@
                                 ],
                                 "labels": [
                                     "跟随主接口",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
                                     "OpenAI Videos",
                                     "MiniMax V2",
                                     "AutoDL",
@@ -639,6 +789,30 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -686,6 +860,30 @@
                                 ],
                                 "labels": [
                                     "跟随主接口",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
                                     "OpenAI Videos",
                                     "MiniMax V2",
                                     "AutoDL",
@@ -749,6 +947,30 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -804,6 +1026,30 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -825,6 +1071,7 @@
                         "model": "minimax_h3_lightx2v_no_pic",
                         "long_model": "",
                         "interface_mode": "inherit",
+                        "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
                     },
@@ -833,6 +1080,7 @@
                         "model": "minimax_h3_lightx2v_v5",
                         "long_model": "minimax_h3_lightx2v_v5_15s",
                         "interface_mode": "inherit",
+                        "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
                     },
@@ -841,6 +1089,7 @@
                         "model": "minimax_h3_lightx2v",
                         "long_model": "",
                         "interface_mode": "inherit",
+                        "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
                     },
@@ -849,6 +1098,7 @@
                         "model": "",
                         "long_model": "",
                         "interface_mode": "inherit",
+                        "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
                     },
@@ -857,6 +1107,7 @@
                         "model": "minimax_h3_image_audio_to_video_v2",
                         "long_model": "minimax_h3_image_audio_to_video_v2_15s",
                         "interface_mode": "inherit",
+                        "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
                     },
@@ -865,6 +1116,7 @@
                         "model": "minimax_h3_image_audio_to_video_v2",
                         "long_model": "minimax_h3_image_audio_to_video_v2_15s",
                         "interface_mode": "inherit",
+                        "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
                     },
@@ -873,6 +1125,7 @@
                         "model": "",
                         "long_model": "",
                         "interface_mode": "inherit",
+                        "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
                     },
@@ -881,6 +1134,7 @@
                         "model": "wan2.2-animate-move",
                         "long_model": "",
                         "interface_mode": "dashscope",
+                        "long_interface_mode": "inherit",
                         "resolution": "464p",
                         "aspect_ratio": ""
                     },
@@ -889,6 +1143,7 @@
                         "model": "",
                         "long_model": "",
                         "interface_mode": "inherit",
+                        "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
                     },
@@ -897,6 +1152,7 @@
                         "model": "",
                         "long_model": "",
                         "interface_mode": "inherit",
+                        "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
                     }
@@ -1048,6 +1304,12 @@
                 "type": "int",
                 "default": 2,
                 "hint": "仅重试下载，不重新生成视频。"
+            },
+            "video_delivery_retries": {
+                "description": "视频下载与发送尝试次数",
+                "type": "int",
+                "default": 2,
+                "hint": "生成结果视频最多下载和发送几次；全部失败后回退到公网链接。配置值是总尝试次数。"
             },
             "max_video_size_mb": {
                 "description": "最大视频下载大小（MB）",
