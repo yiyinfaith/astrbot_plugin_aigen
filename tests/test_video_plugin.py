@@ -2,7 +2,9 @@
 
 import ast
 import asyncio
+import base64
 import importlib
+import io
 import re
 import tempfile
 import unittest
@@ -12,6 +14,7 @@ from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from PIL import Image as PILImage
 from test_api_manager_urls import PACKAGE, load_api_manager
 from test_image_input_order import At, FakeEvent, File, Image, ImageManager, Reply
 
@@ -179,6 +182,89 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             args[1:4], (["https://i.test/ref.png"], ["https://m.test/ref.wav"], [])
         )
 
+    async def test_qq_cached_images_reach_real_video_request_builder(self):
+        self.plugin.video_conf.update(
+            interface_mode="openai_video",
+            reference_mode="first_frame",
+            routes={"image_to_video": {"model": "minimax_h3_lightx2v_v5"}},
+            duration=1,
+            resolution="480p",
+            aspect_ratio="16:9",
+        )
+        out = io.BytesIO()
+        PILImage.new("RGB", (2, 2), "red").save(out, format="PNG")
+        expected = "data:image/png;base64," + base64.b64encode(out.getvalue()).decode()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "QQ cached.png"
+            path.write_bytes(out.getvalue())
+            current = Image("")
+            current.file = str(path)
+            quoted = Image("")
+            quoted.file = path.as_uri()
+            manager = api.VideoApiManager(self.plugin.video_conf, Path(tmp))
+            cases = (
+                [current],
+                [Reply([quoted])],
+                [current, Reply([quoted])],
+                [File("photo.png", file_=str(path))],
+            )
+            for chain in cases:
+                with self.subTest(components=[type(s).__name__ for s in chain]):
+                    (
+                        options,
+                        images,
+                        audios,
+                        videos,
+                    ) = await self.plugin._video_command_inputs(
+                        Event(chain), "让人物跳舞 1秒", "自定义"
+                    )
+                    route, prepared = manager.prepare(
+                        options.prompt, images, audios, videos, options=options
+                    )
+                    self.assertEqual(route, "image_to_video")
+                    _, _, body, _ = prepared.build_request(
+                        options.prompt,
+                        [api.image_source(i) for i in images],
+                        audios,
+                        videos,
+                    )
+                    refs = body["input_reference"]
+                    if isinstance(refs, dict):
+                        refs = [refs]
+                    self.assertEqual(refs, [{"image_url": expected}] * len(chain))
+
+    async def test_tools_return_failures_as_llm_text_not_direct_chat_results(self):
+        event = Event([Image("https://qq.test/image.png")])
+        self.plugin.video_mgr.generate.side_effect = router.VideoError(
+            "upstream failed"
+        )
+        result = [x async for x in self.plugin.generate_video(event, "人物跳舞")]
+        self.assertEqual(result, ["upstream failed"])
+        self.assertEqual(event.sent, [])
+
+    async def test_command_default_and_explicit_tool_frame_choice(self):
+        event = Event([Image("https://qq.test/image.png")])
+        self.plugin.video_conf["reference_mode"] = "first_frame"
+        for prompt in ("", "人物跳舞", "图生视频"):
+            options, *_ = await self.plugin._video_command_inputs(
+                event, prompt, "自定义"
+            )
+            self.assertEqual(options.reference_mode, "reference")
+        options, *_ = await self.plugin._video_command_inputs(
+            event, "人物跳舞 --frames", "自定义"
+        )
+        self.assertEqual(options.reference_mode, "first_last_frame")
+        [
+            x
+            async for x in self.plugin.generate_video(
+                event, "固定起始画面", reference_mode="first_frame"
+            )
+        ]
+        self.assertEqual(
+            self.plugin.video_mgr.generate.await_args.args[5].reference_mode,
+            "first_frame",
+        )
+
     async def test_tool_uses_message_media_public_urls(self):
         event = Event(
             [
@@ -283,6 +369,44 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(images, ["https://qq.test/photo.png"])
         self.assertEqual(audios, ["https://qq.test/quoted.mp3"])
         self.assertEqual(videos, ["https://qq.test/quoted.mp4"])
+
+    async def test_empty_reply_fetches_onebot_files_with_file_ids(self):
+        async def action(name, **params):
+            if name == "get_msg":
+                return {
+                    "data": {
+                        "message": [
+                            {
+                                "type": "file",
+                                "data": {
+                                    "file_name": "photo.png",
+                                    "file_id": "photo",
+                                    "file_size": 100,
+                                },
+                            },
+                            {
+                                "type": "file",
+                                "data": {"file_name": "voice.mp3", "file_id": "voice"},
+                            },
+                            {
+                                "type": "file",
+                                "data": {"file_name": "clip.mp4", "file_id": "clip"},
+                            },
+                        ]
+                    }
+                }
+            if name == "get_file":
+                raise RuntimeError("unsupported API")
+            return {"data": {"url": "https://qq.test/download?id=" + params["file_id"]}}
+
+        event = Event([Reply(reply_id="123")])
+        event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=action))
+        _, images, audios, videos = await self.plugin._video_command_inputs(
+            event, "animate", "自定义"
+        )
+        self.assertEqual(images, ["https://qq.test/download?id=photo"])
+        self.assertEqual(audios, ["https://qq.test/download?id=voice"])
+        self.assertEqual(videos, ["https://qq.test/download?id=clip"])
 
     async def test_command_rejects_media_urls_in_text(self):
         url = "https://m.test/ref.wav?signature=abc&expires=123"
@@ -431,7 +555,8 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(len(event.sent), 0)
         self.assertEqual(len(result), 1)
-        self.assertIn("https://media.test/tool-fallback.mp4", result[0][0].text)
+        self.assertIsInstance(result[0], str)
+        self.assertIn("https://media.test/tool-fallback.mp4", result[0])
 
     async def test_llm_image_fallback_is_returned_to_bot_without_plugin_text(self):
         event = Event([])
@@ -479,7 +604,9 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(event.sent[0]), 1)
         self.assertIsInstance(event.sent[0][0], Image)
 
-    async def test_generate_image_tool_returns_fallback_to_bot_without_sending_text(self):
+    async def test_generate_image_tool_returns_fallback_to_bot_without_sending_text(
+        self,
+    ):
         self.plugin.conf.update({"enable_llm_tool": True, "model": "image"})
         self.plugin.api_mgr = SimpleNamespace(
             call_api=AsyncMock(
@@ -495,12 +622,12 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         )
         event = Event([Image("https://media.test/input.png")])
         result = [
-            reply
-            async for reply in self.plugin.generate_image(event, "edit this")
+            reply async for reply in self.plugin.generate_image(event, "edit this")
         ]
         self.assertEqual(len(event.sent), 0)
         self.assertEqual(len(result), 1)
-        self.assertIn("https://media.test/tool-image-fallback.png", result[0][0].text)
+        self.assertIsInstance(result[0], str)
+        self.assertIn("https://media.test/tool-image-fallback.png", result[0])
 
     async def test_local_download_failure_falls_back_to_upstream_url(self):
         event = Event([])
@@ -518,7 +645,9 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, [])
         self.assertEqual(len(event.sent), 2)  # progress notice + one fallback message
-        self.assertIn("https://media.test/download-fallback.mp4", event.sent[-1][0].text)
+        self.assertIn(
+            "https://media.test/download-fallback.mp4", event.sent[-1][0].text
+        )
         self.assertIn("AutoDL 未返回明确时间", event.sent[-1][0].text)
 
     async def test_media_data_url_type_and_local_magic_validation(self):
@@ -529,3 +658,22 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             path.write_bytes(b"#!SILK_V3")
             with self.assertRaisesRegex(router.VideoError, "SILK"):
                 await inputs.resolve_media(str(path), "audio")
+
+    async def test_quoted_audio_video_file_uris_keep_absolute_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "QQ voice.wav"
+            audio.write_bytes(b"RIFF" + b"\x00" * 4 + b"WAVEfmt " + b"\x00" * 24)
+            video = Path(tmp) / "QQ video.mp4"
+            video.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"\x00" * 24)
+            for segments in (
+                [Record(audio.as_uri()), Video(video.as_uri())],
+                [
+                    File(audio.name, file_=audio.as_uri()),
+                    File(video.name, file_=video.as_uri()),
+                ],
+            ):
+                audios, videos = await inputs.collect_media(
+                    Event([Reply(segments)]), self.plugin.img_mgr, quoted_only=True
+                )
+                self.assertTrue(audios[0].startswith("data:audio/wav;base64,"))
+                self.assertTrue(videos[0].startswith("data:video/mp4;base64,"))

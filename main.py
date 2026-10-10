@@ -422,7 +422,12 @@ class ImageGeneratorPlugin(Star):
                 await event.send(event.chain_result(chain))
                 return []
             except Exception as exc:  # noqa: BLE001
-                logger.warning("本地图片消息发送失败（第 %d/%d 次）：%s", attempt + 1, attempts, exc)
+                logger.warning(
+                    "本地图片消息发送失败（第 %d/%d 次）：%s",
+                    attempt + 1,
+                    attempts,
+                    exc,
+                )
                 if attempt + 1 < attempts:
                     await asyncio.sleep(min(1.0 * (attempt + 1), 3.0))
         return await self._deliver_image_fallback(
@@ -529,6 +534,10 @@ class ImageGeneratorPlugin(Star):
 
     async def _video_command_inputs(self, event, prompt, preset_name):
         options = parse_video_command(prompt)
+        # Ordinary command images are references, regardless of image count
+        # or the administrator's legacy frame default.
+        if options.reference_mode == "auto":
+            options.reference_mode = "reference"
         if (
             options.images
             or options.audios
@@ -552,9 +561,7 @@ class ImageGeneratorPlugin(Star):
         )
         # Audio/video are accepted from a quoted standalone message. This
         # keeps command text and file uploads separate on QQ.
-        audios, videos = await collect_media(
-            event, self.img_mgr, quoted_only=True
-        )
+        audios, videos = await collect_media(event, self.img_mgr, quoted_only=True)
         return options, images, audios, videos
 
     async def _generate_video(
@@ -716,14 +723,17 @@ class ImageGeneratorPlugin(Star):
     ):
         """按图片、音频、视频的组合自动选择管理员配置的模型生成视频，成功仅发送视频。
 
-        媒体不需要填写 URL；工具会读取当前消息和引用中的 QQ 图片、文件、语音和视频公网链接。
+        媒体不需要填写 URL；工具会读取当前消息和引用中的 QQ 图片、文件、语音和视频。
+        用户说“图生视频”“让图中人物动起来”或“跳舞”，应选 reference（或省略），一图和多图都一样。
+        first_frame 表示把图片固定为视频第一帧，first_last_frame 表示固定第一帧和最后一帧；
+        不要仅因图片数量选择这两种模式。根据用户意图合理选择，未配置的路线可改用普通 reference。
 
         Args:
             prompt(string): 视频提示词；图片＋视频/图片音频同步可留空。
             duration(number): 正整数秒；0 使用提示词或配置时长。10秒以上可自动选择配置的长视频模型。图片＋视频路线通常跟随参考视频时长。
             resolution(string): 可选分辨率档位，如480p、768p；留空使用所选路线的配置值，不自动降档。
             aspect_ratio(string): 可选16:9、9:16、1:1、4:3、3:4、21:9、adaptive；留空使用配置值。
-            reference_mode(string): auto由插件按媒体和提示词选择；一段提示词配一张或多张图片优先使用普通reference图生视频。只有明确需要首帧语义时才填写first_frame，只有明确需要首尾帧语义时才填写first_last_frame；这两个显式值会覆盖自动选择，且首尾帧不能带音频或视频。
+            reference_mode(string): 可选，默认auto。普通图生视频、人物运动/跳舞用reference或省略；一张/多张图片都不是选择首帧/首尾帧的理由。仅需固定起始画面时选first_frame，仅需固定起始和结束画面时选first_last_frame；显式值覆盖自动选择，且帧模式不能混用音频或视频。
             seed(number): -2使用配置，-1不发送种子，AutoDL最大999999999999999，Seedance最大2147483647；最小值由模型决定。
             generate_audio(string): auto使用配置，true/false控制Seedance同时生成音频。
             use_message_media(boolean): 默认true，缺少对应显式媒体时读取当前/引用消息和@头像；纯文生且不希望使用附带媒体时设false。
@@ -775,7 +785,9 @@ class ImageGeneratorPlugin(Star):
             options=options,
         )
         if result:
-            yield event.chain_result(result)
+            # AstrBot sends MessageEventResult directly to the chat. A string
+            # is returned to the LLM instead, including failures and URL fallbacks.
+            yield "\n".join(part.text for part in result if isinstance(part, Plain))
 
     @filter.command("生视频", aliases={"生成视频"}, prefix_optional=False)
     async def video_command(self, event: AstrMessageEvent):
@@ -904,7 +916,7 @@ class ImageGeneratorPlugin(Star):
             tool_call=True,
         )
         if result:
-            yield event.chain_result(result)
+            yield "\n".join(part.text for part in result if isinstance(part, Plain))
 
     @filter.command("生图", aliases={"画图"}, prefix_optional=False)
     async def draw_command(self, event: AstrMessageEvent):

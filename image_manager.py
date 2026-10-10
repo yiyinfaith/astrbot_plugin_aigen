@@ -272,19 +272,94 @@ class ImageManager:
         if not bot:
             return []
 
-        action = getattr(bot, "call_action", None) or getattr(getattr(bot, "api", None), "call_action", None)
+        action = getattr(bot, "call_action", None) or getattr(
+            getattr(bot, "api", None), "call_action", None
+        )
         if callable(action):
             try:
                 payload = await action("get_msg", message_id=int(reply_id))
                 payload = payload.get("data", payload)
                 from astrbot.api import message_components
+
                 components = []
                 for item in payload.get("message", []):
                     if not isinstance(item, dict):
                         continue
-                    cls = getattr(message_components, {"image": "Image", "record": "Record", "video": "Video", "file": "File", "text": "Plain", "at": "At"}.get(item.get("type"), ""), None)
+                    cls = getattr(
+                        message_components,
+                        {
+                            "image": "Image",
+                            "record": "Record",
+                            "video": "Video",
+                            "file": "File",
+                            "text": "Plain",
+                            "at": "At",
+                        }.get(item.get("type"), ""),
+                        None,
+                    )
                     if cls:
-                        components.append(cls(**item.get("data", {})))
+                        data = item.get("data", {})
+                        if item.get("type") == "file":
+                            # OneBot file_id/file_name are not AstrBot File
+                            # constructor arguments. Resolve the download URL
+                            # before constructing a quoted file component.
+                            file_id = data.get("file_id") or data.get("id")
+                            url = data.get("url", "")
+                            if not url and file_id:
+                                actions = [("get_file", {"file_id": file_id})]
+                                group_id = getattr(
+                                    context, "get_group_id", lambda: ""
+                                )()
+                                if group_id:
+                                    actions.append(
+                                        (
+                                            "get_group_file_url",
+                                            {
+                                                "group_id": int(group_id)
+                                                if str(group_id).isdigit()
+                                                else group_id,
+                                                "file_id": file_id,
+                                            },
+                                        )
+                                    )
+                                else:
+                                    actions.append(
+                                        ("get_private_file_url", {"file_id": file_id})
+                                    )
+                                for name, params in actions:
+                                    try:
+                                        result = await action(name, **params)
+                                        result = result.get("data", result)
+                                        candidate = (
+                                            result.get("url")
+                                            or result.get("file")
+                                            or ""
+                                        )
+                                        if candidate:
+                                            url = str(candidate)
+                                            break
+                                    except Exception as exc:  # noqa: BLE001
+                                        logger.debug(
+                                            "Quoted file lookup failed: %s", exc
+                                        )
+                            components.append(
+                                cls(
+                                    name=data.get("name")
+                                    or data.get("file_name")
+                                    or data.get("file")
+                                    or "file",
+                                    url=url
+                                    if url.startswith(("http://", "https://"))
+                                    else "",
+                                    file=""
+                                    if url.startswith(("http://", "https://"))
+                                    else (
+                                        url or data.get("file") or str(file_id or "")
+                                    ),
+                                )
+                            )
+                        else:
+                            components.append(cls(**data))
                 return components
             except Exception as exc:
                 logger.debug("Could not fetch OneBot quoted media: %s", exc)
@@ -345,13 +420,17 @@ class ImageManager:
             getattr(segment, "mime_type", ""),
             cls._image_component_source(segment),
         ]
-        text = " ".join(str(value or "").lower() for value in values)
-        return "image/" in text or bool(
-            re.search(r"\.(?:jpg|jpeg|png|gif|webp|bmp|avif)(?:[?#]|$)", text)
+        return any(
+            "image/" in str(value or "").lower()
+            or re.search(
+                r"\.(?:jpg|jpeg|png|gif|webp|bmp|avif)(?:[?#]|$)",
+                str(value or "").lower(),
+            )
+            for value in values
         )
 
     async def _quoted_image_sources(self, event, reply) -> list[str]:
-        """Resolve quoted image tokens to URLs without downloading image bytes."""
+        """Resolve quoted image tokens to URLs or AstrBot cache paths."""
         try:
             from astrbot.core.utils.quoted_message.image_resolver import ImageResolver
             from astrbot.core.utils.quoted_message_parser import (
@@ -368,7 +447,7 @@ class ImageManager:
             return []
 
     async def _resolve_image_source(self, event, source: str) -> str:
-        """Resolve QQ image/file identifiers to public URLs.
+        """Resolve QQ image/file identifiers to URLs or local cache paths.
 
         AstrBot's OneBot image resolver handles the several identifier shapes
         used by QQ (``file``, ``file_id``, ``id`` and bare tokens).  Reusing it
@@ -381,6 +460,11 @@ class ImageManager:
             return ""
         if source.startswith(("http://", "https://", "data:", "base64://", "file://")):
             return source
+        try:
+            if Path(source).is_file():
+                return source
+        except OSError:
+            pass
         try:
             from astrbot.core.utils.quoted_message.image_resolver import ImageResolver
 
@@ -401,7 +485,7 @@ class ImageManager:
         include_sender_avatar: bool = False,
         strict: bool = False,
     ) -> List[str]:
-        """Collect image URLs from Image/File components and quoted messages."""
+        """Collect usable image sources from components and quoted messages."""
         quoted: list[str] = []
         message: list[str] = []
         at_images: list[str] = []
@@ -444,9 +528,12 @@ class ImageManager:
                     if not found:
                         for source in await self._quoted_image_sources(event, seg):
                             add(quoted, source)
+                            found = True
                     if not found and context and getattr(seg, "id", None):
                         try:
-                            components = await self._fetch_reply_components(context, seg.id)
+                            components = await self._fetch_reply_components(
+                                context, seg.id
+                            )
                             for child in components:
                                 if self._is_image_component(child):
                                     seen_image_component = True
@@ -485,7 +572,9 @@ class ImageManager:
         if max_images is not None and max_images > 0:
             result = result[:max_images]
         if strict and not result and seen_image_component:
-            raise ValueError("参考图片或 @头像读取失败，请检查媒体是否可访问；未提交生成任务。")
+            raise ValueError(
+                "参考图片或 @头像读取失败，请检查媒体是否可访问；未提交生成任务。"
+            )
         return result
 
     @staticmethod
@@ -783,9 +872,13 @@ class ImageManager:
                 elif isinstance(result, Exception):
                     logger.warning(f"Image extraction error: {result}")
                     if strict:
-                        raise ValueError("参考图片或 @头像读取失败，请检查媒体是否可访问；未提交生成任务。") from result
+                        raise ValueError(
+                            "参考图片或 @头像读取失败，请检查媒体是否可访问；未提交生成任务。"
+                        ) from result
                 elif strict:
-                    raise ValueError("参考图片或 @头像读取失败，请检查媒体是否可访问；未提交生成任务。")
+                    raise ValueError(
+                        "参考图片或 @头像读取失败，请检查媒体是否可访问；未提交生成任务。"
+                    )
             return images
 
         if max_images == 1:

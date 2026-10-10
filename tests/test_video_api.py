@@ -1,4 +1,6 @@
+import base64
 import importlib
+import io
 import json
 import tempfile
 import unittest
@@ -6,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from aiohttp import web
+from PIL import Image
 from test_api_manager_urls import PACKAGE, load_api_manager
 
 load_api_manager()
@@ -13,6 +16,37 @@ module = importlib.import_module(PACKAGE + ".video_api_manager")
 VideoApiManager, VideoError = module.VideoApiManager, module.VideoError
 VideoDownloadError = module.VideoDownloadError
 MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2" + b"\0" * 32
+
+
+class VideoImageSourceTest(unittest.TestCase):
+    def test_actual_png_bytes_cache_paths_and_encoded_sources(self):
+        out = io.BytesIO()
+        Image.new("RGB", (2, 2), "red").save(out, format="PNG")
+        raw = out.getvalue()
+        encoded = base64.b64encode(raw).decode("ascii")
+        expected = "data:image/png;base64," + encoded
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "QQ 图片 #1.png"
+            path.write_bytes(raw)
+            for source in (
+                raw,
+                bytearray(raw),
+                str(path),
+                path.as_uri(),
+                "base64://" + encoded,
+                expected,
+            ):
+                with self.subTest(source_type=type(source).__name__):
+                    self.assertEqual(module.image_source(source), expected)
+            path.write_bytes(b"not an image")
+            with self.assertRaisesRegex(VideoError, "格式无法识别"):
+                module.image_source(str(path))
+
+    def test_public_qq_url_is_preserved_and_unresolved_token_is_rejected(self):
+        url = "https://multimedia.nt.qq.com.cn/download?appid=1407&rkey=signed"
+        self.assertEqual(module.image_source(url), url)
+        with self.assertRaisesRegex(VideoError, "重新发送或引用图片"):
+            module.image_source("UNRESOLVED_QQ_IMAGE_TOKEN.jpg")
 
 
 class VideoPayloadTest(unittest.TestCase):

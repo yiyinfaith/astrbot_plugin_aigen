@@ -6,9 +6,8 @@ import asyncio
 import base64
 import re
 from pathlib import Path
-from urllib.parse import unquote
 
-from .video_api_manager import media_sources
+from .video_api_manager import local_media_path, media_sources
 from .video_router import VideoError
 
 MEDIA_URL = re.compile(
@@ -54,7 +53,11 @@ def component_media_kind(segment) -> str:
         return "audio"
     if "video/" in text or any(ext in text for ext in VIDEO_EXTENSIONS):
         return "video"
-    return "image" if "image/" in text or any(ext in text for ext in IMAGE_EXTENSIONS) else ""
+    return (
+        "image"
+        if "image/" in text or any(ext in text for ext in IMAGE_EXTENSIONS)
+        else ""
+    )
 
 
 def text_media(text: str) -> tuple[list[str], list[str]]:
@@ -112,10 +115,9 @@ async def resolve_media(source: str, kind: str, event=None) -> str:
             raise VideoError("参考媒体 Base64 无效。") from exc
         suffix = ""
     else:
-        local = unquote(source[8:]) if source.startswith("file:///") else source
-        path = Path(local)
+        path = local_media_path(source)
         if not path.is_file():
-            raise VideoError(f"无法读取参考{kind}；请提供公开 URL 或本地有效文件。")
+            raise VideoError(f"无法读取参考{kind}；请重新发送并引用媒体文件。")
         if path.stat().st_size > 20 * 1024 * 1024:
             raise VideoError("内联参考媒体超过 20MB，请提供公开 URL。")
         raw = await asyncio.to_thread(path.read_bytes)

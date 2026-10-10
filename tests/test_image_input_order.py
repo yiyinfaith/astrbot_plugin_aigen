@@ -2,7 +2,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,10 +24,10 @@ def _install_astrbot_stubs():
             self.path = None
 
     class File:
-        def __init__(self, name, url="", file_=""):
+        def __init__(self, name, url="", file_="", file=""):
             self.name = name
             self.url = url
-            self.file_ = file_
+            self.file_ = file_ or file
 
         @property
         def file(self):
@@ -185,6 +185,28 @@ class ImageInputOrderTest(unittest.IsolatedAsyncioTestCase):
             ["https://qq.test/current-token", "https://qq.test/quoted-token"],
         )
         self.assertEqual(self.manager._resolve_image_source.await_count, 2)
+
+    async def test_astrbot_resolver_cache_path_is_not_discarded_or_stringified(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cached.png"
+            path.write_bytes(b"resolved image")
+            resolve = AsyncMock(return_value=[str(path)])
+            resolver_module = types.ModuleType(
+                "astrbot.core.utils.quoted_message.image_resolver"
+            )
+            resolver_module.ImageResolver = lambda event: types.SimpleNamespace(
+                resolve_for_llm=resolve
+            )
+            current = Image("")
+            current.file = "qq-file-token"
+            with patch.dict(sys.modules, {resolver_module.__name__: resolver_module}):
+                result = await self.manager.extract_image_sources_from_event(
+                    FakeEvent([current]), strict=True
+                )
+            self.assertEqual(result, [str(path)])
+            resolve.assert_awaited_once_with(["qq-file-token"])
 
 
 if __name__ == "__main__":

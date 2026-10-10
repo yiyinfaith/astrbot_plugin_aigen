@@ -11,7 +11,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import aiohttp
 from PIL import Image
@@ -199,8 +199,21 @@ def image_data_url(raw: bytes) -> str:
     return f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
 
 
+def local_media_path(source: str) -> Path:
+    """Decode file URIs without dropping the leading slash on Linux."""
+    if not source.startswith("file://"):
+        return Path(source)
+    parsed = urlsplit(source)
+    local_path = unquote(parsed.path)
+    if parsed.netloc and parsed.netloc != "localhost":
+        local_path = f"//{parsed.netloc}{local_path}"
+    if len(local_path) > 2 and local_path[0] == "/" and local_path[2] == ":":
+        local_path = local_path[1:]
+    return Path(local_path)
+
+
 def image_source(value: bytes | str) -> str:
-    """Preserve QQ's public image URL; encode only byte/local inputs."""
+    """Normalize QQ image URLs, bytes, and downloaded local image paths."""
     if isinstance(value, (bytes, bytearray)):
         return image_data_url(bytes(value))
     source = str(value or "").strip()
@@ -212,10 +225,15 @@ def image_source(value: bytes | str) -> str:
         except ValueError as exc:
             raise VideoError("参考图片 Base64 无效。") from exc
         return image_data_url(raw)
-    if source.startswith("file://"):
-        raw = Path(source[8:]).read_bytes()
-        return image_data_url(raw)
-    raise VideoError("参考图片必须来自消息公网 URL。")
+    path = local_media_path(source)
+    try:
+        if path.is_file():
+            return image_data_url(path.read_bytes())
+    except OSError as exc:
+        raise VideoError("无法读取 QQ 参考图片；未提交生成任务。") from exc
+    raise VideoError(
+        "QQ 参考图片没有解析成可用链接或本地图片；请重新发送或引用图片，未提交生成任务。"
+    )
 
 
 def media_sources(value: str, kind: str = "") -> list[str]:
@@ -442,7 +460,11 @@ class VideoApiManager(ApiManager):
                 raise VideoError(
                     f"模型 {model} 提示词最多 {text_limit} 字符，当前 {len(prompt)}；未提交收费任务。"
                 )
-        elif not prompt.strip() and mode != "dashscope" and not (images or audios or videos):
+        elif (
+            not prompt.strip()
+            and mode != "dashscope"
+            and not (images or audios or videos)
+        ):
             raise VideoError("请提供视频生成提示词。")
         headers = {
             "Accept": "application/json, text/event-stream"
@@ -626,7 +648,12 @@ class VideoApiManager(ApiManager):
             # DashScope Wan has several generations of request shapes.  Keep
             # the legacy action-move payload byte-compatible, while using the
             # current generic Wan input names for every other model/media mix.
-            if model == "wan2.2-animate-move" and len(images) == 1 and len(videos) == 1 and not audios:
+            if (
+                model == "wan2.2-animate-move"
+                and len(images) == 1
+                and len(videos) == 1
+                and not audios
+            ):
                 body = {
                     "model": model,
                     "input": {
