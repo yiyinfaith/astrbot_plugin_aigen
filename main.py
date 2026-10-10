@@ -277,6 +277,7 @@ class ImageGeneratorPlugin(Star):
         include_result_text: bool = True,
         image_options: dict[str, object] | None = None,
         dispatch_result: bool = False,
+        tool_call: bool = False,
     ) -> list[Any]:
         """Call the selected API mode, record usage, and build a reply.
 
@@ -314,7 +315,10 @@ class ImageGeneratorPlugin(Star):
             logger.warning("图片本地下载失败，准备使用公网链接回退：%s", exc)
             if dispatch_result:
                 return await self._deliver_image_fallback(
-                    event, exc.url, exc.url_expires_at
+                    event,
+                    exc.url,
+                    exc.url_expires_at,
+                    send_message=not tool_call,
                 )
             result = str(exc)
         except Exception as exc:  # noqa: BLE001
@@ -346,6 +350,7 @@ class ImageGeneratorPlugin(Star):
                 include_result_text,
                 suffix,
                 f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}",
+                send_fallback_message=not tool_call,
             )
         return reply
 
@@ -357,9 +362,14 @@ class ImageGeneratorPlugin(Star):
         return "链接失效时间：上游未返回明确时间，请以上游链接有效期为准"
 
     async def _deliver_image_fallback(
-        self, event: AstrMessageEvent, url: str, expiry: str = ""
+        self,
+        event: AstrMessageEvent,
+        url: str,
+        expiry: str = "",
+        *,
+        send_message: bool = True,
     ) -> list[Any]:
-        """Send one concise public-link message when an image cannot be attached."""
+        """Deliver or return one concise public-link fallback message."""
         url = str(url or "").strip()
         if not url:
             return [Plain("图片已生成，但发送失败，接口未提供公网链接。")]
@@ -370,6 +380,8 @@ class ImageGeneratorPlugin(Star):
                 f"{self._image_expiry_note(expiry)}"
             )
         ]
+        if not send_message:
+            return fallback_chain
         try:
             await event.send(event.chain_result(fallback_chain))
             return []
@@ -386,6 +398,7 @@ class ImageGeneratorPlugin(Star):
         include_result_text: bool = True,
         suffix: str = "",
         success_text: str = "",
+        send_fallback_message: bool = True,
     ) -> list[Any]:
         """Retry local image delivery before falling back to the public URL."""
         chain: list[Any] = [Image.fromBytes(result)]
@@ -412,7 +425,12 @@ class ImageGeneratorPlugin(Star):
                 logger.warning("本地图片消息发送失败（第 %d/%d 次）：%s", attempt + 1, attempts, exc)
                 if attempt + 1 < attempts:
                     await asyncio.sleep(min(1.0 * (attempt + 1), 3.0))
-        return await self._deliver_image_fallback(event, source_url, source_expiry)
+        return await self._deliver_image_fallback(
+            event,
+            source_url,
+            source_expiry,
+            send_message=send_fallback_message,
+        )
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=5)
     async def on_preset_request(self, event: AstrMessageEvent, ctx=None):
@@ -577,7 +595,10 @@ class ImageGeneratorPlugin(Star):
             logger.warning("视频本地下载失败，准备使用公网链接回退：%s", exc)
             if dispatch_result:
                 return await self._deliver_video_fallback(
-                    event, exc.url, exc.url_expires_at
+                    event,
+                    exc.url,
+                    exc.url_expires_at,
+                    send_message=not tool_call,
                 )
             return [Plain(str(exc))]
         except (VideoError, aiohttp.ClientError, OSError, ValueError) as exc:
@@ -591,7 +612,12 @@ class ImageGeneratorPlugin(Star):
         # was already sent before the paid request started.
         reply = [Video.fromFileSystem(str(result.path))]
         if dispatch_result:
-            return await self._deliver_video_result(event, result, reply)
+            return await self._deliver_video_result(
+                event,
+                result,
+                reply,
+                send_fallback_message=not tool_call,
+            )
         return reply
 
     @staticmethod
@@ -602,9 +628,14 @@ class ImageGeneratorPlugin(Star):
         return "链接失效时间：AutoDL 未返回明确时间，请以 AutoDL 上游链接有效期为准"
 
     async def _deliver_video_fallback(
-        self, event: AstrMessageEvent, url: str, expiry: str = ""
+        self,
+        event: AstrMessageEvent,
+        url: str,
+        expiry: str = "",
+        *,
+        send_message: bool = True,
     ) -> list[Any]:
-        """Send one concise public-link message when a video cannot be attached."""
+        """Deliver or return one concise public-link fallback message."""
         url = str(url or "").strip()
         if not url:
             return [Plain("视频已生成，但发送失败，接口未提供公网链接。")]
@@ -615,6 +646,8 @@ class ImageGeneratorPlugin(Star):
                 f"{self._video_expiry_note(expiry)}"
             )
         ]
+        if not send_message:
+            return fallback_chain
         try:
             await event.send(event.chain_result(fallback_chain))
             return []
@@ -624,7 +657,12 @@ class ImageGeneratorPlugin(Star):
             return fallback_chain
 
     async def _deliver_video_result(
-        self, event: AstrMessageEvent, result, local_chain: list[Any]
+        self,
+        event: AstrMessageEvent,
+        result,
+        local_chain: list[Any],
+        *,
+        send_fallback_message: bool = True,
     ) -> list[Any]:
         """Retry a real video delivery before falling back to its public URL."""
         attempts = max(
@@ -660,6 +698,7 @@ class ImageGeneratorPlugin(Star):
             event,
             getattr(result, "url", ""),
             getattr(result, "url_expires_at", ""),
+            send_message=send_fallback_message,
         )
 
     @filter.llm_tool(name="generate_video")
@@ -684,7 +723,7 @@ class ImageGeneratorPlugin(Star):
             duration(number): 正整数秒；0 使用提示词或配置时长。10秒以上可自动选择配置的长视频模型。图片＋视频路线通常跟随参考视频时长。
             resolution(string): 可选分辨率档位，如480p、768p；留空使用所选路线的配置值，不自动降档。
             aspect_ratio(string): 可选16:9、9:16、1:1、4:3、3:4、21:9、adaptive；留空使用配置值。
-            reference_mode(string): auto使用配置，reference为普通参考，first_frame需一图，first_last_frame需两图；首尾帧不能带音频或视频。
+            reference_mode(string): auto由插件按媒体和提示词选择；一段提示词配一张或多张图片优先使用普通reference图生视频。只有明确需要首帧语义时才填写first_frame，只有明确需要首尾帧语义时才填写first_last_frame；这两个显式值会覆盖自动选择，且首尾帧不能带音频或视频。
             seed(number): -2使用配置，-1不发送种子，AutoDL最大999999999999999，Seedance最大2147483647；最小值由模型决定。
             generate_audio(string): auto使用配置，true/false控制Seedance同时生成音频。
             use_message_media(boolean): 默认true，缺少对应显式媒体时读取当前/引用消息和@头像；纯文生且不希望使用附带媒体时设false。
@@ -862,6 +901,7 @@ class ImageGeneratorPlugin(Star):
             include_result_text=False,
             image_options=image_options,
             dispatch_result=True,
+            tool_call=True,
         )
         if result:
             yield event.chain_result(result)

@@ -9,6 +9,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from test_api_manager_urls import PACKAGE, load_api_manager
@@ -172,6 +173,7 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, [])
         self.assertEqual(len(event.sent), 1)
         self.assertTrue(any(isinstance(chain[0], Video) for chain in event.sent))
+        self.assertTrue(all(isinstance(chain[0], Video) for chain in event.sent))
         args = self.plugin.video_mgr.generate.await_args.args
         self.assertEqual(
             args[1:4], (["https://i.test/ref.png"], ["https://m.test/ref.wav"], [])
@@ -219,6 +221,20 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
                 ["https://qq.test/voice.mp3"],
                 ["https://qq.test/clip.mp4"],
             ),
+        )
+
+    async def test_qq_record_and_video_tokens_resolve_to_adapter_urls(self):
+        async def call_action(name, **kwargs):
+            return {"data": {"url": f"https://qq.test/{name}.media"}}
+
+        event = Event([Record("record-token"), Video("video-token")])
+        event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=call_action))
+        audios, videos = await inputs.collect_media(event, self.plugin.img_mgr)
+        self.assertEqual(audios, ["https://qq.test/get_record.media"])
+        self.assertEqual(videos, ["https://qq.test/get_video.media"])
+        self.assertEqual(
+            [call.args[0] for call in event.bot.call_action.await_args_list],
+            ["get_record", "get_video"],
         )
 
     async def test_llm_can_request_text_only_even_with_message_attachments(self):
@@ -397,6 +413,94 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(event.sent), 1)
         self.assertIn("https://media.test/image.png", event.sent[0][0].text)
         self.assertIn("2026-10-10 12:00:00 UTC", event.sent[0][0].text)
+
+    async def test_llm_video_fallback_is_returned_to_bot_without_plugin_text(self):
+        event = Event([])
+        event.fail_video_send_always = True
+        self.plugin.video_conf["video_delivery_retries"] = 2
+        self.plugin.video_mgr.generate.return_value = api.VideoResult(
+            Path("generated.mp4"),
+            "task",
+            "routed-model",
+            "https://media.test/tool-fallback.mp4",
+            "2026-10-10 12:00:00 UTC",
+        )
+        result = [
+            reply
+            async for reply in self.plugin.generate_video(event, "cloud", duration=1)
+        ]
+        self.assertEqual(len(event.sent), 0)
+        self.assertEqual(len(result), 1)
+        self.assertIn("https://media.test/tool-fallback.mp4", result[0][0].text)
+
+    async def test_llm_image_fallback_is_returned_to_bot_without_plugin_text(self):
+        event = Event([])
+        event.fail_image_send_always = True
+        self.plugin.conf["image_delivery_retries"] = 2
+        result = await self.plugin._deliver_image_result(
+            event,
+            b"image-bytes",
+            "https://media.test/tool-fallback.png",
+            "2026-10-10 12:00:00 UTC",
+            include_result_text=False,
+            send_fallback_message=False,
+        )
+        self.assertEqual(len(event.sent), 0)
+        self.assertEqual(len(result), 1)
+        self.assertIn("https://media.test/tool-fallback.png", result[0].text)
+
+    async def test_llm_image_success_sends_media_without_plugin_text(self):
+        event = Event([])
+        result = await self.plugin._deliver_image_result(
+            event,
+            b"image-bytes",
+            include_result_text=False,
+        )
+        self.assertEqual(result, [])
+        self.assertEqual(len(event.sent), 1)
+        self.assertEqual(len(event.sent[0]), 1)
+        self.assertIsInstance(event.sent[0][0], Image)
+
+    async def test_generate_image_tool_sends_only_media(self):
+        self.plugin.conf.update({"enable_llm_tool": True, "model": "image"})
+        self.plugin.api_mgr = SimpleNamespace(
+            call_api=AsyncMock(return_value=b"image-bytes")
+        )
+        self.plugin.img_mgr.optimize_output_image = AsyncMock(
+            side_effect=lambda raw: raw
+        )
+        event = Event([Image("https://media.test/input.png")])
+        result = [
+            reply
+            async for reply in self.plugin.generate_image(event, "make it cinematic")
+        ]
+        self.assertEqual(result, [])
+        self.assertEqual(len(event.sent), 1)
+        self.assertEqual(len(event.sent[0]), 1)
+        self.assertIsInstance(event.sent[0][0], Image)
+
+    async def test_generate_image_tool_returns_fallback_to_bot_without_sending_text(self):
+        self.plugin.conf.update({"enable_llm_tool": True, "model": "image"})
+        self.plugin.api_mgr = SimpleNamespace(
+            call_api=AsyncMock(
+                side_effect=image_api.ImageDownloadError(
+                    "download failed",
+                    "https://media.test/tool-image-fallback.png",
+                    "2026-10-10 12:00:00 UTC",
+                )
+            )
+        )
+        self.plugin.img_mgr.optimize_output_image = AsyncMock(
+            side_effect=lambda raw: raw
+        )
+        event = Event([Image("https://media.test/input.png")])
+        result = [
+            reply
+            async for reply in self.plugin.generate_image(event, "edit this")
+        ]
+        self.assertEqual(len(event.sent), 0)
+        self.assertEqual(len(result), 1)
+        self.assertIn("https://media.test/tool-image-fallback.png", result[0][0].text)
 
     async def test_local_download_failure_falls_back_to_upstream_url(self):
         event = Event([])

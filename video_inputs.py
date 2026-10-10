@@ -166,13 +166,14 @@ async def collect_media(
         for seg in chain:
             name = type(seg).__name__
             if name == "Reply":
-                chain = getattr(
+                nested_chain = getattr(
                     seg, "chain", None
                 ) or await image_manager._fetch_reply_components(
                     event, getattr(seg, "id", None)
                 )
                 await collect(
-                    [item for item in chain if type(item).__name__ != "Reply"], True
+                    [item for item in nested_chain if type(item).__name__ != "Reply"],
+                    True,
                 )
             elif name in {"Record", "Audio", "Video", "File"}:
                 kind = component_media_kind(seg)

@@ -125,6 +125,35 @@ class RoutingTest(unittest.TestCase):
                 self.config, ["a"], [], [], 1, {"reference_mode": "first_last_frame"}
             )
 
+    def test_prompt_with_one_or_more_images_defaults_to_reference_mode(self):
+        self.config["reference_mode"] = "first_frame"
+        for images in (["a"], ["a", "b"]):
+            with self.subTest(image_count=len(images)):
+                route, result = select_route(
+                    self.config, images, [], [], 1, prompt="人物缓慢转身"
+                )
+                self.assertEqual(route, "image_to_video")
+                self.assertEqual(result["reference_mode"], "reference")
+
+    def test_explicit_frame_mode_overrides_prompt_image_default(self):
+        self.config["routes"]["first_frame"]["model"] = "first-frame-model"
+        for mode, images, expected_route in (
+            ("first_frame", ["a"], "first_frame"),
+            ("first_last_frame", ["a", "b"], "first_last_frame"),
+        ):
+            with self.subTest(mode=mode):
+                route, result = select_route(
+                    self.config,
+                    images,
+                    [],
+                    [],
+                    1,
+                    {"reference_mode": mode},
+                    prompt="人物缓慢转身",
+                )
+                self.assertEqual(route, expected_route)
+                self.assertEqual(result["reference_mode"], mode)
+
     def test_per_task_overrides_do_not_mutate_shared_config(self):
         before = copy.deepcopy(self.config)
         _, result = select_route(

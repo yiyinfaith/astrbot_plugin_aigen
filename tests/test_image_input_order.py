@@ -2,7 +2,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
-
+from unittest.mock import AsyncMock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -70,7 +70,7 @@ def _install_astrbot_stubs():
 
 Image, Reply, At, File = _install_astrbot_stubs()
 sys.path.insert(0, str(ROOT))
-from image_manager import ImageManager  # noqa: E402
+from image_manager import ImageManager
 
 
 class FakeEvent:
@@ -167,6 +167,24 @@ class ImageInputOrderTest(unittest.IsolatedAsyncioTestCase):
             FakeEvent([File("photo.png", url="https://qq.test/photo.png")])
         )
         self.assertEqual(result, ["https://qq.test/photo.png"])
+
+    async def test_image_identifiers_are_resolved_for_current_and_quoted_media(self):
+        async def resolve_source(event, source):
+            return f"https://qq.test/{source}"
+
+        self.manager._resolve_image_source = AsyncMock(side_effect=resolve_source)
+        current = Image("")
+        current.file = "current-token"
+        quoted = Image("")
+        quoted.file = "quoted-token"
+        result = await self.manager.extract_image_sources_from_event(
+            FakeEvent([current, Reply([quoted])])
+        )
+        self.assertEqual(
+            result,
+            ["https://qq.test/current-token", "https://qq.test/quoted-token"],
+        )
+        self.assertEqual(self.manager._resolve_image_source.await_count, 2)
 
 
 if __name__ == "__main__":

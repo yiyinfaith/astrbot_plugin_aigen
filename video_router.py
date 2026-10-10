@@ -152,11 +152,21 @@ def select_route(
     videos: list,
     seconds: int,
     overrides: dict | None = None,
+    prompt: str = "",
 ) -> tuple[str, dict]:
     overrides = overrides or {}
-    reference = overrides.get(
-        "reference_mode", config.get("reference_mode", "reference")
-    )
+    reference = overrides.get("reference_mode", "auto")
+    if reference == "auto":
+        # A command/tool request containing a prompt and one or more images is
+        # ordinary image-to-video by default.  The administrator's default
+        # still applies to image-only requests, while first-frame and
+        # first-last-frame remain explicit opt-ins through config/overrides.
+        if images and str(prompt or "").strip():
+            reference = "reference"
+        else:
+            reference = config.get("reference_mode", "reference")
+        if reference == "auto":
+            reference = "reference"
     if reference in {"first_frame", "first_last_frame"}:
         count = 1 if reference == "first_frame" else 2
         if len(images) != count or audios or videos:
@@ -224,4 +234,5 @@ def select_route(
             if value:
                 effective[key] = value
     effective.update(overrides)
+    effective["reference_mode"] = reference
     return route, effective

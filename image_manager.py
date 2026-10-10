@@ -361,12 +361,35 @@ class ImageManager:
             return []
         try:
             refs = list(await extract_quoted_message_images(event, reply))
-            if getattr(event, "get_platform_name", lambda: "")() == "aiocqhttp":
-                refs = await ImageResolver(event).resolve_for_llm(refs)
+            refs = await ImageResolver(event).resolve_for_llm(refs)
             return [str(ref).strip() for ref in refs if str(ref).strip()]
         except Exception as exc:  # noqa: BLE001
             logger.debug("Quoted image URL resolution failed: %s", exc)
             return []
+
+    async def _resolve_image_source(self, event, source: str) -> str:
+        """Resolve QQ image/file identifiers to public URLs.
+
+        AstrBot's OneBot image resolver handles the several identifier shapes
+        used by QQ (``file``, ``file_id``, ``id`` and bare tokens).  Reusing it
+        for current-message components is important: quoted images already go
+        through this resolver, while a directly sent image may expose only a
+        token in ``Image.file``.
+        """
+        source = str(source or "").strip()
+        if not source:
+            return ""
+        if source.startswith(("http://", "https://", "data:", "base64://", "file://")):
+            return source
+        try:
+            from astrbot.core.utils.quoted_message.image_resolver import ImageResolver
+
+            resolved = await ImageResolver(event).resolve_for_llm([source])
+            if resolved:
+                return str(resolved[0]).strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Current image URL resolution failed: %s", exc)
+        return ""
 
     async def extract_image_sources_from_event(
         self,
@@ -410,7 +433,9 @@ class ImageManager:
                     for child in nested:
                         if self._is_image_component(child):
                             seen_image_component = True
-                            source = self._image_component_source(child)
+                            source = await self._resolve_image_source(
+                                event, self._image_component_source(child)
+                            )
                             if source:
                                 add(quoted, source)
                                 found = True
@@ -425,12 +450,20 @@ class ImageManager:
                             for child in components:
                                 if self._is_image_component(child):
                                     seen_image_component = True
-                                    add(quoted, self._image_component_source(child))
+                                    source = await self._resolve_image_source(
+                                        event, self._image_component_source(child)
+                                    )
+                                    if source:
+                                        add(quoted, source)
                         except Exception as exc:  # noqa: BLE001
                             logger.debug("Quoted image component fetch failed: %s", exc)
                 elif self._is_image_component(seg):
                     seen_image_component = True
-                    add(message, self._image_component_source(seg))
+                    source = await self._resolve_image_source(
+                        event, self._image_component_source(seg)
+                    )
+                    if source:
+                        add(message, source)
                 elif isinstance(seg, At):
                     add_at(getattr(seg, "qq", getattr(seg, "user_id", "")))
 

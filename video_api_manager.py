@@ -345,7 +345,7 @@ class VideoApiManager(ApiManager):
         overrides = options.overrides()
         p = video_params(prompt, {**self.config, **overrides}, options.duration)
         route, effective = select_route(
-            self.config, images, audios, videos, p["duration"], overrides
+            self.config, images, audios, videos, p["duration"], overrides, prompt
         )
         effective["_has_reference"] = bool(images or audios or videos)
         effective["_resolution_explicit"] = bool(options.resolution)
