@@ -158,6 +158,29 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, [])
         self.assertIsInstance(finish.sent[-1][0], Video)
 
+    async def test_legacy_flags_do_not_bypass_explicit_special_route_keywords(self):
+        for flag in [
+            "--frames",
+            "--reference-mode first_last_frame",
+            "--reference-mode first_frame",
+            "--reference-mode last_frame",
+            "--reference-mode motion_transfer",
+            "--reference-mode audio_sync",
+        ]:
+            with self.subTest(flag=flag):
+                await self.receive(
+                    "/生视频 镜头过渡 " + flag,
+                    [
+                        Image("https://media.test/a.png"),
+                        Image("https://media.test/b.png"),
+                    ],
+                )
+                finish, result = await self.receive("/生成")
+                self.assertIn("关键词", result[0][0].text)
+                self.assertEqual(finish.sent, [])
+                self.plugin.video_mgr.generate.assert_not_awaited()
+                await self.receive("/取消")
+
     async def test_image_audio_and_video_files_are_collected_without_text(self):
         await self.receive("/生视频 视频重绘")
         for name in ("photo.png", "voice.mp3", "clip.mp4"):

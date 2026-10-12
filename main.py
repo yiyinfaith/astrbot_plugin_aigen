@@ -717,6 +717,18 @@ class ImageGeneratorPlugin(Star):
             try:
                 merged = " ".join(collection["text"])
                 options = parse_video_command(merged)
+                if options.reference_mode in {
+                    "first_frame",
+                    "last_frame",
+                    "first_last_frame",
+                    "motion_transfer",
+                    "audio_sync",
+                } and not re.match(
+                    r"^(首帧|尾帧|首尾帧|动作迁移|音频同步)(?:\s+|$)", merged.strip()
+                ):
+                    raise VideoError(
+                        "特殊类别请在文字材料开头明确填写“首尾帧”“首帧”“尾帧”“动作迁移”或“音频同步”关键词。"
+                    )
                 if (
                     options.images
                     or options.audios
