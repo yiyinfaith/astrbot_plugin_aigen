@@ -116,6 +116,7 @@ def plugin_class():
         "VideoOptions": router.VideoOptions,
         "parse_video_command": router.parse_video_command,
         "collect_media": inputs.collect_media,
+        "normalize_media_event": inputs.normalize_media_event,
         "resolve_media": inputs.resolve_media,
         "text_media": inputs.text_media,
         "norm_id": utils.norm_id,
@@ -136,6 +137,10 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.conf = {"model": "image", "llm_cooldown_seconds": 0}
         self.plugin.video_conf = {"model": "video", "llm_cooldown_seconds": 0}
         self.plugin._llm_last_call = {}
+        self.plugin._video_collections = {}
+        self.plugin._video_busy = set()
+        self.plugin._video_generation_tasks = set()
+        self.plugin._terminating = False
         self.plugin.data_mgr = type(
             "Data",
             (),
@@ -161,7 +166,7 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
                         Path("generated.mp4"), "task", "routed-model"
                     )
                 ),
-                "prepare": lambda *args: None,
+                "prepare": lambda *args, **kwargs: None,
             },
         )()
 
@@ -186,7 +191,16 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.video_conf.update(
             interface_mode="openai_video",
             reference_mode="first_frame",
-            routes={"image_to_video": {"model": "minimax_h3_lightx2v_v5"}},
+            routes={
+                "image_to_video": {
+                    "model": "minimax_h3_lightx2v_v5",
+                    "interface_mode": "openai_video",
+                },
+                "first_last_frame": {
+                    "model": "minimax_h3_lightx2v",
+                    "interface_mode": "openai_video",
+                },
+            },
             duration=1,
             resolution="480p",
             aspect_ratio="16:9",
@@ -249,7 +263,7 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             options, *_ = await self.plugin._video_command_inputs(
                 event, prompt, "自定义"
             )
-            self.assertEqual(options.reference_mode, "reference")
+            self.assertEqual(options.reference_mode, "auto")
         options, *_ = await self.plugin._video_command_inputs(
             event, "人物跳舞 --frames", "自定义"
         )
@@ -335,7 +349,7 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             self.plugin.video_mgr.generate.await_args.args[1:4], ([], [], [])
         )
 
-    async def test_command_reads_quoted_audio_and_ignores_unquoted_audio(self):
+    async def test_command_reads_both_current_and_quoted_audio(self):
         event = Event(
             [
                 Record("https://m.test/unquoted.wav"),
@@ -347,7 +361,7 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             (audios, videos),
-            (["https://m.test/quoted.wav"], []),
+            (["https://m.test/unquoted.wav", "https://m.test/quoted.wav"], []),
         )
 
     async def test_command_accepts_image_file_and_quoted_audio_video_files(self):
@@ -367,7 +381,9 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             event, "animate", "自定义"
         )
         self.assertEqual(images, ["https://qq.test/photo.png"])
-        self.assertEqual(audios, ["https://qq.test/quoted.mp3"])
+        self.assertEqual(
+            audios, ["https://qq.test/unquoted.mp3", "https://qq.test/quoted.mp3"]
+        )
         self.assertEqual(videos, ["https://qq.test/quoted.mp4"])
 
     async def test_empty_reply_fetches_onebot_files_with_file_ids(self):
@@ -423,12 +439,15 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
                 Image("https://i.test/person.png"),
                 Reply([Video("https://m.test/motion.mp4")]),
             ],
-            "/生视频",
+            "/生视频 动作迁移",
         )
         result = [reply async for reply in self.plugin.video_command(event)]
         self.assertTrue(event.stopped)
         self.assertEqual(result, [])
-        self.assertTrue(any(isinstance(chain[0], Video) for chain in event.sent))
+        self.plugin.video_mgr.generate.assert_not_awaited()
+        finish = Event([], "/生成")
+        self.assertEqual([x async for x in self.plugin.on_preset_request(finish)], [])
+        self.assertTrue(any(isinstance(chain[0], Video) for chain in finish.sent))
         self.assertEqual(
             self.plugin.video_mgr.generate.await_args.args[3],
             ["https://m.test/motion.mp4"],
@@ -437,9 +456,14 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
     async def test_command_option_error_does_not_submit_or_show_progress(self):
         event = Event([], "/生视频 猫 --duration 1.2")
         result = [reply async for reply in self.plugin.video_command(event)]
+        self.assertEqual(result, [])
+        finish = Event([], "/生成")
+        result = [reply async for reply in self.plugin.on_preset_request(finish)]
         self.assertIn("整数", result[0][0].text)
         self.plugin.video_mgr.generate.assert_not_awaited()
-        self.assertEqual(event.sent, [])
+        self.assertEqual(
+            event.sent[0][0].text, "请发送材料，最后发送“/生成”开始生成视频"
+        )
 
     async def test_multimedia_order_and_mention_avatar_are_preserved(self):
         event = Event(
@@ -463,15 +487,14 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             images,
             [
                 "https://i.test/sent.png",
-                "https://q1.qlogo.cn/g?b=qq&nk=2&s=640",
                 "https://i.test/quoted.png",
             ],
         )
-        self.assertEqual(videos, ["https://m.test/one.mp4"])
+        self.assertEqual(videos, ["https://m.test/one.mp4", "https://m.test/two.mp4"])
         self.assertEqual(audios, ["https://m.test/audio.wav"])
         self.assertEqual(options.duration, 1)
 
-    async def test_video_preset_keeps_single_image_priority_and_prefix_switch(self):
+    async def test_video_preset_collects_all_images_and_respects_prefix_switch(self):
         event = Event(
             [
                 Image("https://i.test/sent.png"),
@@ -481,12 +504,15 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             "@2舞动",
         )
         result = [reply async for reply in self.plugin.on_preset_request(event)]
+        self.plugin.video_mgr.generate.assert_not_awaited()
+        finish = Event([], "/生成")
+        self.assertEqual([x async for x in self.plugin.on_preset_request(finish)], [])
         self.assertEqual(
             self.plugin.video_mgr.generate.await_args.args[1],
-            ["https://i.test/quoted.png"],
+            ["https://i.test/sent.png", "https://i.test/quoted.png"],
         )
         self.assertEqual(result, [])
-        self.assertTrue(any(isinstance(chain[0], Video) for chain in event.sent))
+        self.assertTrue(any(isinstance(chain[0], Video) for chain in finish.sent))
         self.plugin.video_conf["preset_need_prefix"] = True
         self.plugin.video_mgr.generate.reset_mock()
         result = [

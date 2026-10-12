@@ -45,7 +45,7 @@
                 "type": "text",
                 "editor_mode": true,
                 "editor_language": "markdown",
-                "default": "🎨 图片：/生图 <提示词>、/画图 <提示词>，可附带或引用图片、@他人取头像。预设关键词按配置触发。\n🎬 视频：/生视频 <提示词>，根据图片/音频/视频自动选择模型，可直接发送或引用媒体、@他人取头像。\n参数：--duration 1 --resolution 480p --ratio 16:9；--frames 表示明确使用两张图作为首尾帧。图片、音频、视频请直接发送或引用，不要填写媒体 URL。\n例如：/生视频 一只猫在雪地奔跑 --duration 1\n模型和所需媒体以插件配置为准；任何人都可使用，不设次数限制。"
+                "default": "🎨 图片：/生图 <提示词>，可附带或引用图片。\n🎬 视频：先 /生视频，然后依次发送文字、图片、QQ语音、视频或媒体文件；多段文字按顺序合并，最后 /生成。收集时不逐条回复；/取消 可清空重来。30分钟未发材料会过期。\n首帧、尾帧：关键词 + 提示词 + 一图。首尾帧：关键词 + 提示词 + 两图。普通生视频1–9图均为参考图，不自动选择帧模式。音频最多3段。\n动作迁移：关键词 + 一图一视频，不发提示词。音频同步：关键词 + 一图一音频，不发提示词。其他多媒体组合需提示词和管理员配置模型。\n可用 --duration 1 --resolution 480p --ratio 16:9。"
             },
             "llm_cooldown_seconds": {
                 "description": "【LLM】工具调用冷却时间(秒)",
@@ -104,9 +104,11 @@
             },
             "extra_prefix": {
                 "description": "【基础】自定义提示词前缀",
-                "hint": "用于触发自定义提示词，例如设置为“生图”，则使用“生图 <你的prompt>”调用。",
-                "type": "string",
-                "default": "生图"
+                "hint": "可添加多个前缀，每项一个；文字参数之间用空格分隔。例如 生图、画画；/生图 和 /画图 始终可用。",
+                "type": "list",
+                "default": [
+                    "生图"
+                ]
             },
             "custom_prompt_need_prefix": {
                 "description": "【触发】自定义提示词需要 AstrBot 前缀",
@@ -223,8 +225,8 @@
             "interface_mode": {
                 "description": "视频接口格式",
                 "type": "string",
-                "default": "openai_video",
-                "hint": "选择协议后自动使用对应的创建和查询路径；六种格式使用各自请求体。",
+                "default": "minimax",
+                "hint": "当前 AutoDL New API 支持 OpenAI Videos 和 MiniMax V2；其他四种格式保留用于独立接入相应服务。",
                 "options": [
                     "openai_video",
                     "minimax",
@@ -269,7 +271,7 @@
             "routes": {
                 "description": "自动路由模型",
                 "type": "template_list",
-                "hint": "按任务类型分别配置模型；空模型的路线不会提交。普通多图使用图生视频，首尾帧需显式 --frames。",
+                "hint": "按所有收集材料的组合自动选择；普通生视频的所有图片都是参考图，不按数量选择帧模式。每类默认 MiniMax V2，其他格式可独立选择。首尾帧、首帧、尾帧、动作迁移与音频同步需明确关键词。",
                 "condition": {
                     "auto_route": true
                 },
@@ -294,8 +296,8 @@
                             "interface_mode": {
                                 "description": "接口格式",
                                 "type": "string",
-                                "default": "inherit",
-                                "hint": "跟随主接口或独立选择；共用视频接口地址和 Key。",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
                                 "options": [
                                     "inherit",
                                     "openai_video",
@@ -373,8 +375,8 @@
                             "interface_mode": {
                                 "description": "接口格式",
                                 "type": "string",
-                                "default": "inherit",
-                                "hint": "跟随主接口或独立选择；共用视频接口地址和 Key。",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
                                 "options": [
                                     "inherit",
                                     "openai_video",
@@ -452,8 +454,8 @@
                             "interface_mode": {
                                 "description": "接口格式",
                                 "type": "string",
-                                "default": "inherit",
-                                "hint": "跟随主接口或独立选择；共用视频接口地址和 Key。",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
                                 "options": [
                                     "inherit",
                                     "openai_video",
@@ -531,8 +533,8 @@
                             "interface_mode": {
                                 "description": "接口格式",
                                 "type": "string",
-                                "default": "inherit",
-                                "hint": "跟随主接口或独立选择；共用视频接口地址和 Key。",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
                                 "options": [
                                     "inherit",
                                     "openai_video",
@@ -610,8 +612,8 @@
                             "interface_mode": {
                                 "description": "接口格式",
                                 "type": "string",
-                                "default": "inherit",
-                                "hint": "跟随主接口或独立选择；共用视频接口地址和 Key。",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
                                 "options": [
                                     "inherit",
                                     "openai_video",
@@ -689,8 +691,8 @@
                             "interface_mode": {
                                 "description": "接口格式",
                                 "type": "string",
-                                "default": "inherit",
-                                "hint": "跟随主接口或独立选择；共用视频接口地址和 Key。",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
                                 "options": [
                                     "inherit",
                                     "openai_video",
@@ -768,8 +770,8 @@
                             "interface_mode": {
                                 "description": "接口格式",
                                 "type": "string",
-                                "default": "inherit",
-                                "hint": "跟随主接口或独立选择；共用视频接口地址和 Key。",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
                                 "options": [
                                     "inherit",
                                     "openai_video",
@@ -830,12 +832,12 @@
                     "image_video_to_video": {
                         "name": "图片＋视频生视频",
                         "description": "图片＋视频生视频",
-                        "hint": "按输入组合自动选择，媒体保持顺序。",
+                        "hint": "提示词、至少一张图片、至少一个视频；请选择支持该组合的上游模型。动作迁移使用独立类别。",
                         "items": {
                             "model": {
                                 "description": "模型 ID",
                                 "type": "string",
-                                "default": "wan2.2-animate-move",
+                                "default": "",
                                 "hint": "留空表示未配置；使用该类型时提示管理员配置，不丢弃任何媒体。"
                             },
                             "long_model": {
@@ -847,8 +849,8 @@
                             "interface_mode": {
                                 "description": "接口格式",
                                 "type": "string",
-                                "default": "dashscope",
-                                "hint": "跟随主接口或独立选择；共用视频接口地址和 Key。",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
                                 "options": [
                                     "inherit",
                                     "openai_video",
@@ -895,7 +897,7 @@
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
-                                "default": "464p",
+                                "default": "",
                                 "hint": "留空使用视频默认档位；工具参数、命令参数或提示词指定档位优先。"
                             },
                             "aspect_ratio": {
@@ -926,8 +928,8 @@
                             "interface_mode": {
                                 "description": "接口格式",
                                 "type": "string",
-                                "default": "inherit",
-                                "hint": "跟随主接口或独立选择；共用视频接口地址和 Key。",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
                                 "options": [
                                     "inherit",
                                     "openai_video",
@@ -1005,8 +1007,245 @@
                             "interface_mode": {
                                 "description": "接口格式",
                                 "type": "string",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随主接口",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
                                 "default": "inherit",
-                                "hint": "跟随主接口或独立选择；共用视频接口地址和 Key。",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
+                            "resolution": {
+                                "description": "本路线分辨率（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用视频默认档位；工具参数、命令参数或提示词指定档位优先。"
+                            },
+                            "aspect_ratio": {
+                                "description": "本路线比例（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用视频默认比例。"
+                            }
+                        }
+                    },
+                    "last_frame": {
+                        "name": "尾帧生视频",
+                        "description": "尾帧生视频",
+                        "hint": "恰好一张图片，需要提示词；请配置支持尾帧的模型。",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空表示未配置；使用该类型时提示管理员配置，不丢弃任何媒体。"
+                            },
+                            "long_model": {
+                                "description": "10 秒以上使用的模型（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用上方模型；不擅自增加、缩短请求时长。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随主接口",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
+                            "resolution": {
+                                "description": "本路线分辨率（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用视频默认档位；工具参数、命令参数或提示词指定档位优先。"
+                            },
+                            "aspect_ratio": {
+                                "description": "本路线比例（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用视频默认比例。"
+                            }
+                        }
+                    },
+                    "motion_transfer": {
+                        "name": "动作迁移（图片+视频生视频）",
+                        "description": "动作迁移（图片+视频生视频）",
+                        "hint": "恰好一图一视频，不支持提示词。",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID",
+                                "type": "string",
+                                "default": "wan2.2-animate-move",
+                                "hint": "留空表示未配置；使用该类型时提示管理员配置，不丢弃任何媒体。"
+                            },
+                            "long_model": {
+                                "description": "10 秒以上使用的模型（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用上方模型；不擅自增加、缩短请求时长。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随主接口",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
+                            "long_interface_mode": {
+                                "description": "长时模型接口格式（可选）",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "超过 10 秒并使用长时模型时采用；inherit 表示跟随本路线的接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "openai_video",
+                                    "minimax",
+                                    "autodl_native",
+                                    "dashscope",
+                                    "seedance",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随本路线格式",
+                                    "OpenAI Videos",
+                                    "MiniMax V2",
+                                    "AutoDL",
+                                    "DashScope Wan",
+                                    "Seedance / 火山方舟",
+                                    "用户自定义路径"
+                                ]
+                            },
+                            "resolution": {
+                                "description": "本路线分辨率（可选）",
+                                "type": "string",
+                                "default": "464p",
+                                "hint": "留空使用视频默认档位；工具参数、命令参数或提示词指定档位优先。"
+                            },
+                            "aspect_ratio": {
+                                "description": "本路线比例（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用视频默认比例。"
+                            }
+                        }
+                    },
+                    "audio_sync": {
+                        "name": "音频同步（自动对口型，图片+音频生视频）",
+                        "description": "音频同步（自动对口型，图片+音频生视频）",
+                        "hint": "恰好一图一音频，不支持提示词。",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID",
+                                "type": "string",
+                                "default": "minimax_h3_image_audio_to_video",
+                                "hint": "留空表示未配置；使用该类型时提示管理员配置，不丢弃任何媒体。"
+                            },
+                            "long_model": {
+                                "description": "10 秒以上使用的模型（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用上方模型；不擅自增加、缩短请求时长。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "minimax",
+                                "hint": "本类别默认 MiniMax V2，也可选择其他已接入的格式。",
                                 "options": [
                                     "inherit",
                                     "openai_video",
@@ -1070,7 +1309,7 @@
                         "__template_key": "text_to_video",
                         "model": "minimax_h3_lightx2v_no_pic",
                         "long_model": "",
-                        "interface_mode": "inherit",
+                        "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
@@ -1079,7 +1318,7 @@
                         "__template_key": "image_to_video",
                         "model": "minimax_h3_lightx2v_v5",
                         "long_model": "minimax_h3_lightx2v_v5_15s",
-                        "interface_mode": "inherit",
+                        "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
@@ -1088,7 +1327,7 @@
                         "__template_key": "first_last_frame",
                         "model": "minimax_h3_lightx2v",
                         "long_model": "",
-                        "interface_mode": "inherit",
+                        "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
@@ -1097,7 +1336,7 @@
                         "__template_key": "first_frame",
                         "model": "",
                         "long_model": "",
-                        "interface_mode": "inherit",
+                        "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
@@ -1106,7 +1345,7 @@
                         "__template_key": "audio_to_video",
                         "model": "minimax_h3_image_audio_to_video_v2",
                         "long_model": "minimax_h3_image_audio_to_video_v2_15s",
-                        "interface_mode": "inherit",
+                        "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
@@ -1115,7 +1354,7 @@
                         "__template_key": "image_audio_to_video",
                         "model": "minimax_h3_image_audio_to_video_v2",
                         "long_model": "minimax_h3_image_audio_to_video_v2_15s",
-                        "interface_mode": "inherit",
+                        "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
@@ -1124,25 +1363,25 @@
                         "__template_key": "video_to_video",
                         "model": "",
                         "long_model": "",
-                        "interface_mode": "inherit",
+                        "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
                     },
                     {
                         "__template_key": "image_video_to_video",
-                        "model": "wan2.2-animate-move",
+                        "model": "",
                         "long_model": "",
-                        "interface_mode": "dashscope",
+                        "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
-                        "resolution": "464p",
+                        "resolution": "",
                         "aspect_ratio": ""
                     },
                     {
                         "__template_key": "audio_video_to_video",
                         "model": "",
                         "long_model": "",
-                        "interface_mode": "inherit",
+                        "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
@@ -1151,7 +1390,34 @@
                         "__template_key": "image_audio_video_to_video",
                         "model": "",
                         "long_model": "",
-                        "interface_mode": "inherit",
+                        "interface_mode": "minimax",
+                        "long_interface_mode": "inherit",
+                        "resolution": "",
+                        "aspect_ratio": ""
+                    },
+                    {
+                        "__template_key": "last_frame",
+                        "model": "",
+                        "long_model": "",
+                        "interface_mode": "minimax",
+                        "long_interface_mode": "inherit",
+                        "resolution": "",
+                        "aspect_ratio": ""
+                    },
+                    {
+                        "__template_key": "motion_transfer",
+                        "model": "wan2.2-animate-move",
+                        "long_model": "",
+                        "interface_mode": "minimax",
+                        "long_interface_mode": "inherit",
+                        "resolution": "464p",
+                        "aspect_ratio": ""
+                    },
+                    {
+                        "__template_key": "audio_sync",
+                        "model": "minimax_h3_image_audio_to_video",
+                        "long_model": "",
+                        "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
                         "aspect_ratio": ""
@@ -1162,7 +1428,7 @@
                 "description": "视频时长（秒）",
                 "type": "int",
                 "default": 5,
-                "hint": "可在提示词写“1秒”覆盖；支持的范围由模型决定，插件不擅自延长时长。图片＋视频路线时长跟随参考视频，此项不发送。"
+                "hint": "可在文字材料里写“1秒”或 --duration 覆盖，范围由模型决定。动作迁移的时长仅用于预扣声明，不裁剪视频，最终计费以成片实测为准。"
             },
             "resolution": {
                 "description": "视频分辨率",
@@ -1215,10 +1481,11 @@
                 "description": "默认图片用途",
                 "type": "string",
                 "default": "reference",
-                "hint": "普通多图默认作为参考；首帧和首尾帧用于对应路由。命令 --frames/--reference-mode 或工具参数可覆盖。",
+                "hint": "仅用于直接请求的参考用途。收集命令无论几张图都默认参考图；首尾帧、首帧、尾帧必须明确关键词。",
                 "options": [
                     "reference",
                     "first_frame",
+                    "last_frame",
                     "first_last_frame"
                 ],
                 "labels": [
@@ -1247,9 +1514,11 @@
             },
             "extra_prefix": {
                 "description": "自定义视频提示词前缀",
-                "type": "string",
-                "default": "生视频",
-                "hint": "例如“生视频 一只猫 1秒”；/生视频 与 /生成视频 始终可用。"
+                "type": "list",
+                "default": [
+                    "生视频"
+                ],
+                "hint": "可添加多个前缀，每项一个；文字参数之间用空格分隔。例如 生视频、做视频；触发后发送材料，最后发送 /生成。/生视频 和 /生成视频 始终可用。"
             },
             "custom_prompt_need_prefix": {
                 "description": "【触发】自定义提示词需要 AstrBot 前缀",
@@ -1279,7 +1548,7 @@
                 "description": "视频生成进度文案",
                 "type": "string",
                 "default": "🎬 收到请求，正在生成视频 [{preset}]...",
-                "hint": "仅普通命令/预设发送；{preset} 为预设名。函数工具调用无进度文字。"
+                "hint": "兼容旧配置保留；视频指令统一发送“共收到x图片，x音频，x视频，生成中”。"
             },
             "poll_interval": {
                 "description": "任务查询间隔（秒）",

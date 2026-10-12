@@ -2,6 +2,7 @@ import ast
 import copy
 import json
 import logging
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +10,12 @@ from pathlib import Path
 from config_manager import media_config, migrate_config, schema_defaults
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE = ROOT.parent.parent / "AstrBot" / "astrbot/core/config/astrbot_config.py"
+CORE = Path(
+    os.environ.get(
+        "AIGEN_ASTRBOT_CONFIG_SOURCE",
+        str(ROOT.parent.parent / "AstrBot" / "astrbot/core/config/astrbot_config.py"),
+    )
+)
 
 
 def loader_class():
@@ -24,9 +30,16 @@ def loader_class():
     ]
     namespace = {
         "json": json,
+        "copy": copy,
+        "Path": Path,
+        "threading": __import__("threading"),
+        "tempfile": tempfile,
+        "asyncio": __import__("asyncio"),
         "os": __import__("os"),
         "logger": logging.getLogger("migration-test"),
         "ASTRBOT_CONFIG_PATH": "unused",
+        "DASHBOARD_RESET_PASSWORD_ENV": "AIGEN_TEST_UNUSED_RESET",
+        "DASHBOARD_INITIAL_PASSWORD_ENV": "AIGEN_TEST_UNUSED_INITIAL",
         "DEFAULT_CONFIG": {},
         "DEFAULT_VALUE_MAP": {
             "string": "",
@@ -77,7 +90,13 @@ class ConfigMigrationTest(unittest.TestCase):
             image = media_config(conf)
             for key, value in old.items():
                 if key != "llm_show_progress":
-                    self.assertEqual(image[key], value, key)
+                    self.assertEqual(
+                        image[key],
+                        [value]
+                        if key == "extra_prefix" and isinstance(value, str)
+                        else value,
+                        key,
+                    )
             self.assertEqual(conf["image_settings"]["prompt_list"], prompts)
             backup = next((Path(tmp) / "backups").glob("*.json"))
             self.assertEqual(

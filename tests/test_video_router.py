@@ -112,8 +112,12 @@ class RoutingTest(unittest.TestCase):
                     node = template["items"][field]
                     self.assertEqual(set(node["options"]) - {"inherit"}, expected_modes)
 
-    def test_two_reference_images_are_not_implicitly_first_last_frames(self):
+    def test_two_images_are_references_until_explicit_first_last_frame(self):
         route, _ = select_route(self.config, ["a", "b"], [], [], 1)
+        self.assertEqual(route, "image_to_video")
+        route, _ = select_route(
+            self.config, ["a", "b"], [], [], 1, {"reference_mode": "reference"}
+        )
         self.assertEqual(route, "image_to_video")
         route, result = select_route(
             self.config, ["a", "b"], [], [], 1, {"reference_mode": "first_last_frame"}
@@ -155,6 +159,8 @@ class RoutingTest(unittest.TestCase):
                 self.assertEqual(result["reference_mode"], mode)
 
     def test_per_task_overrides_do_not_mutate_shared_config(self):
+        before = copy.deepcopy(self.config)
+        self.config["routes"]["image_video_to_video"]["model"] = "custom-video"
         before = copy.deepcopy(self.config)
         _, result = select_route(
             self.config,

@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+LEGACY_HELP_TEXT = "🎨 图片：/生图 <提示词>、/画图 <提示词>，可附带或引用图片、@他人取头像。预设关键词按配置触发。\n🎬 视频：/生视频 <提示词>，根据图片/音频/视频自动选择模型，可直接发送或引用媒体、@他人取头像。\n参数：--duration 1 --resolution 480p --ratio 16:9；--frames 表示明确使用两张图作为首尾帧。图片、音频、视频请直接发送或引用，不要填写媒体 URL。\n例如：/生视频 一只猫在雪地奔跑 --duration 1\n模型和所需媒体以插件配置为准；任何人都可使用，不设次数限制。"
+
 GLOBAL_KEYS = {
     "show_model_info",
     "debug_mode",
@@ -37,7 +39,7 @@ def migrate_config(config: Any, backup_dir: Path) -> bool:
     Only this one-time upgrade reads them; grouped settings take over afterward.
     """
     if config.get("_config_layout_version", 0) >= 1:
-        return False
+        return migrate_video_settings(config, backup_dir)
     schema = json.loads(
         Path(__file__).with_name("_conf_schema.json").read_text("utf-8")
     )
@@ -93,7 +95,103 @@ def migrate_config(config: Any, backup_dir: Path) -> bool:
         config.clear()
         config.update(original)
         raise
+    migrate_video_settings(config, backup_dir, backup=False)
     return bool(legacy)
+
+
+def migrate_video_settings(config: Any, backup_dir: Path, *, backup=True) -> bool:
+    """Upgrade prefixes and split the legacy motion-transfer route losslessly.
+
+    Args:
+        config: AstrBot configuration, including grouped settings.
+        backup_dir: Directory for the original configuration snapshot.
+        backup: Whether the older layout has not already been backed up.
+
+    Returns:
+        Whether an existing layout was upgraded.
+
+    Raises:
+        OSError: If backing up or saving fails; in-memory values are restored.
+    """
+    if config.get("_config_layout_version", 0) >= 2:
+        return False
+    original = copy.deepcopy(dict(config))
+    upgraded = copy.deepcopy(original)
+    if backup:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        snapshot = backup_dir / f"config_before_v1.1.0_{stamp}.json"
+        with snapshot.open("x", encoding="utf-8") as stream:
+            json.dump(original, stream, ensure_ascii=False, indent=2)
+        snapshot.chmod(0o600)
+    schema = json.loads(
+        Path(__file__).with_name("_conf_schema.json").read_text("utf-8")
+    )
+    defaults = schema_defaults(schema)
+    global_settings = upgraded.get("global_settings", {})
+    if global_settings.get("help_text") == LEGACY_HELP_TEXT:
+        global_settings["help_text"] = defaults["global_settings"]["help_text"]
+    for name in ("image_settings", "video_settings"):
+        group = upgraded.setdefault(name, copy.deepcopy(defaults[name]))
+        prefix = group.get("extra_prefix", defaults[name]["extra_prefix"])
+        if isinstance(prefix, str):
+            group["extra_prefix"] = [prefix] if prefix.strip() else []
+    video = upgraded["video_settings"]
+    rules = video.setdefault(
+        "routes", copy.deepcopy(defaults["video_settings"]["routes"])
+    )
+    if isinstance(rules, dict):
+        rules = [{"__template_key": key, **value} for key, value in rules.items()]
+        video["routes"] = rules
+    if isinstance(rules, list):
+        motion = next(
+            (
+                r
+                for r in rules
+                if isinstance(r, dict) and r.get("__template_key") == "motion_transfer"
+            ),
+            None,
+        )
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            if (
+                rule.get("__template_key") == "image_video_to_video"
+                and rule.get("model") == "wan2.2-animate-move"
+                and motion is None
+            ):
+                motion = {
+                    **copy.deepcopy(rule),
+                    "__template_key": "motion_transfer",
+                    "interface_mode": "minimax",
+                }
+                rule.update(
+                    model="",
+                    long_model="",
+                    interface_mode="minimax",
+                    resolution="",
+                    aspect_ratio="",
+                )
+            if rule.get("interface_mode", "inherit") == "inherit":
+                rule["interface_mode"] = "minimax"
+        if motion is not None and motion not in rules:
+            rules.append(motion)
+        present = {r.get("__template_key") for r in rules if isinstance(r, dict)}
+        for rule in defaults["video_settings"]["routes"]:
+            if rule["__template_key"] not in present:
+                rules.append(copy.deepcopy(rule))
+    upgraded["_config_layout_version"] = 2
+    config.clear()
+    config.update(upgraded)
+    try:
+        save = getattr(config, "save_config", None)
+        if callable(save):
+            save()
+    except Exception:
+        config.clear()
+        config.update(original)
+        raise
+    return backup
 
 
 def media_config(config: dict, kind: str = "image") -> dict:

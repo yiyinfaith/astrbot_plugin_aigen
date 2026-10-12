@@ -98,7 +98,7 @@ class PluginContractTest(unittest.TestCase):
         main = (ROOT / "main.py").read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertNotIn("prefix", schema)
-        self.assertEqual(image_schema["extra_prefix"]["default"], "生图")
+        self.assertEqual(image_schema["extra_prefix"]["default"], ["生图"])
         self.assertTrue(image_schema["custom_prompt_need_prefix"]["default"])
         self.assertFalse(image_schema["preset_need_prefix"]["default"])
         self.assertNotIn("memelite", json.dumps(schema, ensure_ascii=False).lower())

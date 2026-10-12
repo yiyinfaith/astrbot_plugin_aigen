@@ -75,6 +75,7 @@ RESOLUTIONS = {
 FRAME_MODELS = {"minimax_h3_lightx2v", "minimax_h3_b99_002"}
 NO_TEXT_MODELS = {
     "wan2.2animate-v4-motion_retargeting",
+    "wan2.2-animate-move",
     "minimax_h3_image_audio_to_video",
 }
 NO_SEED_MODELS = {"minimax_h3_lightx2v_no_pic", "minimax_h3_image_audio_to_video"}
@@ -98,6 +99,14 @@ class VideoDownloadError(VideoError):
         super().__init__(message)
         self.url = url
         self.url_expires_at = url_expires_at
+
+
+class VideoHttpError(VideoError):
+    """Expose the HTTP status so polling can distinguish permanent failures."""
+
+    def __init__(self, message: str, status: int):
+        super().__init__(message)
+        self.status = status
 
 
 def json_path(value, path: str):
@@ -365,6 +374,11 @@ class VideoApiManager(ApiManager):
         route, effective = select_route(
             self.config, images, audios, videos, p["duration"], overrides, prompt
         )
+        if (
+            route not in {"motion_transfer", "audio_sync"}
+            and not str(prompt or "").strip()
+        ):
+            raise VideoError("此类生视频需要提示词；请发送文字材料后再 /生成。")
         effective["_has_reference"] = bool(images or audios or videos)
         effective["_resolution_explicit"] = bool(options.resolution)
         effective["_ratio_explicit"] = bool(options.aspect_ratio)
@@ -391,12 +405,16 @@ class VideoApiManager(ApiManager):
         duration: int = 0,
     ) -> tuple[str, str, dict, dict]:
         c = self.config
-        mode = c.get("interface_mode", "openai_video")
+        mode = c.get("interface_mode", "minimax")
         if mode not in VIDEO_MODES:
             raise VideoError("生视频接口模式无效。")
         model = str(c.get("model", "") or "").strip()
         if not model:
             raise VideoError("请配置生视频模型 ID。")
+        if model in {"IndexTTS-2", "indextts2-v1"}:
+            raise VideoError(
+                "所选模型仅生成音频，请为生视频类别配置视频模型；未提交收费任务。"
+            )
         # The selected protocol is an adapter, not a model allow-list.  A
         # provider may expose first-frame and other reference modes through
         # any of the six protocols, so leave that capability decision to the
@@ -405,6 +423,10 @@ class VideoApiManager(ApiManager):
         caps = WORKFLOWS.get(model)
         if model == "wan2.2-animate-move":
             caps = WORKFLOWS["wan2.2animate-v4-motion_retargeting"]
+        if model in NO_TEXT_MODELS and prompt.strip():
+            raise VideoError(
+                f"模型 {model} 不支持提示词，不能静默丢弃文字；请只发送对应媒体。"
+            )
         if caps and mode in {"openai_video", "minimax", "autodl_native"}:
             imin, imax, amin, amax, vcount, max_seconds, group = caps
             if (
@@ -419,10 +441,21 @@ class VideoApiManager(ApiManager):
                 raise VideoError(
                     f"模型 {model} 最多支持 {max_seconds} 秒；未提交付费任务。"
                 )
+            if group == "E" and p["duration"] > 3600:
+                raise VideoError("动作迁移声明时长最多 3600 秒；未提交付费任务。")
             if model not in NO_TEXT_MODELS and not prompt.strip():
                 raise VideoError("请提供视频生成提示词。")
             if max_seconds or group == "E":
-                native_resolution(group, p["resolution"], p["ratio"])
+                validation_ratio = p["ratio"]
+                if (
+                    mode == "minimax"
+                    and validation_ratio == "1:1"
+                    and group not in {"C", "D", "G", "I"}
+                ):
+                    # MiniMax explicitly maps unavailable square output to the
+                    # workflow's default portrait direction, as its API defines.
+                    validation_ratio = "adaptive"
+                native_resolution(group, p["resolution"], validation_ratio)
             if p["size"] and mode == "openai_video":
                 if group in {"C", "D", "E"}:
                     raise VideoError(
@@ -534,10 +567,15 @@ class VideoApiManager(ApiManager):
         body = {}
         if mode == "openai_video":
             body = {"model": model}
-            if model not in NO_TEXT_MODELS and model != "wan2.2-animate-move":
+            if model not in NO_TEXT_MODELS:
                 body.update(prompt=prompt, seconds=p["duration"])
             elif model == "minimax_h3_image_audio_to_video":
                 body["seconds"] = p["duration"]
+            elif caps and caps[6] == "E":
+                body["seconds"] = p["duration"]
+                body.update(
+                    resolution=p["resolution"], orientation=orientation(p["ratio"])
+                )
             if not caps or caps[5]:
                 if p["size"]:
                     body["size"] = p["size"]
@@ -554,25 +592,28 @@ class VideoApiManager(ApiManager):
                 body["videos"] = videos
         elif mode in {"minimax", "seedance"}:
             content = []
-            if model not in NO_TEXT_MODELS and model != "wan2.2-animate-move":
+            if model not in NO_TEXT_MODELS and prompt.strip():
                 content.append({"type": "text", "text": prompt})
             frames = (
                 model in FRAME_MODELS or c.get("reference_mode") == "first_last_frame"
             )
-            if (
-                mode == "seedance"
-                and c.get("reference_mode", "reference") == "first_frame"
-            ):
+            single_frame = c.get("reference_mode", "reference") in {
+                "first_frame",
+                "last_frame",
+            }
+            if single_frame and model not in FRAME_MODELS:
                 if len(images) != 1 or audios or videos:
                     raise VideoError(
-                        "Seedance 首帧模式需要恰好一张图片，不混用音频或视频。"
+                        "首帧/尾帧模式需要恰好一张图片，不混用音频或视频。"
                     )
-                frames = True
+                frames = False
             elif frames and (len(images) != 2 or audios or videos):
                 raise VideoError("首尾帧模式需要恰好两张图片，不混用音频或视频。")
             for i, image in enumerate(images):
                 role = (
-                    ("first_frame" if i == 0 else "last_frame")
+                    c["reference_mode"]
+                    if single_frame
+                    else ("first_frame" if i == 0 else "last_frame")
                     if frames
                     else "reference_image"
                 )
@@ -604,12 +645,14 @@ class VideoApiManager(ApiManager):
                     ),
                     ratio="adaptive" if frames else p["ratio"],
                 )
-                if not caps or caps[5]:
-                    body[
-                        "audio_duration"
-                        if model == "minimax_h3_image_audio_to_video"
-                        else "duration"
-                    ] = p["duration"]
+                # AutoDL 1.0.27's deployed MiniMax decoder requires this
+                # workflow's audio_duration; the API document contains both
+                # spellings. This is verified against the actual decoder.
+                body[
+                    "audio_duration"
+                    if model == "minimax_h3_image_audio_to_video"
+                    else "duration"
+                ] = p["duration"]
         elif mode == "autodl_native":
             # Known AutoDL workflows retain their documented native mapping;
             # custom/forward-compatible workflow IDs use the same field names
@@ -635,7 +678,12 @@ class VideoApiManager(ApiManager):
                 body["resolution"] = native_resolution("E", p["resolution"], p["ratio"])
             else:
                 body.update(duration=p["duration"], resolution=p["resolution"])
-            if model in FRAME_MODELS and len(images) == 2:
+            if (
+                c.get("reference_mode") in {"first_frame", "last_frame"}
+                and len(images) == 1
+            ):
+                body[c["reference_mode"]] = images[0]
+            elif model in FRAME_MODELS and len(images) == 2:
                 body.update(first_frame=images[0], last_frame=images[1])
             elif caps and caps[4] and images and videos:
                 body.update(ref_image=images[0], ref_video=videos[0])
@@ -674,10 +722,10 @@ class VideoApiManager(ApiManager):
                     input_body.update(
                         first_frame_url=images[0], last_frame_url=images[1]
                     )
-                elif reference_mode == "first_frame":
+                elif reference_mode in {"first_frame", "last_frame"}:
                     if len(images) != 1:
-                        raise VideoError("首帧模式需要恰好一张图片。")
-                    input_body["first_frame_url"] = images[0]
+                        raise VideoError("首帧/尾帧模式需要恰好一张图片。")
+                    input_body[reference_mode + "_url"] = images[0]
                 elif images:
                     input_body["img_url"] = images[0]
                     if len(images) > 1:
@@ -720,6 +768,7 @@ class VideoApiManager(ApiManager):
                     "{resolution}": p["resolution"],
                     "{ratio}": p["ratio"],
                     "{size}": p["size"],
+                    "{reference_mode}": c.get("reference_mode", "reference"),
                     "{images}": images,
                     "{image}": images[0] if images else "",
                     "{audios}": audios,
@@ -747,7 +796,7 @@ class VideoApiManager(ApiManager):
         return create.replace("{model}", quote(model, safe="")), query, body, headers
 
     def parse_task(self, data: dict) -> tuple[str, str, str, str]:
-        mode = self.config.get("interface_mode", "openai_video")
+        mode = self.config.get("interface_mode", "minimax")
         if mode == "custom_endpoint":
             paths = {
                 name: self.config.get("custom_" + name + "_path", default)
@@ -767,8 +816,16 @@ class VideoApiManager(ApiManager):
             if mode == "minimax"
             else data.get("output", data)
             if mode == "dashscope"
+            else data.get("data", data)
+            if mode == "autodl_native"
             else data
         )
+        if not isinstance(node, dict):
+            raise VideoError("视频接口没有返回有效任务对象。")
+        if node.get("modality") == "audio":
+            raise VideoError(
+                "视频接口返回了音频产物，无法作为视频发送；请检查模型配置。"
+            )
         task_id = node.get("id") or node.get("task_id") or ""
         status = node.get("status") or node.get("task_status") or ""
         url = node.get("url") or node.get("video_url") or ""
@@ -798,7 +855,12 @@ class VideoApiManager(ApiManager):
         self, method: str, url: str, key: str, headers: dict, body=None
     ) -> dict:
         session = await self._get_session()
-        request_headers = {**headers, "Authorization": "Bearer " + key}
+        authorization = (
+            key
+            if self.config.get("interface_mode") == "autodl_native"
+            else "Bearer " + key
+        )
+        request_headers = {**headers, "Authorization": authorization}
         timeout = aiohttp.ClientTimeout(
             total=max(1, int(self.config.get("timeout", 120)))
         )
@@ -813,10 +875,51 @@ class VideoApiManager(ApiManager):
                 self.config.get("proxy_url") if self.config.get("use_proxy") else None,
             ),
         ) as resp:
-            text = await resp.text()
+            text = (
+                (await resp.text()).replace(key, "[redacted]")
+                if key
+                else await resp.text()
+            )
             if resp.status >= 400:
-                raise VideoError(
-                    f"视频接口 HTTP {resp.status}：{text[:800].replace(key, '[redacted]')}"
+                detail = text.replace(key, "[redacted]")
+                try:
+                    error_data = json.loads(detail)
+                    error = error_data.get("error", error_data)
+                    if isinstance(error, dict):
+                        detail = (
+                            f"{error.get('code', '')} {error.get('message', '')}".strip()
+                            or detail
+                        )
+                except (ValueError, AttributeError):
+                    pass
+                lowered = detail.lower()
+                if "model_price_error" in lowered:
+                    reason = "模型价格未配置或计费规则无效，请联系管理员"
+                elif (
+                    "no_eligible_channel" in lowered
+                    or "no available channel" in lowered
+                ):
+                    reason = "没有可用模型渠道，请检查模型、渠道和分组权限"
+                elif any(
+                    word in lowered
+                    for word in ("insufficient", "quota", "balance", "余额", "配额")
+                ):
+                    reason = "余额或配额不足，请检查账户额度"
+                else:
+                    reason = {
+                        401: "API Key 鉴权失败",
+                        403: "接口或模型访问被拒绝",
+                        400: "模型参数或媒体输入不符合接口要求",
+                        422: "模型参数或媒体输入不符合接口要求",
+                        404: "接口路径、模型或任务不存在",
+                        410: "任务或结果地址已过期",
+                        429: "上游限流或任务并发已满",
+                    }.get(
+                        resp.status,
+                        "上游服务异常" if resp.status >= 500 else "视频接口请求失败",
+                    )
+                raise VideoHttpError(
+                    f"{reason}（HTTP {resp.status}）：{detail[:400]}", resp.status
                 )
             try:
                 if "text/event-stream" in resp.headers.get("Content-Type", ""):
@@ -892,6 +995,8 @@ class VideoApiManager(ApiManager):
         task_id, status, url, error = self.parse_task(data)
         url_expires_at = _url_expiry(data, url)
         if not task_id and not url:
+            if error:
+                raise VideoError(f"视频提交失败：{error}")
             raise VideoError("接口没有返回任务 ID 或视频地址；请核对任务记录后再提交。")
         info = {
             "task_id": task_id,
@@ -906,7 +1011,15 @@ class VideoApiManager(ApiManager):
         deadline = time.monotonic() + max(1, int(self.config.get("poll_timeout", 900)))
         interval = max(1.0, float(self.config.get("poll_interval", 5)))
         success = {"completed", "succeeded", "success"}
-        failure = {"failed", "failure", "cancelled", "canceled", "expired"}
+        failure = {
+            "failed",
+            "failure",
+            "cancelled",
+            "canceled",
+            "expired",
+            "error",
+            "timeout",
+        }
         if self.config.get("interface_mode") == "custom_endpoint":
             success.update(
                 s.strip().lower()
@@ -948,6 +1061,14 @@ class VideoApiManager(ApiManager):
                 url_expires_at = _url_expiry(data, url) or url_expires_at
                 transient_errors = 0
             except (aiohttp.ClientError, asyncio.TimeoutError, VideoError) as exc:
+                if (
+                    isinstance(exc, VideoHttpError)
+                    and exc.status < 500
+                    and exc.status not in {408, 429}
+                ):
+                    raise VideoError(
+                        f"视频查询失败（任务 ID：{task_id}）：{exc}。请核对原任务，勿重复提交。"
+                    ) from exc
                 transient_errors += 1
                 if transient_errors > 3 or time.monotonic() >= deadline:
                     raise VideoError(

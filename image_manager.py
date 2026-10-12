@@ -37,7 +37,7 @@ class ImageManager:
                     ) as resp:
                         resp.raise_for_status()
                         return await resp.read()
-            except Exception as e:
+            except Exception:
                 if i < self.max_retries:
                     await asyncio.sleep(1)
         return None
@@ -484,6 +484,7 @@ class ImageManager:
         max_images: int | None = None,
         include_sender_avatar: bool = False,
         strict: bool = False,
+        preserve_duplicates: bool = False,
     ) -> List[str]:
         """Collect usable image sources from components and quoted messages."""
         quoted: list[str] = []
@@ -496,9 +497,9 @@ class ImageManager:
 
         def add(target: list[str], source: str):
             source = str(source or "").strip()
-            if source and source not in target:
+            if source and (preserve_duplicates or source not in target):
                 target.append(source)
-                if source not in ordered:
+                if preserve_duplicates or source not in ordered:
                     ordered.append(source)
 
         def add_at(user_id):

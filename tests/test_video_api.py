@@ -84,6 +84,15 @@ class VideoPayloadTest(unittest.TestCase):
             [x["role"] for x in body["content"][1:]], ["first_frame", "last_frame"]
         )
 
+    def test_minimax_square_ratio_uses_documented_provider_fallback(self):
+        m = self.manager("minimax", "minimax_h3_image_audio_to_video")
+        m.config["aspect_ratio"] = "1:1"
+        _, _, body, _ = m.build_request("", ["a"], ["b"], [])
+        self.assertEqual(body["ratio"], "1:1")
+        m.config["interface_mode"] = "openai_video"
+        with self.assertRaisesRegex(VideoError, "方形"):
+            m.build_request("", ["a"], ["b"], [])
+
     def test_native_uses_model_in_path_and_native_resolution(self):
         m = self.manager("autodl_native", "minimax_h3_z0902")
         create, _, body, _ = m.build_request("hello", ["a"], [], [])
@@ -92,20 +101,22 @@ class VideoPayloadTest(unittest.TestCase):
         self.assertEqual(body["resolution"], "480p横(864*480)")
         self.assertEqual(body["ref_image_0"], "a")
 
-    def test_audio_sync_has_audio_duration_and_no_prompt(self):
+    def test_audio_sync_matches_deployed_decoder_and_rejects_text(self):
         for mode in ("openai_video", "minimax", "autodl_native"):
             m = self.manager(mode, "minimax_h3_image_audio_to_video")
-            _, _, body, _ = m.build_request("ignored", ["a"], ["b"], [])
+            _, _, body, _ = m.build_request("", ["a"], ["b"], [])
             self.assertNotIn("prompt", body)
-            self.assertNotIn("duration", body)
             self.assertNotIn("seed", body)
             self.assertEqual(
-                body["seconds" if mode == "openai_video" else "audio_duration"], 1
+                body["seconds" if mode == "openai_video" else "audio_duration"],
+                1,
             )
+            with self.assertRaisesRegex(VideoError, "不支持提示词"):
+                m.build_request("must not disappear", ["a"], ["b"], [])
 
     def test_dashscope_accepts_legacy_and_generic_wan_models(self):
         legacy = self.manager("dashscope", "wan2.2-animate-move", use_stream=True)
-        _, _, body, headers = legacy.build_request("ignored", ["a"], [], ["b"])
+        _, _, body, headers = legacy.build_request("", ["a"], [], ["b"])
         self.assertEqual(set(body), {"model", "input", "parameters"})
         self.assertEqual(body["parameters"], {"mode": "wan-std", "check_image": True})
         self.assertEqual(headers["X-DashScope-Async"], "enable")
@@ -228,6 +239,7 @@ class VideoPayloadTest(unittest.TestCase):
         buffer = io.BytesIO()
         Image.new("RGB", (1, 1)).save(buffer, "PNG")
         m = self.manager("openai_video")
+        m.config["routes"] = {"image_to_video": {"interface_mode": "openai_video"}}
         _, prepared = m.prepare(
             "猫 768p 9:16",
             [buffer.getvalue()],
@@ -291,6 +303,8 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.app.router.add_post("/v1/videos", self.create)
         self.app.router.add_get("/v1/videos/task", self.poll)
         self.app.router.add_get("/result.mp4", self.download)
+        self.app.router.add_post("/v2/video_generation", self.create)
+        self.app.router.add_get("/v2/query/video_generation/task", self.poll)
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
         site = web.TCPSite(self.runner, "127.0.0.1", 0)
@@ -308,6 +322,7 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 "poll_interval": 1,
                 "poll_timeout": 10,
                 "use_stream": True,
+                "auto_route": False,
             },
             Path(self.tmp.name),
         )
@@ -327,10 +342,26 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 text='data: {"id":"task","status":"queued"}\n\ndata: {"heartbeat":true}\n\n',
                 content_type="text/event-stream",
             )
+        if request.path.startswith("/v2/"):
+            return web.json_response({"task_id": "task"})
         return web.json_response({"id": "task", "status": "queued"})
 
     async def poll(self, request):
         self.polls += 1
+        if request.path.startswith("/v2/"):
+            return web.json_response(
+                {
+                    "task": {
+                        "id": "task",
+                        "status": "running" if self.polls == 1 else "succeeded",
+                        **(
+                            {"content": {"url": self.base + "/result.mp4"}}
+                            if self.polls > 1
+                            else {}
+                        ),
+                    }
+                }
+            )
         if self.polls == 1:
             return web.json_response({"id": "task", "status": "in_progress"})
         return web.json_response(
@@ -368,13 +399,15 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
             await self.manager.generate("hello", [])
 
     async def test_download_failure_keeps_upstream_url_for_fallback(self):
-        with patch.object(
-            VideoApiManager,
-            "download_video",
-            new=AsyncMock(side_effect=VideoError("download unavailable")),
+        with (
+            patch.object(
+                VideoApiManager,
+                "download_video",
+                new=AsyncMock(side_effect=VideoError("download unavailable")),
+            ),
+            self.assertRaises(VideoDownloadError) as raised,
         ):
-            with self.assertRaises(VideoDownloadError) as raised:
-                await self.manager.generate("hello", [])
+            await self.manager.generate("hello", [])
         self.assertEqual(raised.exception.url, self.base + "/result.mp4")
         self.assertEqual(raised.exception.url_expires_at, "")
         info = json.loads(next(self.manager.data_dir.glob("*.json")).read_text("utf-8"))
@@ -398,6 +431,36 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.sse = True
         result = await self.manager.generate("hello", [])
         self.assertEqual(result.task_id, "task")
+        self.assertEqual(len(self.requests), 1)
+
+    async def test_minimax_v2_submit_poll_download_lifecycle(self):
+        self.manager.config["interface_mode"] = "minimax"
+        result = await self.manager.generate("first text second text", [])
+        self.assertEqual(result.path.read_bytes(), MP4)
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.polls, 2)
+        self.assertEqual(
+            self.requests[0]["content"],
+            [{"type": "text", "text": "first text second text"}],
+        )
+        self.assertEqual(self.requests[0]["duration"], 1)
+
+    async def test_permanent_poll_error_keeps_id_and_is_not_retried(self):
+        original = VideoApiManager._json_request
+        polls = []
+
+        async def request(manager, method, *args):
+            if method == "GET":
+                polls.append(method)
+                raise module.VideoHttpError("API Key 鉴权失败（HTTP 401）", 401)
+            return await original(manager, method, *args)
+
+        with (
+            patch.object(VideoApiManager, "_json_request", request),
+            self.assertRaisesRegex(VideoError, "task.*401"),
+        ):
+            await self.manager.generate("hello", [])
+        self.assertEqual(len(polls), 1)
         self.assertEqual(len(self.requests), 1)
 
     async def test_failed_submission_is_never_retried(self):

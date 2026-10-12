@@ -19,6 +19,13 @@ ROUTES = {
     ),
     "first_last_frame": ("首尾帧生视频", "minimax_h3_lightx2v", ""),
     "first_frame": ("首帧生视频", "", ""),
+    "last_frame": ("尾帧生视频", "", ""),
+    "motion_transfer": ("动作迁移（图片+视频生视频）", "wan2.2-animate-move", ""),
+    "audio_sync": (
+        "音频同步（自动对口型，图片+音频生视频）",
+        "minimax_h3_image_audio_to_video",
+        "",
+    ),
     "audio_to_video": (
         "音频生视频",
         "minimax_h3_image_audio_to_video_v2",
@@ -30,7 +37,7 @@ ROUTES = {
         "minimax_h3_image_audio_to_video_v2_15s",
     ),
     "video_to_video": ("视频生视频", "", ""),
-    "image_video_to_video": ("图片＋视频生视频", "wan2.2-animate-move", ""),
+    "image_video_to_video": ("图片＋视频生视频", "", ""),
     "audio_video_to_video": ("音频＋视频生视频", "", ""),
     "image_audio_video_to_video": ("图片＋音频＋视频生视频", "", ""),
 }
@@ -81,10 +88,13 @@ class VideoOptions:
             "auto",
             "reference",
             "first_frame",
+            "last_frame",
             "first_last_frame",
+            "motion_transfer",
+            "audio_sync",
         }:
             raise VideoError(
-                "图片用途必须是 auto、reference、first_frame 或 first_last_frame。"
+                "图片用途必须是 auto、reference、first_frame、last_frame、first_last_frame、motion_transfer 或 audio_sync。"
             )
         return values
 
@@ -141,6 +151,23 @@ def parse_video_command(text: str) -> VideoOptions:
             )
     parts.append(text[cursor:])
     result.prompt = " ".join(part.strip() for part in parts if part.strip())
+    directive = re.match(
+        r"^(首帧|尾帧|首尾帧|动作迁移|音频同步)(?:\s+|$)", result.prompt
+    )
+    if directive:
+        mode = {
+            "首帧": "first_frame",
+            "尾帧": "last_frame",
+            "首尾帧": "first_last_frame",
+            "动作迁移": "motion_transfer",
+            "音频同步": "audio_sync",
+        }[directive[1]]
+        if result.reference_mode not in {"auto", mode}:
+            raise VideoError(
+                "路由关键词与 --reference-mode/--frames 冲突，请只选择一种模式。"
+            )
+        result.reference_mode = mode
+        result.prompt = result.prompt[directive.end() :].strip()
     result.overrides()
     return result
 
@@ -157,18 +184,22 @@ def select_route(
     overrides = overrides or {}
     reference = overrides.get("reference_mode", "auto")
     if reference == "auto":
-        # A command/tool request containing a prompt and one or more images is
-        # ordinary image-to-video by default.  The administrator's default
-        # still applies to image-only requests, while first-frame and
-        # first-last-frame remain explicit opt-ins through config/overrides.
-        if images and str(prompt or "").strip():
-            reference = "reference"
-        else:
-            reference = config.get("reference_mode", "reference")
-        if reference == "auto":
-            reference = "reference"
-    if reference in {"first_frame", "first_last_frame"}:
-        count = 1 if reference == "first_frame" else 2
+        # Image count never implies frame semantics. Only an explicit directive
+        # or a tool's explicit reference_mode can select a special route.
+        reference = "reference"
+    if reference in {"motion_transfer", "audio_sync"}:
+        label = ROUTES[reference][0]
+        required = (1, 0, 1) if reference == "motion_transfer" else (1, 1, 0)
+        if (len(images), len(audios), len(videos)) != required:
+            raise VideoError(
+                f"{label}需要恰好 {required[0]} 张图片、{required[1]} 段音频、{required[2]} 段视频；"
+                f"当前图片 {len(images)}、音频 {len(audios)}、视频 {len(videos)}。"
+            )
+        if str(prompt or "").strip():
+            raise VideoError(f"{label}不支持输入提示词，请只发送路由关键词和所需媒体。")
+        route = reference
+    elif reference in {"first_frame", "last_frame", "first_last_frame"}:
+        count = 2 if reference == "first_last_frame" else 1
         if len(images) != count or audios or videos:
             raise VideoError(
                 f"{reference} 需要恰好 {count} 张图片，不能混用音频或视频；当前图片 {len(images)}、音频 {len(audios)}、视频 {len(videos)}。"
@@ -188,6 +219,14 @@ def select_route(
         route = "image_audio_to_video" if images else "audio_to_video"
     else:
         route = "image_to_video" if images else "text_to_video"
+    if (
+        not videos
+        and reference not in {"motion_transfer", "audio_sync"}
+        and (len(images) > 9 or len(audios) > 3)
+    ):
+        raise VideoError(
+            f"此类生视频最多接收 9 张图片、3 段音频；当前图片 {len(images)}、音频 {len(audios)}。未提交生成任务。"
+        )
     effective = dict(config)
     if config.get("auto_route", True):
         label, default_model, default_long = ROUTES[route]
@@ -219,7 +258,7 @@ def select_route(
             )
         effective["model"] = model
         mode_key = "long_interface_mode" if is_long_model else "interface_mode"
-        mode = rule.get(mode_key, "inherit")
+        mode = rule.get(mode_key, "inherit" if is_long_model else "minimax")
         if mode == "inherit" and is_long_model:
             mode = rule.get("interface_mode", "inherit")
         if mode != "inherit":
@@ -227,9 +266,7 @@ def select_route(
         for key in ("resolution", "aspect_ratio"):
             value = rule.get(
                 key,
-                "464p"
-                if route == "image_video_to_video" and key == "resolution"
-                else "",
+                "464p" if route == "motion_transfer" and key == "resolution" else "",
             )
             if value:
                 effective[key] = value
