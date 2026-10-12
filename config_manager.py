@@ -10,6 +10,8 @@ from typing import Any
 
 LEGACY_HELP_TEXT = "🎨 图片：/生图 <提示词>、/画图 <提示词>，可附带或引用图片、@他人取头像。预设关键词按配置触发。\n🎬 视频：/生视频 <提示词>，根据图片/音频/视频自动选择模型，可直接发送或引用媒体、@他人取头像。\n参数：--duration 1 --resolution 480p --ratio 16:9；--frames 表示明确使用两张图作为首尾帧。图片、音频、视频请直接发送或引用，不要填写媒体 URL。\n例如：/生视频 一只猫在雪地奔跑 --duration 1\n模型和所需媒体以插件配置为准；任何人都可使用，不设次数限制。"
 
+LEGACY_COLLECTION_HELP_TEXT = "🎨 图片：/生图 <提示词>，可附带或引用图片。\n🎬 视频：先 /生视频，然后依次发送文字、图片、QQ语音、视频或媒体文件；多段文字按顺序合并，最后 /生成。收集时不逐条回复；/取消 可清空重来。30分钟未发材料会过期。\n首帧、尾帧：关键词 + 提示词 + 一图。首尾帧：关键词 + 提示词 + 两图。普通生视频1–9图均为参考图，不自动选择帧模式。音频最多3段。\n动作迁移：关键词 + 一图一视频，不发提示词。音频同步：关键词 + 一图一音频，不发提示词。其他多媒体组合需提示词和管理员配置模型。\n可用 --duration 1 --resolution 480p --ratio 16:9。"
+
 GLOBAL_KEYS = {
     "show_model_info",
     "debug_mode",
@@ -100,7 +102,7 @@ def migrate_config(config: Any, backup_dir: Path) -> bool:
 
 
 def migrate_video_settings(config: Any, backup_dir: Path, *, backup=True) -> bool:
-    """Upgrade prefixes and split the legacy motion-transfer route losslessly.
+    """Upgrade video collection defaults and older routes losslessly.
 
     Args:
         config: AstrBot configuration, including grouped settings.
@@ -113,14 +115,15 @@ def migrate_video_settings(config: Any, backup_dir: Path, *, backup=True) -> boo
     Raises:
         OSError: If backing up or saving fails; in-memory values are restored.
     """
-    if config.get("_config_layout_version", 0) >= 2:
+    if config.get("_config_layout_version", 0) >= 3:
         return False
     original = copy.deepcopy(dict(config))
     upgraded = copy.deepcopy(original)
     if backup:
         backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        snapshot = backup_dir / f"config_before_v1.1.0_{stamp}.json"
+        version = "v1.1.1" if config.get("_config_layout_version", 0) >= 2 else "v1.1.0"
+        snapshot = backup_dir / f"config_before_{version}_{stamp}.json"
         with snapshot.open("x", encoding="utf-8") as stream:
             json.dump(original, stream, ensure_ascii=False, indent=2)
         snapshot.chmod(0o600)
@@ -129,58 +132,67 @@ def migrate_video_settings(config: Any, backup_dir: Path, *, backup=True) -> boo
     )
     defaults = schema_defaults(schema)
     global_settings = upgraded.get("global_settings", {})
-    if global_settings.get("help_text") == LEGACY_HELP_TEXT:
+    if global_settings.get("help_text") in {
+        LEGACY_HELP_TEXT,
+        LEGACY_COLLECTION_HELP_TEXT,
+    }:
         global_settings["help_text"] = defaults["global_settings"]["help_text"]
-    for name in ("image_settings", "video_settings"):
-        group = upgraded.setdefault(name, copy.deepcopy(defaults[name]))
-        prefix = group.get("extra_prefix", defaults[name]["extra_prefix"])
-        if isinstance(prefix, str):
-            group["extra_prefix"] = [prefix] if prefix.strip() else []
-    video = upgraded["video_settings"]
-    rules = video.setdefault(
-        "routes", copy.deepcopy(defaults["video_settings"]["routes"])
-    )
-    if isinstance(rules, dict):
-        rules = [{"__template_key": key, **value} for key, value in rules.items()]
-        video["routes"] = rules
-    if isinstance(rules, list):
-        motion = next(
-            (
-                r
-                for r in rules
-                if isinstance(r, dict) and r.get("__template_key") == "motion_transfer"
-            ),
-            None,
+    if config.get("_config_layout_version", 0) < 2:
+        for name in ("image_settings", "video_settings"):
+            group = upgraded.setdefault(name, copy.deepcopy(defaults[name]))
+            prefix = group.get("extra_prefix", defaults[name]["extra_prefix"])
+            if isinstance(prefix, str):
+                group["extra_prefix"] = [prefix] if prefix.strip() else []
+        video = upgraded["video_settings"]
+        rules = video.setdefault(
+            "routes", copy.deepcopy(defaults["video_settings"]["routes"])
         )
-        for rule in rules:
-            if not isinstance(rule, dict):
-                continue
-            if (
-                rule.get("__template_key") == "image_video_to_video"
-                and rule.get("model") == "wan2.2-animate-move"
-                and motion is None
-            ):
-                motion = {
-                    **copy.deepcopy(rule),
-                    "__template_key": "motion_transfer",
-                    "interface_mode": "minimax",
-                }
-                rule.update(
-                    model="",
-                    long_model="",
-                    interface_mode="minimax",
-                    resolution="",
-                    aspect_ratio="",
-                )
-            if rule.get("interface_mode", "inherit") == "inherit":
-                rule["interface_mode"] = "minimax"
-        if motion is not None and motion not in rules:
-            rules.append(motion)
-        present = {r.get("__template_key") for r in rules if isinstance(r, dict)}
-        for rule in defaults["video_settings"]["routes"]:
-            if rule["__template_key"] not in present:
-                rules.append(copy.deepcopy(rule))
-    upgraded["_config_layout_version"] = 2
+        if isinstance(rules, dict):
+            rules = [{"__template_key": key, **value} for key, value in rules.items()]
+            video["routes"] = rules
+        if isinstance(rules, list):
+            motion = next(
+                (
+                    r
+                    for r in rules
+                    if isinstance(r, dict)
+                    and r.get("__template_key") == "motion_transfer"
+                ),
+                None,
+            )
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    continue
+                if (
+                    rule.get("__template_key") == "image_video_to_video"
+                    and rule.get("model") == "wan2.2-animate-move"
+                    and motion is None
+                ):
+                    motion = {
+                        **copy.deepcopy(rule),
+                        "__template_key": "motion_transfer",
+                        "interface_mode": "minimax",
+                    }
+                    rule.update(
+                        model="",
+                        long_model="",
+                        interface_mode="minimax",
+                        resolution="",
+                        aspect_ratio="",
+                    )
+                if rule.get("interface_mode", "inherit") == "inherit":
+                    rule["interface_mode"] = "minimax"
+            if motion is not None and motion not in rules:
+                rules.append(motion)
+            present = {r.get("__template_key") for r in rules if isinstance(r, dict)}
+            for rule in defaults["video_settings"]["routes"]:
+                if rule["__template_key"] not in present:
+                    rules.append(copy.deepcopy(rule))
+    upgraded.setdefault("video_settings", {}).setdefault(
+        "collection_timeout_seconds",
+        defaults["video_settings"]["collection_timeout_seconds"],
+    )
+    upgraded["_config_layout_version"] = 3
     config.clear()
     config.update(upgraded)
     try:

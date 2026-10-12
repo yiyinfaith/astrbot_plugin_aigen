@@ -33,6 +33,12 @@ class Plain:
         self.text = text
 
 
+class MessageChain(list):
+    def message(self, text):
+        self.append(Plain(text))
+        return self
+
+
 class Video:
     def __init__(self, file):
         self.file = file
@@ -108,6 +114,7 @@ def plugin_class():
         "timezone": timezone,
         "monotonic": monotonic,
         "Plain": Plain,
+        "MessageChain": MessageChain,
         "Video": Video,
         "Image": Image,
         "VideoError": router.VideoError,
@@ -133,13 +140,16 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         cls = plugin_class()
         self.plugin = cls.__new__(cls)
-        self.plugin.context = object()
+        self.plugin.context = SimpleNamespace(send_message=AsyncMock(return_value=True))
         self.plugin.conf = {"model": "image", "llm_cooldown_seconds": 0}
         self.plugin.video_conf = {"model": "video", "llm_cooldown_seconds": 0}
         self.plugin._llm_last_call = {}
         self.plugin._video_collections = {}
         self.plugin._video_busy = set()
         self.plugin._video_generation_tasks = set()
+        self.plugin._video_collection_tasks = set()
+        self.plugin._cleanup_task = None
+        self.plugin.api_mgr = SimpleNamespace(_session=None)
         self.plugin._terminating = False
         self.plugin.data_mgr = type(
             "Data",
@@ -169,6 +179,9 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
                 "prepare": lambda *args, **kwargs: None,
             },
         )()
+
+    async def asyncTearDown(self):
+        await self.plugin.terminate()
 
     async def test_llm_tool_success_sends_video_only_and_reads_quoted_media(self):
         event = Event(

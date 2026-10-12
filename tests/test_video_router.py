@@ -8,6 +8,29 @@ from video_router import VideoError, VideoOptions, parse_video_command, select_r
 
 
 class RoutingTest(unittest.TestCase):
+    def test_prompt_segment_count_tracks_only_retained_text_from_each_message(self):
+        for fragments, prompt, count in [
+            (["一只猫", "镜头平稳", "暖色"], "一只猫 镜头平稳 暖色", 3),
+            (["", "   ", "--duration 1"], "", 0),
+            (["音频同步", "--duration", "1"], "", 0),
+            (["首帧", "人物转身", "--duration 1", "暖色"], "人物转身 暖色", 2),
+            (["首帧 人物转身\n镜头跟随", "--ratio 16:9"], "人物转身\n镜头跟随", 1),
+            (["--duration", "1", "提示词"], "提示词", 1),
+            (["人物转身 --duration", "1 镜头跟随"], "人物转身 镜头跟随", 2),
+            (["人物转身", "--ratio", "16:9", "尾帧"], "人物转身 尾帧", 2),
+            (["--duration 1 首帧", "镜头", "跟随"], "镜头 跟随", 2),
+            (["--duration", "1 首帧 人物转身"], "人物转身", 1),
+            (["一只猫 --ratio 16:9 看镜头"], "一只猫 看镜头", 1),
+        ]:
+            with self.subTest(fragments=fragments):
+                result = parse_video_command(fragments)
+                self.assertEqual(
+                    (result.prompt, result.prompt_segments), (prompt, count)
+                )
+                single = parse_video_command(" ".join(fragments))
+                self.assertEqual(single.prompt, result.prompt)
+                self.assertEqual(single.overrides(), result.overrides())
+
     def setUp(self):
         schema = json.loads(
             (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(

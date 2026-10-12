@@ -17,7 +17,7 @@ from typing import Any, ClassVar
 
 import aiohttp
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Image, Plain, Video
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core import AstrBotConfig
@@ -36,7 +36,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频生成与关键词预设插件",
-    "1.1.0",
+    "1.1.1",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -70,6 +70,7 @@ class ImageGeneratorPlugin(Star):
         self._video_collections: dict[tuple[str, str, str], dict] = {}
         self._video_busy: set[tuple[str, str, str]] = set()
         self._video_generation_tasks: set[asyncio.Task] = set()
+        self._video_collection_tasks: set[asyncio.Task] = set()
         self._terminating = False
 
     async def initialize(self):
@@ -88,7 +89,7 @@ class ImageGeneratorPlugin(Star):
         """Close the reusable HTTP session during hot reload."""
         self._terminating = True
         self._video_collections.clear()
-        tasks = list(self._video_generation_tasks)
+        tasks = list(self._video_generation_tasks | self._video_collection_tasks)
         for task in tasks:
             task.cancel()
         if tasks:
@@ -108,9 +109,6 @@ class ImageGeneratorPlugin(Star):
         """Keep completed MP4s for platform delivery; never touch user files."""
         while True:
             await asyncio.sleep(3600)
-            for key, collection in list(self._video_collections.items()):
-                if monotonic() - collection["updated"] > 1800:
-                    self._video_collections.pop(key, None)
             cutoff = (
                 datetime.now(timezone.utc).timestamp()
                 - max(1, int(self.video_conf.get("cache_hours", 24))) * 3600
@@ -467,9 +465,6 @@ class ImageGeneratorPlugin(Star):
         if self._terminating:
             return
         collection = self._video_collections.get(key)
-        if collection and monotonic() - collection["updated"] > 1800:
-            self._video_collections.pop(key, None)
-            collection = None
         control = text in {"生成", "取消"} and self._has_astrbot_prefix(event, raw_text)
         if collection or control:
             event.stop_event()
@@ -605,6 +600,32 @@ class ImageGeneratorPlugin(Star):
         origin = str(getattr(event, "unified_msg_origin", "") or "")
         return origin, str(event.get_group_id() or ""), norm_id(event.get_sender_id())
 
+    async def _expire_video_collection(self, key, collection):
+        """Cancel an overdue collection and proactively notify its chat.
+
+        Args:
+            key: Platform, chat and sender identity of this collection.
+            collection: The exact collection owned by this timer.
+        """
+        await asyncio.sleep(max(0, collection["deadline"] - monotonic()))
+        # A finish received before the deadline may be waiting for an upload.
+        # Let that validation finish; invalid submissions keep the same deadline.
+        await collection["finish_idle"].wait()
+        if self._terminating or self._video_collections.get(key) is not collection:
+            return
+        self._video_collections.pop(key, None)
+        if collection["timer"] is not asyncio.current_task():
+            collection["timer"].cancel()
+        try:
+            await self.context.send_message(
+                key[0],
+                MessageChain().message(
+                    f"材料收集已超时（{collection['timeout']}秒），已取消本次生视频。请重新发送 /生视频 开始。"
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not send video collection timeout notice")
+
     async def _collect_video_request(
         self, event, prompt=None, preset_name="自定义", *, start=False
     ) -> list[Any]:
@@ -631,13 +652,16 @@ class ImageGeneratorPlugin(Star):
         if not self.video_conf.get("enabled", True):
             return [Plain("视频生成功能已关闭。")]
         collection = self._video_collections.get(key)
-        if collection is None:
-            if not start:
-                return [
-                    Plain(
-                        "没有正在收集的材料，或收集已超过 30 分钟；请先发送 /生视频。"
-                    )
-                ]
+        finish = control == "生成" and not start
+        if start:
+            if collection is not None:
+                collection["timer"].cancel()
+            try:
+                timeout = max(
+                    1, int(self.video_conf.get("collection_timeout_seconds", 60))
+                )
+            except (ValueError, TypeError, OverflowError):
+                timeout = 60
             collection = {
                 "lock": asyncio.Lock(),
                 "text": [],
@@ -646,114 +670,147 @@ class ImageGeneratorPlugin(Star):
                 "videos": [],
                 "errors": [],
                 "size": 0,
-                "updated": monotonic(),
+                "timeout": timeout,
+                "deadline": monotonic() + timeout,
+                "pending_finishes": 0,
+                "finish_idle": asyncio.Event(),
                 "preset": preset_name,
             }
+            collection["finish_idle"].set()
             self._video_collections[key] = collection
-        async with collection["lock"]:
-            # A finish command may have been queued while an earlier upload was
-            # resolving. Verify ownership again before accepting/submitting it.
-            if self._video_collections.get(key) is not collection:
-                return [Plain("材料已提交或取消，请等待结果或重新发送 /生视频。")]
-            if control == "取消" and not start:
-                self._video_collections.pop(key, None)
-                return [Plain("已取消本次材料收集。")]
-            if start:
-                for field in ("text", "images", "audios", "videos", "errors"):
-                    collection[field].clear()
-                collection.update(size=0, preset=preset_name)
-            collection["updated"] = monotonic()
-            finish = control == "生成" and not start
-            text = str(prompt or "") if start else "" if finish else raw.strip()
-            if text:
-                if sum(map(len, collection["text"])) + len(text) > 2_000_000:
-                    collection["errors"].append(
-                        "文字材料超过 200 万字符，请 /取消 后减少材料。"
+            timer = asyncio.create_task(self._expire_video_collection(key, collection))
+            collection["timer"] = timer
+            self._video_collection_tasks.add(timer)
+            timer.add_done_callback(self._video_collection_tasks.discard)
+        elif collection is None:
+            return [
+                Plain("没有正在收集的材料，或本次收集已超时取消；请先发送 /生视频。")
+            ]
+        elif monotonic() >= collection["deadline"]:
+            if not collection["pending_finishes"]:
+                await self._expire_video_collection(key, collection)
+            return [Plain("材料收集已超时，请重新发送 /生视频。")]
+        if finish:
+            collection["pending_finishes"] += 1
+            collection["finish_idle"].clear()
+        try:
+            async with collection["lock"]:
+                # A finish command may have been queued while an earlier upload was
+                # resolving. Verify ownership again before accepting/submitting it.
+                if self._video_collections.get(key) is not collection:
+                    return [Plain("材料已提交或取消，请等待结果或重新发送 /生视频。")]
+                if start:
+                    try:
+                        await event.send(
+                            event.chain_result(
+                                [Plain("请发送材料，最后发送“/生成”开始生成视频")]
+                            )
+                        )
+                    except BaseException:
+                        if self._video_collections.get(key) is collection:
+                            self._video_collections.pop(key, None)
+                        timer.cancel()
+                        raise
+                if control == "取消" and not start:
+                    self._video_collections.pop(key, None)
+                    collection["timer"].cancel()
+                    return [Plain("已取消本次材料收集。")]
+                text = str(prompt or "") if start else "" if finish else raw.strip()
+                if text:
+                    if sum(map(len, collection["text"])) + len(text) > 2_000_000:
+                        collection["errors"].append(
+                            "文字材料超过 200 万字符，请 /取消 后减少材料。"
+                        )
+                    else:
+                        collection["text"].append(text)
+                try:
+                    _, images, audios, videos = await self._video_command_inputs(
+                        event, "", "自定义"
                     )
-                else:
-                    collection["text"].append(text)
-            try:
-                _, images, audios, videos = await self._video_command_inputs(
-                    event, "", "自定义"
-                )
-                added_size = sum(
-                    len(src) for bucket in (images, audios, videos) for src in bucket
-                )
-                if collection["size"] + added_size > 100 * 1024 * 1024:
-                    raise VideoError(
-                        "材料总量超过 100MB，请 /取消 后减少材料或使用较小的文件。"
+                    added_size = sum(
+                        len(src)
+                        for bucket in (images, audios, videos)
+                        for src in bucket
                     )
-                for field, sources in (
-                    ("images", images),
-                    ("audios", audios),
-                    ("videos", videos),
-                ):
-                    collection[field].extend(sources)
-                collection["size"] += added_size
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Could not collect video input: %s", exc)
-                if len(collection["errors"]) < 5:
-                    collection["errors"].append(
-                        str(exc)[:500] or "有材料无法读取，请重新发送。"
-                    )
-            if self._terminating or self._video_collections.get(key) is not collection:
-                return []
-            if start:
-                await event.send(
-                    event.chain_result(
-                        [Plain("请发送材料，最后发送“/生成”开始生成视频")]
-                    )
-                )
-            if not finish:
-                return []
-            if collection["errors"]:
-                return [
-                    Plain(
-                        "材料读取失败，未提交生成任务：\n"
-                        + "\n".join(collection["errors"])
-                        + "\n请 /取消 后重新发送材料。"
-                    )
-                ]
-            try:
-                merged = " ".join(collection["text"])
-                options = parse_video_command(merged)
-                if options.reference_mode in {
-                    "first_frame",
-                    "last_frame",
-                    "first_last_frame",
-                    "motion_transfer",
-                    "audio_sync",
-                } and not re.match(
-                    r"^(首帧|尾帧|首尾帧|动作迁移|音频同步)(?:\s+|$)", merged.strip()
-                ):
-                    raise VideoError(
-                        "特殊类别请在文字材料开头明确填写“首尾帧”“首帧”“尾帧”“动作迁移”或“音频同步”关键词。"
-                    )
+                    if collection["size"] + added_size > 100 * 1024 * 1024:
+                        raise VideoError(
+                            "材料总量超过 100MB，请 /取消 后减少材料或使用较小的文件。"
+                        )
+                    for field, sources in (
+                        ("images", images),
+                        ("audios", audios),
+                        ("videos", videos),
+                    ):
+                        collection[field].extend(sources)
+                    collection["size"] += added_size
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Could not collect video input: %s", exc)
+                    if len(collection["errors"]) < 5:
+                        collection["errors"].append(
+                            str(exc)[:500] or "有材料无法读取，请重新发送。"
+                        )
                 if (
-                    options.images
-                    or options.audios
-                    or options.videos
-                    or extract_image_urls_from_text(merged)
-                    or any(text_media(merged))
+                    self._terminating
+                    or self._video_collections.get(key) is not collection
                 ):
-                    raise VideoError(
-                        "请直接发送图片、QQ 语音、视频或媒体文件，不接受媒体 URL 参数。"
+                    return []
+                if not finish:
+                    return []
+                if collection["errors"]:
+                    return [
+                        Plain(
+                            "材料读取失败，未提交生成任务：\n"
+                            + "\n".join(collection["errors"])
+                            + "\n请 /取消 后重新发送材料。"
+                        )
+                    ]
+                try:
+                    merged = " ".join(collection["text"])
+                    options = parse_video_command(collection["text"])
+                    if options.reference_mode in {
+                        "first_frame",
+                        "last_frame",
+                        "first_last_frame",
+                        "motion_transfer",
+                        "audio_sync",
+                    } and not re.match(
+                        r"^(首帧|尾帧|首尾帧|动作迁移|音频同步)(?:\s+|$)",
+                        merged.strip(),
+                    ):
+                        raise VideoError(
+                            "特殊类别请在文字材料开头明确填写“首尾帧”“首帧”“尾帧”“动作迁移”或“音频同步”关键词。"
+                        )
+                    if (
+                        options.images
+                        or options.audios
+                        or options.videos
+                        or extract_image_urls_from_text(merged)
+                        or any(text_media(merged))
+                    ):
+                        raise VideoError(
+                            "请直接发送图片、QQ 语音、视频或媒体文件，不接受媒体 URL 参数。"
+                        )
+                    self.video_mgr.prepare(
+                        options.prompt,
+                        collection["images"],
+                        collection["audios"],
+                        collection["videos"],
+                        options=options,
                     )
-                self.video_mgr.prepare(
-                    options.prompt,
-                    collection["images"],
-                    collection["audios"],
-                    collection["videos"],
-                    options=options,
-                )
-            except (VideoError, OSError, ValueError, TypeError) as exc:
-                return [
-                    Plain(
-                        f"{exc}\n材料仍保留，可补充缺少的材料后再次 /生成；如需删除材料，请 /取消 后重新开始。"
-                    )
-                ]
-            self._video_collections.pop(key, None)
-            self._video_busy.add(key)
+                except (VideoError, OSError, ValueError, TypeError) as exc:
+                    return [
+                        Plain(
+                            f"{exc}\n材料仍保留，可补充缺少的材料后再次 /生成；如需删除材料，请 /取消 后重新开始。"
+                        )
+                    ]
+                self._video_collections.pop(key, None)
+                collection["timer"].cancel()
+                self._video_busy.add(key)
+        finally:
+            if finish:
+                collection["pending_finishes"] -= 1
+                if not collection["pending_finishes"]:
+                    collection["finish_idle"].set()
         task = asyncio.current_task()
         self._video_generation_tasks.add(task)
         try:
@@ -766,6 +823,7 @@ class ImageGeneratorPlugin(Star):
                 collection["videos"],
                 dispatch_result=True,
                 options=options,
+                prompt_segments=options.prompt_segments,
             )
         finally:
             self._video_busy.discard(key)
@@ -784,6 +842,7 @@ class ImageGeneratorPlugin(Star):
         dispatch_result=False,
         duration=0,
         options=None,
+        prompt_segments=None,
     ) -> list[Any]:
         if not self.video_conf.get("enabled", True):
             return [Plain("视频生成功能已关闭。")]
@@ -794,7 +853,12 @@ class ImageGeneratorPlugin(Star):
         except (VideoError, ValueError, TypeError) as exc:
             return [Plain(str(exc))]
         if not tool_call:
-            feedback = f"共收到{len(images)}图片，{len(audios or [])}音频，{len(videos or [])}视频，生成中"
+            if prompt_segments is None:
+                prompt_segments = int(bool(str(prompt or "").strip()))
+            feedback = (
+                f"共收到{len(images)}图片，{len(audios or [])}音频，"
+                f"{len(videos or [])}视频，{prompt_segments}段提示词，生成中"
+            )
             await event.send(event.chain_result([Plain(feedback)]))
         try:
             result = await self.video_mgr.generate(

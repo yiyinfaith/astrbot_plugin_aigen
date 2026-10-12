@@ -65,6 +65,7 @@ class VideoOptions:
     reference_mode: str = "auto"
     seed: int = -2
     generate_audio: str = "auto"
+    prompt_segments: int = 0
 
     def overrides(self) -> dict:
         values = {}
@@ -99,13 +100,27 @@ class VideoOptions:
         return values
 
 
-def parse_video_command(text: str) -> VideoOptions:
-    """Parse flags without mangling natural language, URL queries or quotes."""
+def parse_video_command(text: str | list[str]) -> VideoOptions:
+    """Parse flags and count messages that contribute actual prompt text.
+
+    Args:
+        text: One command or ordered text messages joined with spaces.
+
+    Returns:
+        Parsed options with one merged prompt and its contributing message count.
+
+    Raises:
+        VideoError: If an option or explicit route is invalid.
+    """
+    fragments = text if isinstance(text, list) else [text]
+    text = " ".join(fragments)
     result = VideoOptions()
     pattern = re.compile(r"(?<!\S)--([a-z-]+)(?:=|\s+)?")
     cursor, parts = 0, []
+    spans = []
     while match := pattern.search(text, cursor):
         parts.append(text[cursor : match.start()])
+        spans.append((cursor, match.start()))
         name = match.group(1)
         start = match.end()
         if name == "frames":
@@ -150,6 +165,7 @@ def parse_video_command(text: str) -> VideoOptions:
                 value,
             )
     parts.append(text[cursor:])
+    spans.append((cursor, len(text)))
     result.prompt = " ".join(part.strip() for part in parts if part.strip())
     directive = re.match(
         r"^(首帧|尾帧|首尾帧|动作迁移|音频同步)(?:\s+|$)", result.prompt
@@ -168,6 +184,32 @@ def parse_video_command(text: str) -> VideoOptions:
             )
         result.reference_mode = mode
         result.prompt = result.prompt[directive.end() :].strip()
+    # Map the retained prompt back to the original messages. This also handles
+    # option values split across messages without counting them as prompt text.
+    skip = directive.end() if directive else 0
+    kept = []
+    for part, (start, end) in zip(parts, spans):
+        stripped = part.strip()
+        if not stripped:
+            continue
+        left = start + len(part) - len(part.lstrip())
+        right = end - len(part) + len(part.rstrip())
+        if skip < len(stripped):
+            kept.append((left + skip, right))
+        skip = max(0, skip - len(stripped) - 1)
+    offset, span_index = 0, 0
+    for fragment in fragments:
+        end = offset + len(fragment)
+        while span_index < len(kept) and kept[span_index][1] <= offset:
+            span_index += 1
+        for index in range(span_index, len(kept)):
+            left, right = kept[index]
+            if left >= end:
+                break
+            if text[max(left, offset) : min(right, end)].strip():
+                result.prompt_segments += 1
+                break
+        offset = end + 1
     result.overrides()
     return result
 

@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -21,7 +22,12 @@ from test_video_plugin import (
     router,
 )
 
-from config_manager import LEGACY_HELP_TEXT, migrate_config, schema_defaults
+from config_manager import (
+    LEGACY_COLLECTION_HELP_TEXT,
+    LEGACY_HELP_TEXT,
+    migrate_config,
+    schema_defaults,
+)
 
 
 class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
@@ -41,6 +47,9 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.video_conf = self.config
         self.real = api.VideoApiManager(self.config, Path("unused"))
         self.plugin.video_mgr.prepare = Mock(wraps=self.real.prepare)
+
+    async def asyncTearDown(self):
+        await self.plugin.terminate()
 
     async def receive(
         self, text="", chain=None, *, sender="99", group="group", origin="qq:group"
@@ -73,7 +82,9 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
             self.plugin.video_mgr.generate.await_args.args[0],
             "一只猫在雪地中跑 镜头平稳跟随 最后看向镜头",
         )
-        self.assertEqual(finish.sent[0][0].text, "共收到0图片，0音频，0视频，生成中")
+        self.assertEqual(
+            finish.sent[0][0].text, "共收到0图片，0音频，0视频，3段提示词，生成中"
+        )
         self.assertEqual(len(finish.sent), 2)
         self.assertIsInstance(finish.sent[1][0], Video)
         self.assertFalse(self.plugin._video_collections)
@@ -114,7 +125,7 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result, [])
                 self.assertEqual(
                     finish.sent[0][0].text,
-                    f"共收到{ni}图片，{na}音频，{nv}视频，生成中",
+                    f"共收到{ni}图片，{na}音频，{nv}视频，{0 if route in {'motion_transfer', 'audio_sync'} else 1}段提示词，生成中",
                 )
                 self.plugin.video_mgr.generate.assert_awaited_once()
                 args = self.plugin.video_mgr.generate.await_args.args
@@ -189,7 +200,9 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual((event.sent, result), ([], []))
         finish, _ = await self.receive("/生成")
-        self.assertEqual(finish.sent[0][0].text, "共收到1图片，1音频，1视频，生成中")
+        self.assertEqual(
+            finish.sent[0][0].text, "共收到1图片，1音频，1视频，1段提示词，生成中"
+        )
 
     async def test_identical_sources_are_counted_as_separate_supplied_parameters(self):
         await self.receive(
@@ -198,7 +211,9 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         )
         finish, result = await self.receive("/生成")
         self.assertEqual(result, [])
-        self.assertEqual(finish.sent[0][0].text, "共收到2图片，0音频，0视频，生成中")
+        self.assertEqual(
+            finish.sent[0][0].text, "共收到2图片，0音频，0视频，1段提示词，生成中"
+        )
 
     async def test_sender_group_and_platform_sessions_are_isolated(self):
         scopes = [
@@ -263,12 +278,235 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         _, result = await self.receive("/生成")
         self.assertIn("没有正在收集", result[0][0].text)
 
-    async def test_expired_session_and_bad_file_fail_without_progress(self):
+    async def test_prompt_count_excludes_route_options_and_blank_messages(self):
+        await self.receive("/生视频 首帧", [Image("https://media.test/face.png")])
+        for text in ("人物转身\n镜头跟随", "--duration", "1", "  ", "暖色光线"):
+            await self.receive(text)
+        finish, _ = await self.receive("/生成")
+        self.assertEqual(
+            finish.sent[0][0].text, "共收到1图片，0音频，0视频，2段提示词，生成中"
+        )
+        self.assertEqual(
+            self.plugin.video_mgr.generate.await_args.args[0],
+            "人物转身\n镜头跟随 暖色光线",
+        )
+
+    async def test_default_timeout_notifies_without_another_incoming_message(self):
         await self.receive("/生视频 猫")
-        for collection in self.plugin._video_collections.values():
-            collection["updated"] -= 1801
+        collection = next(iter(self.plugin._video_collections.values()))
+        self.assertEqual(collection["timeout"], 60)
+        self.assertAlmostEqual(collection["deadline"] - monotonic(), 60, delta=1)
+        collection["deadline"] = monotonic() - 1
+        await asyncio.wait_for(asyncio.shield(collection["timer"]), 1)
+        self.assertFalse(self.plugin._video_collections)
+        origin, chain = self.plugin.context.send_message.await_args.args
+        self.assertEqual(origin, "qq:group")
+        self.assertIn("60秒", chain[0].text)
+        self.assertIn("已取消本次生视频", chain[0].text)
+        self.plugin.video_mgr.generate.assert_not_awaited()
         _, result = await self.receive("/生成")
-        self.assertIn("30 分钟", result[0][0].text)
+        self.assertIn("超时取消", result[0][0].text)
+
+    async def test_configured_timer_expires_and_material_does_not_reset_deadline(self):
+        self.config["collection_timeout_seconds"] = 1
+        await self.receive("/做视频")
+        collection = next(iter(self.plugin._video_collections.values()))
+        deadline = collection["deadline"]
+        await self.receive("提示词")
+        await self.receive(chain=[Image("https://media.test/face.png")])
+        self.assertEqual(collection["deadline"], deadline)
+        await asyncio.wait_for(asyncio.shield(collection["timer"]), 2)
+        self.assertFalse(self.plugin._video_collections)
+        self.assertIn(
+            "1秒", self.plugin.context.send_message.await_args.args[1][0].text
+        )
+
+    async def test_late_finish_is_rejected_even_before_the_timer_gets_cpu(self):
+        await self.receive("/生视频 猫")
+        collection = next(iter(self.plugin._video_collections.values()))
+        collection["deadline"] = monotonic() - 1
+        finish, result = await self.receive("/生成")
+        self.assertEqual(finish.sent, [])
+        self.assertIn("超时", result[0][0].text)
+        self.assertFalse(self.plugin._video_collections)
+        self.plugin.context.send_message.assert_awaited_once()
+        self.plugin.video_mgr.generate.assert_not_awaited()
+
+    async def test_restart_cancels_old_timer_and_expiry_is_isolated_per_sender(self):
+        await self.receive("/生视频 旧提示词")
+        old = next(iter(self.plugin._video_collections.values()))
+        await self.receive("/做视频 新提示词")
+        new = next(iter(self.plugin._video_collections.values()))
+        self.assertIsNot(new, old)
+        await asyncio.gather(old["timer"], return_exceptions=True)
+        self.assertTrue(old["timer"].cancelled())
+        self.plugin.context.send_message.assert_not_awaited()
+        await self.receive("/生视频 他人的提示词", sender="100")
+        new["deadline"] = monotonic() - 1
+        # Explicitly exercise stale ownership after the replacement.
+        old["deadline"] = monotonic() - 1
+        await self.plugin._expire_video_collection(("qq:group", "group", "99"), old)
+        self.assertEqual(len(self.plugin._video_collections), 2)
+        await self.plugin._expire_video_collection(("qq:group", "group", "99"), new)
+        self.assertEqual(len(self.plugin._video_collections), 1)
+        self.plugin.context.send_message.assert_awaited_once()
+        await self.receive("/生成", sender="100")
+        self.assertEqual(
+            self.plugin.video_mgr.generate.await_args.args[0], "他人的提示词"
+        )
+
+    async def test_cancel_and_successful_finish_cancel_timers(self):
+        for control in ("/取消", "/生成"):
+            await self.receive("/生视频 猫")
+            collection = next(iter(self.plugin._video_collections.values()))
+            await self.receive(control)
+            await asyncio.gather(collection["timer"], return_exceptions=True)
+            self.assertTrue(collection["timer"].cancelled())
+            self.assertFalse(self.plugin._video_collections)
+        self.assertFalse(self.plugin._video_collection_tasks)
+        self.plugin.context.send_message.assert_not_awaited()
+
+    async def test_timely_finish_waits_for_upload_past_deadline(self):
+        self.config["collection_timeout_seconds"] = 1
+        await self.receive("/生视频 人物转身")
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = self.plugin._video_command_inputs
+
+        async def slow_inputs(event, *args):
+            if event.get_messages():
+                entered.set()
+                await release.wait()
+            return await original(event, *args)
+
+        self.plugin._video_command_inputs = slow_inputs
+        upload = asyncio.create_task(
+            self.receive(chain=[Image("https://media.test/a.png")])
+        )
+        await entered.wait()
+        finish = asyncio.create_task(self.receive("/生成"))
+        await asyncio.sleep(0)
+        collection = next(iter(self.plugin._video_collections.values()))
+        self.assertEqual(collection["pending_finishes"], 1)
+        await asyncio.sleep(1.1)
+        self.assertTrue(self.plugin._video_collections)
+        self.plugin.context.send_message.assert_not_awaited()
+        release.set()
+        await asyncio.gather(upload, finish)
+        self.plugin.video_mgr.generate.assert_awaited_once()
+        self.plugin.context.send_message.assert_not_awaited()
+
+    async def test_upload_without_finish_does_not_block_expiry(self):
+        self.config["collection_timeout_seconds"] = 1
+        await self.receive("/生视频 人物转身")
+        collection = next(iter(self.plugin._video_collections.values()))
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = self.plugin._video_command_inputs
+
+        async def slow_inputs(event, *args):
+            entered.set()
+            await release.wait()
+            return await original(event, *args)
+
+        self.plugin._video_command_inputs = slow_inputs
+        upload = asyncio.create_task(
+            self.receive(chain=[Image("https://media.test/a.png")])
+        )
+        await entered.wait()
+        await asyncio.wait_for(asyncio.shield(collection["timer"]), 2)
+        self.assertFalse(self.plugin._video_collections)
+        self.plugin.context.send_message.assert_awaited_once()
+        release.set()
+        event, result = await upload
+        self.assertEqual((event.sent, result), ([], []))
+        self.plugin.video_mgr.generate.assert_not_awaited()
+
+    async def test_failed_validation_keeps_original_timeout(self):
+        await self.receive("/生视频 首帧")
+        collection = next(iter(self.plugin._video_collections.values()))
+        deadline = collection["deadline"]
+        _, result = await self.receive("/生成")
+        self.assertTrue(result)
+        self.assertIs(next(iter(self.plugin._video_collections.values())), collection)
+        self.assertEqual(collection["deadline"], deadline)
+        self.assertEqual(collection["pending_finishes"], 0)
+        collection["deadline"] = monotonic() - 1
+        await asyncio.wait_for(asyncio.shield(collection["timer"]), 1)
+        self.assertFalse(self.plugin._video_collections)
+        self.plugin.context.send_message.assert_awaited_once()
+
+    async def test_timeout_clears_material_even_if_notification_fails(self):
+        self.plugin.context.send_message.side_effect = RuntimeError("adapter offline")
+        await self.receive("/生视频 猫")
+        collection = next(iter(self.plugin._video_collections.values()))
+        collection["deadline"] = monotonic() - 1
+        with self.assertLogs("behavior", level="ERROR"):
+            await asyncio.wait_for(asyncio.shield(collection["timer"]), 1)
+        self.assertFalse(self.plugin._video_collections)
+
+    async def test_failed_timely_finish_after_deadline_releases_expiry(self):
+        self.config["collection_timeout_seconds"] = 1
+        await self.receive("/生视频 首帧")
+        collection = next(iter(self.plugin._video_collections.values()))
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_inputs(*args):
+            entered.set()
+            await release.wait()
+            return None, [], [], []
+
+        self.plugin._video_command_inputs = slow_inputs
+        finish = asyncio.create_task(self.receive("/生成"))
+        await entered.wait()
+        await asyncio.sleep(1.1)
+        self.plugin.context.send_message.assert_not_awaited()
+        release.set()
+        _, result = await finish
+        self.assertTrue(result)
+        await asyncio.wait_for(asyncio.shield(collection["timer"]), 1)
+        self.assertFalse(self.plugin._video_collections)
+        self.plugin.context.send_message.assert_awaited_once()
+        self.plugin.video_mgr.generate.assert_not_awaited()
+
+    async def test_slow_start_notice_preserves_initial_prompt_before_later_messages(
+        self,
+    ):
+        event = Event([], "/生视频 第一段")
+        event.unified_msg_origin = "qq:group"
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = event.send
+
+        async def slow_send(chain):
+            entered.set()
+            await release.wait()
+            await original(chain)
+
+        event.send = slow_send
+        start = asyncio.create_task(
+            self.plugin._collect_video_request(event, "第一段", start=True)
+        )
+        await entered.wait()
+        material = asyncio.create_task(self.receive("第二段"))
+        await asyncio.sleep(0)
+        self.assertFalse(material.done())
+        release.set()
+        await asyncio.gather(start, material)
+        finish, _ = await self.receive("/生成")
+        self.assertEqual(
+            self.plugin.video_mgr.generate.await_args.args[0], "第一段 第二段"
+        )
+        self.assertIn("2段提示词", finish.sent[0][0].text)
+
+    async def test_hot_reload_cancels_and_joins_all_collection_timers(self):
+        for sender in ("99", "100"):
+            await self.receive("/生视频 猫", sender=sender)
+        timers = list(self.plugin._video_collection_tasks)
+        await self.plugin.terminate()
+        self.assertFalse(self.plugin._video_collections)
+        self.assertFalse(self.plugin._video_collection_tasks)
+        self.assertTrue(all(t.cancelled() for t in timers))
+        self.plugin.context.send_message.assert_not_awaited()
+
+    async def test_bad_file_fails_without_progress(self):
         await self.receive("/生视频 猫")
         event, result = await self.receive(
             chain=[File("unsupported.zip", url="https://qq.test/a.zip")]
@@ -365,13 +603,49 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
 
 
 class VideoConfigUpgradeTest(unittest.TestCase):
+    def test_v110_upgrade_only_changes_new_defaults_and_preserves_custom_values(self):
+        schema = json.loads(
+            (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(
+                "utf-8"
+            )
+        )
+        for help_text in (LEGACY_COLLECTION_HELP_TEXT, "自定义帮助"):
+            config = schema_defaults(schema)
+            config["_config_layout_version"] = 2
+            config["global_settings"]["help_text"] = help_text
+            config["video_settings"]["collection_timeout_seconds"] = 180
+            config["video_settings"]["routes"][0]["interface_mode"] = "inherit"
+            before = copy.deepcopy(config)
+            with tempfile.TemporaryDirectory() as tmp:
+                self.assertTrue(migrate_config(config, Path(tmp)))
+                snapshot = next(Path(tmp).glob("config_before_v1.1.1_*.json"))
+                self.assertEqual(json.loads(snapshot.read_text("utf-8")), before)
+                self.assertFalse(migrate_config(config, Path(tmp)))
+            expected = copy.deepcopy(before)
+            expected["_config_layout_version"] = 3
+            if help_text == LEGACY_COLLECTION_HELP_TEXT:
+                expected["global_settings"]["help_text"] = schema_defaults(schema)[
+                    "global_settings"
+                ]["help_text"]
+            self.assertEqual(config, expected)
+
+    def test_v110_upgrade_adds_missing_sixty_second_default(self):
+        config = {"_config_layout_version": 2, "video_settings": {}}
+        with tempfile.TemporaryDirectory() as tmp:
+            migrate_config(config, Path(tmp))
+        self.assertEqual(config["video_settings"]["collection_timeout_seconds"], 60)
+
     def test_only_old_default_help_is_updated_custom_help_is_preserved(self):
         schema = json.loads(
             (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(
                 "utf-8"
             )
         )
-        for text in (LEGACY_HELP_TEXT, "我的自定义帮助，保留全文"):
+        for text in (
+            LEGACY_HELP_TEXT,
+            LEGACY_COLLECTION_HELP_TEXT,
+            "我的自定义帮助，保留全文",
+        ):
             config = schema_defaults(schema)
             config["_config_layout_version"] = 1
             config["global_settings"]["help_text"] = text
@@ -380,7 +654,7 @@ class VideoConfigUpgradeTest(unittest.TestCase):
             self.assertEqual(
                 config["global_settings"]["help_text"],
                 schema_defaults(schema)["global_settings"]["help_text"]
-                if text == LEGACY_HELP_TEXT
+                if text in {LEGACY_HELP_TEXT, LEGACY_COLLECTION_HELP_TEXT}
                 else text,
             )
 
