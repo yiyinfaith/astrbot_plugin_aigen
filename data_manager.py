@@ -76,17 +76,37 @@ class DataManager:
     async def record_usage(self, uid: str, gid: str | None, kind: str = "image"):
         async with self._stats_lock:
             today = datetime.now().astimezone().strftime("%Y-%m-%d")
-            if self.daily_stats.get("date") != today:
+            if (
+                not isinstance(self.daily_stats, dict)
+                or self.daily_stats.get("date") != today
+            ):
                 self.daily_stats = {"date": today, "users": {}, "groups": {}}
+
+            # Preserve valid counters when a partial file has invalid siblings.
+            def counters(value):
+                if not isinstance(value, dict):
+                    return {}
+                return {
+                    key: count
+                    for key, count in value.items()
+                    if isinstance(key, str) and type(count) is int and count >= 0
+                }
+
+            for scope in ("users", "groups"):
+                self.daily_stats[scope] = counters(self.daily_stats.get(scope))
+            if not isinstance(self.daily_stats.get("by_media"), dict):
+                self.daily_stats["by_media"] = {}
+            if not isinstance(self.daily_stats["by_media"].get(kind), dict):
+                self.daily_stats["by_media"][kind] = {}
+            media_stats = self.daily_stats["by_media"][kind]
+            for scope in ("users", "groups"):
+                media_stats[scope] = counters(media_stats.get(scope))
             uid, gid = norm_id(uid), norm_id(gid)
             self.daily_stats["users"][uid] = self.daily_stats["users"].get(uid, 0) + 1
             if gid:
                 self.daily_stats["groups"][gid] = (
                     self.daily_stats["groups"].get(gid, 0) + 1
                 )
-            media_stats = self.daily_stats.setdefault("by_media", {}).setdefault(
-                kind, {"users": {}, "groups": {}}
-            )
             media_stats["users"][uid] = media_stats["users"].get(uid, 0) + 1
             if gid:
                 media_stats["groups"][gid] = media_stats["groups"].get(gid, 0) + 1

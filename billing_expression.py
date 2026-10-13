@@ -380,6 +380,20 @@ class PricingExpression:
                             )
                             + "]"
                         )
+                    if type(value) in (float, Decimal):
+                        number = Decimal(str(value))
+                        exponent = number.adjusted()
+                        if number and (exponent < -4 or exponent >= 6):
+                            mantissa = format(number.scaleb(-exponent), "f")
+                            if "." in mantissa:
+                                mantissa = mantissa.rstrip("0").rstrip(".")
+                            return f"{mantissa}e{exponent:+03d}"
+                        rendered = format(number, "f")
+                        return (
+                            rendered.rstrip("0").rstrip(".")
+                            if "." in rendered
+                            else rendered
+                        )
                     return str(value)
 
                 return args[1] in go_string(args[0])

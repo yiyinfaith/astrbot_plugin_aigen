@@ -452,6 +452,66 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(self.balance(), (10000000, 0))
 
+    async def test_failed_settlement_recovers_without_unlocking_an_active_owner(self):
+        import sqlite3
+
+        other = Identity(uid="other")
+        other_owner = self.service.owner(other)
+        code = self.service.store.create_cards("admin", "10", 1)[0]
+        self.service.store.redeem(other_owner, code)
+        active = self.service.store.begin(other_owner, "video", "m", 1000000, {})
+        with (
+            patch.object(
+                self.service.store,
+                "finish",
+                side_effect=sqlite3.OperationalError("disk full"),
+            ),
+            self.assertLogs(b.LOGGER, level="ERROR"),
+        ):
+            await self.call(AsyncMock(return_value=b"completed"))
+        self.assertEqual(len(self.service.unsettled), 1)
+        self.assertEqual(await self.call(AsyncMock(return_value=b"second")), b"second")
+        self.assertEqual(self.balance(), (9000000, 0))
+        self.assertFalse(self.service.unsettled)
+        with self.assertRaisesRegex(b.BillingError, "已有收费任务"):
+            self.service.store.begin(other_owner, "video", "m", 1000000, {})
+        self.service.store.finish(active, 0, "test cleanup")
+        with self.service.store.transaction() as database:
+            self.assertEqual(
+                database.execute(
+                    "SELECT COUNT(*) FROM orders WHERE status='running'"
+                ).fetchone()[0],
+                0,
+            )
+            self.assertEqual(
+                database.execute(
+                    "SELECT SUM(charged) FROM orders WHERE owner=?", (self.owner,)
+                ).fetchone()[0],
+                1000000,
+            )
+
+    async def test_checkpoint_failure_does_not_abandon_a_submitted_job(self):
+        import sqlite3
+
+        async def generate():
+            b.track(state="submitted", payload={"task_id": "task-123"})
+            b.track(state="completed")
+            return b"completed"
+
+        with (
+            patch.object(
+                self.service.store,
+                "checkpoint",
+                side_effect=sqlite3.OperationalError("disk full"),
+            ),
+            self.assertLogs(b.LOGGER, level="ERROR"),
+        ):
+            self.assertEqual(await self.call(generate), b"completed")
+        self.assertEqual(self.balance(), (9000000, 0))
+        _, orders = self.service.store.listing("orders", self.owner)
+        self.assertEqual(orders[0]["status"], "settled")
+        self.assertIn("task-123", orders[0]["details"])
+
     async def test_admin_commands_guard_secrets_and_cross_user_history(self):
         response = commands.handle_command(self.service, self.event, "生成卡密 3 1")
         self.assertIn("管理员", response)
@@ -496,6 +556,31 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
 
 
 class UsageTest(unittest.TestCase):
+    def test_gemini_thinking_is_billed_once_as_output(self):
+        usage = b.Usage()
+        usage.response(
+            {
+                "usageMetadata": {
+                    "promptTokenCount": 10,
+                    "candidatesTokenCount": 20,
+                    "thoughtsTokenCount": 30,
+                    "totalTokenCount": 60,
+                }
+            }
+        )
+        self.assertEqual(usage.values["output_tokens"], 50)
+        self.assertEqual(usage.values["total_tokens"], 60)
+        usage.response(
+            {
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 50,
+                    "completion_tokens_details": {"reasoning_tokens": 30},
+                }
+            }
+        )
+        self.assertEqual(usage.values["output_tokens"], 50)
+
     def test_sse_usage_and_minimax_milliseconds(self):
         usage = b.Usage()
         token = b.CURRENT.set(usage)
@@ -528,6 +613,8 @@ class UsageTest(unittest.TestCase):
         usage.response({"usage": {"input_tokens": 5, "output_tokens": 10}})
         usage.response({"usage": {"input_tokens": 5, "output_tokens": 20}})
         self.assertEqual(usage.values["total_tokens"], 25)
+        usage.response({"usage": {"input_tokens": 5, "output_tokens": 15}})
+        self.assertEqual(usage.values["total_tokens"], 20)
 
 
 class SharedGenerationPathsTest(unittest.IsolatedAsyncioTestCase):

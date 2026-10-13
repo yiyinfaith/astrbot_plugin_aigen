@@ -1,9 +1,31 @@
 import re
-from typing import Any, List
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-
 _API_VERSION_SEGMENT = re.compile(r"^v\d+(?:(?:alpha|beta)\d*)?$", re.IGNORECASE)
+MAX_IMAGE_BYTES = 100 * 1024 * 1024
+
+
+async def read_image_response(response) -> bytes:
+    """Bound downloads even when Content-Length is absent or incorrect.
+
+    Args:
+        response: The HTTP response supplying image bytes.
+
+    Returns:
+        Downloaded bytes within the image size limit.
+
+    Raises:
+        ValueError: If the image exceeds the size limit.
+    """
+    if response.content_length and response.content_length > MAX_IMAGE_BYTES:
+        raise ValueError("图片超过 100MB 下载上限。")
+    data = bytearray()
+    async for chunk in response.content.iter_chunked(64 * 1024):
+        if len(data) + len(chunk) > MAX_IMAGE_BYTES:
+            raise ValueError("图片超过 100MB 下载上限。")
+        data.extend(chunk)
+    return bytes(data)
 
 
 def norm_id(raw_id: Any) -> str:
@@ -102,7 +124,7 @@ def normalize_api_root(raw_url: Any) -> str:
     ).rstrip("/")
 
 
-def extract_image_urls_from_text(text: str) -> List[str]:
+def extract_image_urls_from_text(text: str) -> list[str]:
     """从文本中提取图片链接和本地文件路径"""
     image_urls = []
 

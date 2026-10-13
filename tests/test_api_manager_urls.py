@@ -68,6 +68,7 @@ class ApiEndpointBuildTest(unittest.TestCase):
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent",
         )
 
+
 class ApiImagesEditRequestTest(unittest.IsolatedAsyncioTestCase):
     async def test_image_mode_posts_edits_as_multipart(self):
         api_manager = load_api_manager()
@@ -172,12 +173,15 @@ class ApiImagesGenerationOptionsTest(unittest.IsolatedAsyncioTestCase):
     async def test_openai_image_options_use_official_json_fields(self):
         api_manager = load_api_manager()
         captured = {}
+        image_data = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        )
 
         async def handle_generation(request):
             captured["path"] = request.path
             captured["payload"] = await request.json()
             return web.json_response(
-                {"data": [{"b64_json": base64.b64encode(b"image").decode()}]}
+                {"data": [{"b64_json": base64.b64encode(image_data).decode()}]}
             )
 
         application = web.Application()
@@ -221,7 +225,7 @@ class ApiImagesGenerationOptionsTest(unittest.IsolatedAsyncioTestCase):
                 await manager._session.close()
             await runner.cleanup()
 
-        self.assertEqual(result, b"image")
+        self.assertEqual(result, image_data)
         self.assertEqual(captured["path"], "/v1/images/generations")
         payload = captured["payload"]
         self.assertEqual(payload["size"], "1536x1024")
@@ -376,12 +380,8 @@ class ApiResponseRequestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["payload"]["tools"][0]["type"], "image_generation")
         self.assertEqual(captured["payload"]["tools"][0]["size"], "1536x1024")
         self.assertEqual(captured["payload"]["tools"][0]["quality"], "high")
-        self.assertEqual(
-            captured["payload"]["tools"][0]["background"], "transparent"
-        )
-        self.assertEqual(
-            captured["payload"]["tools"][0]["input_fidelity"], "high"
-        )
+        self.assertEqual(captured["payload"]["tools"][0]["background"], "transparent")
+        self.assertEqual(captured["payload"]["tools"][0]["input_fidelity"], "high")
         self.assertNotIn("partial_images", captured["payload"]["tools"][0])
         self.assertEqual(captured["payload"]["tools"][0]["action"], "edit")
         content = captured["payload"]["input"][0]["content"]

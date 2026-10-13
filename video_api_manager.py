@@ -173,7 +173,10 @@ def _url_expiry(data: dict, url: str) -> str:
     if isinstance(value, (int, float)) or str(value).isdigit():
         number = float(value)
         if number >= 1_000_000_000:
-            return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(number))
+            try:
+                return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(number))
+            except (OverflowError, OSError, ValueError):
+                return str(value)
     return str(value)
 
 
@@ -181,9 +184,9 @@ def endpoint(base: str, path: str) -> str:
     if not base.strip():
         raise VideoError("请先配置生视频接口地址。")
     parsed = urlsplit(base.strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
         raise VideoError("生视频接口地址必须是完整 HTTP(S) 地址。")
-    if urlsplit(path).netloc:
+    if urlsplit(path).scheme or urlsplit(path).netloc:
         raise VideoError("接口路径请填写相对路径；域名统一在接口地址中配置。")
     root = parsed.path.rstrip("/")
     # Accept a root, version prefix, or known complete endpoint, preserving
@@ -806,8 +809,16 @@ class VideoApiManager(ApiManager):
                 raise VideoError(
                     "自定义请求模板和请求头必须是合法 JSON 对象。"
                 ) from exc
-            if not isinstance(template, dict) or not isinstance(extra_headers, dict):
+            if not isinstance(template, dict) or not template or not isinstance(extra_headers, dict):
                 raise VideoError("自定义请求模板和请求头必须是 JSON 对象。")
+            serialized = json.dumps(template)
+            if prompt and "{prompt}" not in serialized:
+                raise VideoError("自定义视频模板必须包含 {prompt}，不能丢弃提示词。")
+            for kind, sources in (("images", images), ("audios", audios), ("videos", videos)):
+                if sources and "{" + kind + "}" not in serialized:
+                    if kind == "images" and len(images) == 1 and "{image}" in serialized:
+                        continue
+                    raise VideoError(f"自定义视频模板必须用 {{{kind}}} 传递全部参考材料。")
             template_values = {
                 "{model}": model,
                 "{prompt}": prompt,

@@ -544,7 +544,15 @@ class AudioApiManager(VideoApiManager):
                         raw = await asyncio.to_thread(path.read_bytes)
                     finally:
                         path.unlink(missing_ok=True)
-                    mime = "audio/wav" if raw[:4] == b"RIFF" else "audio/mpeg"
+                    mime = {
+                        ".wav": "audio/wav",
+                        ".mp3": "audio/mpeg",
+                        ".flac": "audio/flac",
+                        ".ogg": "audio/ogg",
+                        ".m4a": "audio/mp4",
+                        ".amr": "audio/amr",
+                        ".silk": "audio/silk",
+                    }.get(path.suffix.lower(), "application/octet-stream")
                 if mode == "openai_chat":
                     if not (
                         raw[:4] == b"RIFF"
@@ -746,13 +754,17 @@ class AudioApiManager(VideoApiManager):
                 rate = (
                     int(rate_match[1])
                     if rate_match
-                    else 32000
+                    else int(self.config.get("sample_rate", 32000))
                     if mode == "minimax_speech"
                     else 24000
                 )
                 output = io.BytesIO()
                 with wave.open(output, "wb") as wav:
-                    wav.setnchannels(1)
+                    wav.setnchannels(
+                        int(self.config.get("channels", 1))
+                        if mode == "minimax_speech"
+                        else 1
+                    )
                     wav.setsampwidth(2)
                     wav.setframerate(rate)
                     wav.writeframes(raw)

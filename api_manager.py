@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import ipaddress
+import io
 import json
 import re
 import socket
@@ -10,6 +11,7 @@ from urllib.parse import urljoin
 from urllib.parse import urlparse
 from urllib.parse import parse_qs
 import aiohttp
+from PIL import Image as PILImage
 from typing import List, Dict
 from astrbot.api import logger
 from .billing import track
@@ -18,7 +20,7 @@ from .generation_params import (
     openai_size_for_generation,
     resolve_image_generation_params,
 )
-from .utils import normalize_api_root
+from .utils import normalize_api_root, read_image_response
 
 
 class ImageResult(bytes):
@@ -591,6 +593,29 @@ class ApiManager:
         return any(keyword in error_lower for keyword in keywords)
 
     @staticmethod
+    def _stream_rejected(status: int, body: str) -> bool:
+        """Allow a new POST only for an explicit stream validation rejection.
+
+        Args:
+            status: The rejected HTTP response status.
+            body: The provider's error response.
+
+        Returns:
+            Whether disabling streaming is a safe compatibility fallback.
+        """
+        if status not in {400, 422}:
+            return False
+        text = (body or "").lower()
+        return any(
+            re.search(pattern, text)
+            for pattern in (
+                r"\bstream(?:ing)?\b[\"'`\s]*(?:(?:is|are)\s+)?(?:unsupported|not\s+(?:supported|allowed|permitted))\b",
+                r"\b(?:does\s+not|do\s+not|cannot|can't|doesn't)\s+support\s+(?:the\s+)?[\"'`]?stream(?:ing)?\b",
+                r"\b(?:unknown|unsupported|unrecognized|unexpected)\s+(?:parameter|field|argument|option)\s*[:=]?\s*[\"'`]?stream\b",
+            )
+        )
+
+    @staticmethod
     def _optional_image_count(value) -> int | None:
         """Return a valid optional OpenAI Images ``n`` value, if supplied."""
         if value in (None, "", 0, "0"):
@@ -892,12 +917,16 @@ class ApiManager:
                 if not str(model).lower().startswith("gpt-image"):
                     form.add_field("response_format", "b64_json")
 
-                if images:
-                    img = images[0]
+                for index, img in enumerate(images):
                     mime = self.get_mime_type(img)
                     ext = mime.split("/")[-1] if "/" in mime else "png"
-                    filename = f"input.{ext}"
-                    form.add_field("image", img, filename=filename, content_type=mime)
+                    filename = f"input_{index}.{ext}"
+                    form.add_field(
+                        "image[]" if len(images) > 1 else "image",
+                        img,
+                        filename=filename,
+                        content_type=mime,
+                    )
 
                 current_proxy = self._get_request_proxy(url, proxy)
                 track(state="submitted")
@@ -911,7 +940,7 @@ class ApiManager:
                     resp_text = await resp.text()
                     track(raw=resp_text, status=resp.status)
 
-                    if resp.status != 200 and stream:
+                    if stream and self._stream_rejected(resp.status, resp_text):
                         logger.info(
                             "Images edits endpoint rejected stream mode; retrying once without stream"
                         )
@@ -928,7 +957,7 @@ class ApiManager:
                             image_options=image_options,
                         )
 
-                    if "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
+                    if resp.status in {404, 405} and "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
                         logger.warning(
                             f"Images API multipart 返回 HTML 页面，尝试下一个候选地址: {candidate_urls[idx + 1]}"
                         )
@@ -1088,14 +1117,16 @@ class ApiManager:
         # 如果有输入图片，兼容不同 Images API 的字段要求
         # 一些服务要求 image_url；另一些只认 image / input_image / images
         if images:
-            img = images[0]
-            mime = self.get_mime_type(img)
-            b64_img = base64.b64encode(img).decode()
-            data_uri = f"data:{mime};base64,{b64_img}"
-            payload["image"] = data_uri
-            payload["image_url"] = data_uri
-            payload["input_image"] = data_uri
-            payload["images"] = [data_uri]
+            data_uris = [
+                f"data:{self.get_mime_type(img)};base64,"
+                + base64.b64encode(img).decode()
+                for img in images
+            ]
+            if len(data_uris) == 1:
+                payload["image"] = data_uris[0]
+                payload["image_url"] = data_uris[0]
+                payload["input_image"] = data_uris[0]
+            payload["images"] = data_uris
 
         try:
             timeout_val = self.config.get("timeout", 120)
@@ -1115,7 +1146,7 @@ class ApiManager:
                     resp_text = await resp.text()
                     track(raw=resp_text, status=resp.status)
 
-                    if resp.status != 200 and stream:
+                    if stream and self._stream_rejected(resp.status, resp_text):
                         logger.info(
                             "Images endpoint rejected stream mode; retrying once without stream"
                         )
@@ -1132,7 +1163,7 @@ class ApiManager:
                             image_options=image_options,
                         )
 
-                    if "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
+                    if resp.status in {404, 405} and "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
                         logger.warning(
                             f"Images API 返回 HTML 页面，尝试下一个候选地址: {candidate_urls[idx + 1]}"
                         )
@@ -1161,7 +1192,7 @@ class ApiManager:
                                 continue
                             return f"Images API edits endpoint unsupported {resp.status}: {err_msg[:300]} | URL: {url}"
 
-                        if self._should_retry_images_api_with_multipart(
+                        if resp.status in {400, 415, 422} and self._should_retry_images_api_with_multipart(
                             err_msg, has_input_image
                         ):
                             logger.info(
@@ -1311,7 +1342,7 @@ class ApiManager:
                 track(raw=response_text, status=response.status)
 
                 if response.status != 200:
-                    if stream:
+                    if stream and self._stream_rejected(response.status, response_text):
                         logger.info(
                             "Responses endpoint rejected stream mode; retrying once without stream"
                         )
@@ -1580,7 +1611,7 @@ class ApiManager:
                             f"下载结果图失败，HTTP {img_resp.status}",
                         )
 
-                    data = await img_resp.read()
+                    data = await read_image_response(img_resp)
                     if not data:
                         return route_name, None, "下载结果图失败，返回内容为空"
 
@@ -1723,7 +1754,7 @@ class ApiManager:
         resolution: str = None,
         image_options: Dict | None = None,
     ) -> bytes | str:
-        return await self._call_api_once(
+        result = await self._call_api_once(
             images,
             prompt,
             model,
@@ -1732,6 +1763,19 @@ class ApiManager:
             resolution=resolution,
             image_options=image_options,
         )
+        if isinstance(result, bytes):
+            def verify():
+                try:
+                    with PILImage.open(io.BytesIO(result)) as image:
+                        image.load()
+                    return True
+                except Exception:  # noqa: BLE001
+                    return False
+
+            if not await asyncio.to_thread(verify):
+                track(state="failed")
+                return "接口未返回可识别的完整图片，请核对原任务，勿立即重复提交。"
+        return result
 
     async def _call_api_once(
         self,
@@ -1951,7 +1995,7 @@ class ApiManager:
                     last_status = resp.status
 
                     # 如果返回 HTML，且后面还有候选地址，则继续尝试常见 API 前缀
-                    if "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
+                    if resp.status in {404, 405} and "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
                         logger.warning(
                             f"Generic API 地址返回了 HTML 页面，尝试下一个候选地址: {candidate_urls[idx + 1]}"
                         )
@@ -1969,6 +2013,7 @@ class ApiManager:
 
                                 if (
                                     interface_mode == "openai_chat"
+                                    and resp.status in {400, 404, 405, 422}
                                     and self._should_fallback_to_images_api(
                                         err_msg, bool(images)
                                     )
@@ -1999,6 +2044,7 @@ class ApiManager:
 
                                 if (
                                     interface_mode == "openai_chat"
+                                    and resp.status in {400, 404, 405, 422}
                                     and self._should_fallback_to_images_api(
                                         err_msg, bool(images)
                                     )
@@ -2032,6 +2078,7 @@ class ApiManager:
 
                         if (
                             interface_mode == "openai_chat"
+                            and resp.status in {400, 404, 405, 422}
                             and self._should_fallback_to_images_api(
                                 resp_text, bool(images)
                             )
@@ -2371,6 +2418,8 @@ class ApiManager:
             }
             return result
 
+        except ImageDownloadError:
+            raise
         except asyncio.TimeoutError:
             logger.error(f"API Call Timeout after {timeout_val}s")
             self._last_metrics["total_duration"] = (

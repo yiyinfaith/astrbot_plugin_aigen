@@ -18,6 +18,27 @@ expr = importlib.import_module(PACKAGE + ".billing_expression")
 
 
 class NewAPIGrammarTest(unittest.TestCase):
+    def test_has_uses_go_numeric_rendering_without_losing_precision(self):
+        for value, rendered in (
+            (1.0, "1"),
+            (0.0, "0"),
+            (1000000.0, "1e+06"),
+            (1.2345678901234567, "1.2345678901234567"),
+        ):
+            with self.subTest(value=value):
+                parsed = expr.PricingExpression(
+                    'has(param("number"), "' + rendered + '") ? 1 : 0'
+                )
+                self.assertEqual(
+                    parsed.evaluate_raw({"_request": {"number": value}})[0], 1
+                )
+        self.assertEqual(
+            expr.PricingExpression('has(param("number"), ".0") ? 1 : 0').evaluate_raw(
+                {"_request": {"number": 1.0}}
+            )[0],
+            0,
+        )
+
     def test_ternary_tier_and_task_usage(self):
         source = 'v1:u("resolution") == "768p" ? tier("hq", u("seconds") * 0.2) : tier("base", u("seconds") * 0.1)'
         parsed = expr.PricingExpression(source)

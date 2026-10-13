@@ -2,7 +2,6 @@ import io
 import asyncio
 import aiohttp
 import base64
-import ssl
 import re
 import inspect
 from typing import List, Optional
@@ -11,6 +10,7 @@ from PIL import Image as PILImage
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import At, Image, Reply
 from astrbot.api import logger
+from .utils import MAX_IMAGE_BYTES, read_image_response
 
 
 class ImageManager:
@@ -25,18 +25,14 @@ class ImageManager:
         """通用下载逻辑"""
         for i in range(self.max_retries + 1):
             try:
-                ssl_ctx = ssl.create_default_context()
-                ssl_ctx.check_hostname = False
-                ssl_ctx.verify_mode = ssl.CERT_NONE
-
-                async with aiohttp.ClientSession(
-                    connector=aiohttp.TCPConnector(ssl=ssl_ctx)
-                ) as session:
+                async with aiohttp.ClientSession() as session:
                     async with session.get(
                         url, proxy=self.proxy, timeout=timeout or self.timeout
                     ) as resp:
                         resp.raise_for_status()
-                        return await resp.read()
+                        return await read_image_response(resp)
+            except ValueError:
+                return None
             except Exception:
                 if i < self.max_retries:
                     await asyncio.sleep(1)
@@ -147,7 +143,7 @@ class ImageManager:
     async def optimize_output_image(self, raw: bytes) -> bytes:
         return await asyncio.to_thread(self._optimize_output_image_sync, raw)
 
-    def _extract_first_frame_sync(self, raw: bytes) -> bytes:
+    def _extract_first_frame_sync(self, raw: bytes) -> bytes | None:
         """(同步) 提取第一帧、转PNG并压缩"""
         try:
             with PILImage.open(io.BytesIO(raw)) as img:
@@ -171,7 +167,7 @@ class ImageManager:
                 return out.getvalue()
         except Exception as e:
             logger.warning(f"Image conversion/resize failed: {e}")
-            return raw
+            return None
 
     def _is_avatar_source(self, src: str) -> bool:
         """判断一个来源是否明显是平台头像，而不是用户主动发送的图片"""
@@ -723,13 +719,19 @@ class ImageManager:
             if src.startswith("http"):
                 raw = await self._download_image(src)
             elif src.startswith("base64://"):
+                if len(src) - 9 > 4 * ((MAX_IMAGE_BYTES + 2) // 3):
+                    raise ValueError("Inline image exceeds 100MB")
                 raw = await loop.run_in_executor(None, base64.b64decode, src[9:])
             elif is_local_file:
+                if Path(src).stat().st_size > MAX_IMAGE_BYTES:
+                    raise ValueError("Local image exceeds 100MB")
                 raw = await loop.run_in_executor(None, Path(src).read_bytes)
             else:
                 logger.debug(f"跳过无效图片来源: {src[:80]}")
                 return None
 
+            if raw is not None and len(raw) > MAX_IMAGE_BYTES:
+                raise ValueError("Image exceeds 100MB")
             return raw
         except Exception as e:
             logger.error(f"Failed to load raw bytes from {src[:50]}...: {e}")
@@ -837,10 +839,14 @@ class ImageManager:
                     add_image_task(source, message_tasks)
                     pending_extra_sources.remove(source)
 
-        def image_source(segment) -> str | None:
+        async def image_source(segment) -> str | None:
             source = self._image_component_source(segment)
+            if source and not self._is_probably_valid_source(source):
+                source = await self._resolve_image_source(event, source)
             if source and self._is_probably_valid_source(source):
                 return source
+            if strict:
+                raise ValueError("有参考图片无法解析，请重新发送图片；未提交生成任务。")
             return None
 
         # 2. 收集引用图片、当前消息图片和 @头像。ordered_tasks 保留多图
@@ -851,7 +857,7 @@ class ImageManager:
                 if seg.chain:
                     for s_chain in seg.chain:
                         if self._is_image_component(s_chain):
-                            source = image_source(s_chain)
+                            source = await image_source(s_chain)
                             if source and add_image_task(source, quoted_tasks):
                                 found_in_chain = True
                         elif isinstance(s_chain, At):
@@ -884,7 +890,7 @@ class ImageManager:
                         logger.warning(f"Failed to fetch reply message {seg.id}: {e}")
 
             elif self._is_image_component(seg):
-                source = image_source(seg)
+                source = await image_source(seg)
                 if source:
                     add_image_task(source, message_tasks)
             elif isinstance(seg, At):

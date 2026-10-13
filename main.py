@@ -61,7 +61,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.1",
+    "1.4.2",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -169,9 +169,15 @@ class ImageGeneratorPlugin(Star):
                     datetime.now(timezone.utc).timestamp()
                     - max(1, int(self.audio_conf.get("cache_hours", 24))) * 3600
                 )
-                for path in audio_mgr.data_dir.glob("*"):
-                    if path.is_file() and path.stat().st_mtime < audio_cutoff:
-                        path.unlink(missing_ok=True)
+                def cleanup_audio(cutoff=audio_cutoff, manager=audio_mgr):
+                    for path in manager.data_dir.glob("*"):
+                        if path.is_file() and path.stat().st_mtime < cutoff:
+                            path.unlink(missing_ok=True)
+
+                try:
+                    await asyncio.to_thread(cleanup_audio)
+                except OSError as exc:
+                    logger.warning("Could not clean audio cache: %s", exc)
 
     def _bot_id(self, event: AstrMessageEvent) -> str:
         """Resolve the current bot ID for image extraction filtering."""
@@ -316,7 +322,7 @@ class ImageGeneratorPlugin(Star):
         prompt: str,
         preset_name: str = "自定义",
         *,
-        strict=False,
+        strict=True,
         extra_sources=None,
     ) -> list[bytes]:
         """Collect image parameters using the preset or custom-prompt rules."""
@@ -331,7 +337,7 @@ class ImageGeneratorPlugin(Star):
             extra_sources=extra_sources
             if extra_sources is not None
             else extract_image_urls_from_text(prompt),
-            strict=strict,
+            strict=strict and not is_preset,
         )
 
     async def _generate(
@@ -472,7 +478,10 @@ class ImageGeneratorPlugin(Star):
         source_expiry = str(getattr(result, "url_expires_at", "") or "")
         result = await self.img_mgr.optimize_output_image(result)
         elapsed = (datetime.now(timezone.utc) - start).total_seconds()
-        await self.data_mgr.record_usage(uid, gid)
+        try:
+            await self.data_mgr.record_usage(uid, gid)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not record completed image usage")
         suffix = f" | 预设：{preset_name}" if preset_name not in {"", "自定义"} else ""
         if self.conf.get("show_model_info", False):
             suffix += f" | 模型：{model}"
@@ -582,6 +591,11 @@ class ImageGeneratorPlugin(Star):
         text = self._clean_message(raw_text)
         key = self._video_session_key(event)
         if self._terminating:
+            return
+        if any(
+            text == command or text.startswith(command + " ")
+            for command in self._HELP_COMMANDS
+        ):
             return
         if (
             text.split(maxsplit=1)[:1]
@@ -709,7 +723,11 @@ class ImageGeneratorPlugin(Star):
                 event, prompt, preset_name, start=True
             )
         else:
-            images = await self._extract_images(event, prompt, preset_name)
+            try:
+                images = await self._extract_images(event, prompt, preset_name)
+            except (ValueError, OSError) as exc:
+                yield event.chain_result([Plain(str(exc))])
+                return
             result = await self._generate(
                 event,
                 prompt,
@@ -859,6 +877,9 @@ class ImageGeneratorPlugin(Star):
                 collection["text"], collection["audio_mode"]
             )
             options.route = collection["audio_type"]
+            options.parameters = (
+                collection["parameters"] if parameters is None else parameters
+            )
             _, effective = select_audio_route(
                 self.audio_conf, options, collection["audios"], validate_materials=False
             )
@@ -946,7 +967,13 @@ class ImageGeneratorPlugin(Star):
             # Reserving the collection below happens before the first await.
             # A group therefore has one material owner across video and audio.
             for owner, active in self._video_collections.items():
-                same_chat = owner[:2] == key[:2] if key[1] else owner == key
+                # AstrBot may give each member a different conversation ID.
+                # Group ownership uses the platform instance plus group ID.
+                same_chat = (
+                    owner[1] == key[1]
+                    and owner[0].split(":", 1)[0] == key[0].split(":", 1)[0]
+                    if key[1] else owner == key
+                )
                 if same_chat and owner != key:
                     remaining = max(0, int(active["deadline"] - monotonic()))
                     return [
@@ -1926,9 +1953,15 @@ class ImageGeneratorPlugin(Star):
 
         images: list[bytes] = []
         if use_message_media:
-            images = await self._extract_images(
-                event, prompt, "自定义", strict=True, extra_sources=[]
-            )
+            try:
+                images = await self._extract_images(
+                    event, prompt, "自定义", strict=True, extra_sources=[]
+                )
+            except (ValueError, OSError) as exc:
+                if self._llm_last_call.get(uid) == now:
+                    self._llm_last_call.pop(uid, None)
+                yield str(exc)
+                return
         if not prompt and images:
             prompt = "请根据参考图片生成一张高质量图片，保留主体特征并自然完成画面。"
         if not prompt:
@@ -1982,7 +2015,11 @@ class ImageGeneratorPlugin(Star):
             yield event.chain_result([Plain("用法：/画图 <自定义提示词>。")])
             return
         event.stop_event()
-        images = await self._extract_images(event, prompt, preset_name)
+        try:
+            images = await self._extract_images(event, prompt, preset_name)
+        except (ValueError, OSError) as exc:
+            yield event.chain_result([Plain(str(exc))])
+            return
         result = await self._generate(
             event,
             prompt,

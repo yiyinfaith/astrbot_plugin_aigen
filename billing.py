@@ -664,6 +664,17 @@ class BillingService:
         self.config = config
         self.tasks = set()
         self.closed = False
+        self.unsettled = set()
+
+    def recover_unsettled(self):
+        """Release this instance's finished tasks after storage recovers.
+
+        Raises:
+            sqlite3.Error: If storage remains unavailable.
+        """
+        for order in tuple(self.unsettled):
+            self.store.finish(order, 0, "结算数据库异常，本次不扣费")
+            self.unsettled.discard(order)
 
     @staticmethod
     def owner(event) -> str:
@@ -880,6 +891,16 @@ class Usage:
                         if type(value) in (int, float) and 0 <= value <= 1e12:
                             self.values[target] = value
                             break
+                if "candidatesTokenCount" in usage:
+                    thoughts = usage.get("thoughtsTokenCount", 0)
+                    candidates = usage["candidatesTokenCount"]
+                    if (
+                        type(candidates) in (int, float)
+                        and type(thoughts) in (int, float)
+                        and 0 <= candidates <= 1e12
+                        and 0 <= thoughts <= 1e12
+                    ):
+                        self.values["output_tokens"] = candidates + thoughts
                 input_details = (
                     usage.get("input_tokens_details")
                     or usage.get("prompt_tokens_details")
@@ -920,9 +941,8 @@ class Usage:
                 self.values["seconds"] = extra["audio_length"] / 1000
         if "input_tokens" in self.values and "output_tokens" in self.values:
             # A later cumulative SSE event replaces the previous counts.
-            self.values["total_tokens"] = max(
-                self.values.get("total_tokens", 0),
-                self.values["input_tokens"] + self.values["output_tokens"],
+            self.values["total_tokens"] = (
+                self.values["input_tokens"] + self.values["output_tokens"]
             )
 
 
@@ -962,8 +982,14 @@ def track(*, state: str = "", payload=None, raw: str = "", status: int = 0):
         }
         snapshot = json.dumps(evidence, sort_keys=True)
         if snapshot != usage.saved:
-            usage.store.checkpoint(usage.order, evidence)
-            usage.saved = snapshot
+            try:
+                usage.store.checkpoint(usage.order, evidence)
+            except sqlite3.Error:
+                # An evidence write must not abandon an already submitted job.
+                # Final settlement still validates and persists the full result.
+                LOGGER.exception("Could not save billing checkpoint %s", usage.order)
+            else:
+                usage.saved = snapshot
 
 
 async def billed_call(service, event, media: str, config: dict, counts: dict, callback):
@@ -985,6 +1011,7 @@ async def billed_call(service, event, media: str, config: dict, counts: dict, ca
     quote = service.quote(media, config, counts) if service else None
     if quote is None:
         return await callback()
+    service.recover_unsettled()
     expression, values, expected, rule = quote
     order = service.store.begin(
         service.owner(event),
@@ -1086,8 +1113,9 @@ async def billed_call(service, event, media: str, config: dict, counts: dict, ca
                 },
             )
         except sqlite3.Error:
-            # A completed artifact must still be delivered. Its durable hold is
-            # recoverable after the database/storage problem has been resolved.
+            # Deliver the artifact and recover this exact finished order when
+            # storage becomes available. Never release another active task.
+            service.unsettled.add(order)
             LOGGER.exception(
                 "Could not settle billing order %s; no charge recorded", order
             )

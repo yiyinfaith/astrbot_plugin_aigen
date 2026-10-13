@@ -1,3 +1,4 @@
+import importlib
 import sys
 import types
 import unittest
@@ -70,7 +71,10 @@ def _install_astrbot_stubs():
 
 Image, Reply, At, File = _install_astrbot_stubs()
 sys.path.insert(0, str(ROOT))
-from image_manager import ImageManager
+from test_api_manager_urls import PACKAGE, load_api_manager
+
+load_api_manager()
+ImageManager = importlib.import_module(PACKAGE + ".image_manager").ImageManager
 
 
 class FakeEvent:
@@ -254,6 +258,22 @@ class ImageInputOrderTest(unittest.IsolatedAsyncioTestCase):
             ["https://qq.test/current-token", "https://qq.test/quoted-token"],
         )
         self.assertEqual(self.manager._resolve_image_source.await_count, 2)
+
+    async def test_byte_inputs_resolve_opaque_image_tokens_in_order(self):
+        self.manager._resolve_image_source = AsyncMock(
+            side_effect=lambda event, source: f"https://qq.test/{source}"
+        )
+        self.manager.load_bytes = AsyncMock(side_effect=lambda source: source.encode())
+        current = Image("")
+        current.file = "current-token"
+        quoted = Image("")
+        quoted.file = "quoted-token"
+        result = await self.manager.extract_images_from_event(
+            FakeEvent([current, Reply([quoted])]), strict=True
+        )
+        self.assertEqual(
+            result, [b"https://qq.test/current-token", b"https://qq.test/quoted-token"]
+        )
 
     async def test_astrbot_resolver_cache_path_is_not_discarded_or_stringified(self):
         import tempfile
