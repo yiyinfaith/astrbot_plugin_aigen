@@ -69,7 +69,7 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         start, result = await self.receive("/生视频")
         self.assertEqual(result, [])
         self.assertEqual(
-            start.sent[0][0].text, "请发送材料，最后发送“/生成”开始生成视频"
+            start.sent[0][0].text, "请发送材料，最后发送“/生成”开始生成视频，60秒超时"
         )
         for text in ("一只猫在雪地中跑", "镜头平稳跟随", "最后看向镜头"):
             event, result = await self.receive(text)
@@ -309,7 +309,10 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_configured_timer_expires_and_material_does_not_reset_deadline(self):
         self.config["collection_timeout_seconds"] = 1
-        await self.receive("/做视频")
+        start, _ = await self.receive("/做视频")
+        self.assertEqual(
+            start.sent[0][0].text, "请发送材料，最后发送“/生成”开始生成视频，1秒超时"
+        )
         collection = next(iter(self.plugin._video_collections.values()))
         deadline = collection["deadline"]
         await self.receive("提示词")

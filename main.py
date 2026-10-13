@@ -703,7 +703,11 @@ class ImageGeneratorPlugin(Star):
                     try:
                         await event.send(
                             event.chain_result(
-                                [Plain("请发送材料，最后发送“/生成”开始生成视频")]
+                                [
+                                    Plain(
+                                        f"请发送材料，最后发送“/生成”开始生成视频，{collection['timeout']}秒超时"
+                                    )
+                                ]
                             )
                         )
                     except BaseException:
