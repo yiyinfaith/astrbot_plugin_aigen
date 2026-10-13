@@ -2,7 +2,7 @@
     "global_settings": {
         "description": "🌐 全局设置",
         "type": "object",
-        "hint": "图片、视频和音频共同使用：网络、工具冷却、显示和帮助。",
+        "hint": "图片、视频和音频共同使用：网络、工具冷却、显示、帮助、模型计费、余额和卡密。",
         "items": {
             "show_model_info": {
                 "description": "【显示】显示模型信息",
@@ -52,6 +52,97 @@
                 "type": "int",
                 "hint": "每个用户的函数工具冷却时间，图片和视频分别计时；设为0关闭冷却。普通命令不设次数限制。",
                 "default": 60
+            },
+            "billing_timezone": {
+                "description": "【计费】价格时区",
+                "type": "string",
+                "default": "Asia/Shanghai",
+                "hint": "条件表达式 hour、weekday 的时区。提交时固定，排队跨时段不改变价格。"
+            },
+            "billing_prices": {
+                "description": "【计费】模型价格",
+                "type": "template_list",
+                "hint": "始终启用；未配置价格的模型免费。按最终路由模型 ID 精确匹配；同一模型和媒体不能重复。余额单位自定，金额最多六位小数。详见 README 的计费示例。",
+                "default": [],
+                "templates": {
+                    "model_price": {
+                        "name": "模型价格",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID",
+                                "type": "string",
+                                "default": "",
+                                "hint": "精确匹配实际模型名，包括长视频自动切换后的模型。"
+                            },
+                            "media": {
+                                "description": "适用媒体",
+                                "type": "string",
+                                "default": "all",
+                                "options": [
+                                    "all",
+                                    "image",
+                                    "video",
+                                    "audio"
+                                ],
+                                "labels": [
+                                    "全部",
+                                    "图片",
+                                    "视频",
+                                    "音频"
+                                ]
+                            },
+                            "mode": {
+                                "description": "计费方式",
+                                "type": "string",
+                                "default": "request",
+                                "options": [
+                                    "request",
+                                    "tokens",
+                                    "seconds",
+                                    "characters",
+                                    "expression"
+                                ],
+                                "labels": [
+                                    "按次",
+                                    "按 Token",
+                                    "按成品秒数",
+                                    "按千字符",
+                                    "条件价格表达式"
+                                ]
+                            },
+                            "price": {
+                                "description": "单价",
+                                "type": "string",
+                                "default": "0",
+                                "hint": "按次：每次价格；按秒：实际成品每秒价格；按字符：每千字符价格。填 0 免费。"
+                            },
+                            "input_price": {
+                                "description": "每百万输入 Token 价格",
+                                "type": "string",
+                                "default": "0"
+                            },
+                            "output_price": {
+                                "description": "每百万输出 Token 价格",
+                                "type": "string",
+                                "default": "0"
+                            },
+                            "expression": {
+                                "description": "价格表达式",
+                                "type": "text",
+                                "editor_mode": true,
+                                "editor_language": "python",
+                                "default": "0",
+                                "hint": "如 seconds * (0.2 if resolution == \"1080p\" else 0.1)。支持 + - * / %、比较、and/or/not、a if 条件 else b、min/max/ceil/floor。变量及完整示例见 README；不是 New API CEL 原样兼容。"
+                            },
+                            "reserve": {
+                                "description": "单次预留及扣费上限",
+                                "type": "string",
+                                "default": "0",
+                                "hint": "使用实际秒数或 Token 时必填正数。生成前冻结，完成后按实际量结算并退差额，最终扣费不会超此上限。缺少用量/状态不明时保留冻结供管理员核对。纯按次/请求参数表达式自动预留准确费用，此项不参与。"
+                            }
+                        }
+                    }
+                }
             }
         }
     },

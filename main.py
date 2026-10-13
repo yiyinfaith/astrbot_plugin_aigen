@@ -30,6 +30,9 @@ from .audio_router import (
     parse_audio_materials,
     select_audio_route,
 )
+from .billing import BillingError, BillingService, billed_call
+from .billing_commands import COMMANDS as BILLING_COMMANDS
+from .billing_commands import handle_command
 from .config_manager import media_config, migrate_config
 from .data_manager import DataManager
 from .generation_capabilities import (
@@ -41,10 +44,15 @@ from .generation_capabilities import (
     supplied,
     validate_options,
 )
+from .generation_params import (
+    detect_aspect_ratio_from_image,
+    openai_size_for_generation,
+    resolve_image_generation_params,
+)
 from .image_manager import ImageManager
 from .image_router import select_image_route
 from .utils import extract_image_urls_from_text, match_keyword_in_text, norm_id
-from .video_api_manager import VideoApiManager, VideoDownloadError
+from .video_api_manager import VideoApiManager, VideoDownloadError, video_params
 from .video_inputs import collect_media, normalize_media_event, text_media
 from .video_router import VideoError, VideoOptions, parse_video_command, select_route
 
@@ -53,7 +61,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.3.0",
+    "1.4.0",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -76,6 +84,9 @@ class ImageGeneratorPlugin(Star):
         data_dir = Path(StarTools.get_data_dir())
         migrate_config(config, data_dir / "config_backups")
         self.root_conf = config
+        self.billing = BillingService(
+            data_dir / "billing.sqlite3", config.get("global_settings", {})
+        )
         self.conf = media_config(config, "image")
         self.video_conf = media_config(config, "video")
         self.audio_conf = media_config(config, "audio")
@@ -111,8 +122,14 @@ class ImageGeneratorPlugin(Star):
     async def terminate(self):
         """Close the reusable HTTP session during hot reload."""
         self._terminating = True
+        if getattr(self, "billing", None):
+            self.billing.closed = True
         self._video_collections.clear()
-        tasks = list(self._video_generation_tasks | self._video_collection_tasks)
+        tasks = list(
+            self._video_generation_tasks
+            | self._video_collection_tasks
+            | getattr(getattr(self, "billing", None), "tasks", set())
+        )
         for task in tasks:
             task.cancel()
         if tasks:
@@ -395,13 +412,43 @@ class ImageGeneratorPlugin(Star):
         source_expiry = ""
         try:
             start = datetime.now(timezone.utc)
-            result = await manager.call_api(
-                images,
-                prompt,
-                model,
-                proxy=self.img_mgr.proxy,
-                image_options=image_options,
+            billing_parameters = resolve_image_generation_params(
+                "",
+                effective.get("image_resolution", "1K"),
+                detect_aspect_ratio_from_image(images[0], "4:3") if images else "4:3",
+                resolution=image_options.get("resolution"),
+                aspect_ratio=image_options.get("aspect_ratio"),
             )
+            if effective.get("interface_mode") in {"openai_image", "openai_response"}:
+                billing_parameters["size"] = openai_size_for_generation(
+                    billing_parameters, image_options.get("size")
+                )
+            result = await billed_call(
+                getattr(self, "billing", None),
+                event,
+                "image",
+                {
+                    **effective,
+                    **billing_parameters,
+                    **image_options,
+                    "size": billing_parameters["size"],
+                },
+                {
+                    "characters": len(prompt),
+                    "images": len(images),
+                    "audios": 0,
+                    "videos": 0,
+                },
+                lambda: manager.call_api(
+                    images,
+                    prompt,
+                    model,
+                    proxy=self.img_mgr.proxy,
+                    image_options=image_options,
+                ),
+            )
+        except BillingError as exc:
+            return [Plain(str(exc))]
         except ImageDownloadError as exc:
             logger.warning("图片本地下载失败，准备使用公网链接回退：%s", exc)
             if dispatch_result:
@@ -535,6 +582,18 @@ class ImageGeneratorPlugin(Star):
         text = self._clean_message(raw_text)
         key = self._video_session_key(event)
         if self._terminating:
+            return
+        if (
+            text.split(maxsplit=1)[:1]
+            and text.split(maxsplit=1)[0] in BILLING_COMMANDS
+            and self._has_astrbot_prefix(event, raw_text)
+        ):
+            event.stop_event()
+            response = handle_command(self.billing, event, text)
+            if len(response) > 1000:
+                await self._send_settings_menu(event, [response])
+            else:
+                yield event.chain_result([Plain(response)])
             return
         audio_argument = self._resolve_audio_command(raw_text)
         if audio_argument is not None and (
@@ -1219,7 +1278,7 @@ class ImageGeneratorPlugin(Star):
             An error chain, or no elements after successful delivery.
         """
         try:
-            self.audio_mgr.prepare(options, audios)
+            prepared = self.audio_mgr.prepare(options, audios)
             if not tool_call:
                 label = "文字" if options.mode == "朗读" else "提示词"
                 await event.send(
@@ -1231,7 +1290,20 @@ class ImageGeneratorPlugin(Star):
                         ]
                     )
                 )
-            result = await self.audio_mgr.generate(options, audios)
+            effective = prepared[1].config if prepared else {}
+            result = await billed_call(
+                getattr(self, "billing", None),
+                event,
+                "audio",
+                effective,
+                {
+                    "characters": len(options.prompt),
+                    "images": 0,
+                    "audios": len(audios),
+                    "videos": 0,
+                },
+                lambda: self.audio_mgr.generate(options, audios),
+            )
         except AudioDownloadError as exc:
             return [
                 Plain(f"{exc}\n已生成的音频地址：{exc.url}\n请下载原结果，勿重复提交。")
@@ -1323,7 +1395,7 @@ class ImageGeneratorPlugin(Star):
         if not self.video_conf.get("enabled", True):
             return [Plain("视频生成功能已关闭。")]
         try:
-            self.video_mgr.prepare(
+            prepared = self.video_mgr.prepare(
                 prompt, images, audios or [], videos or [], duration, options
             )
         except (VideoError, ValueError, TypeError) as exc:
@@ -1337,8 +1409,30 @@ class ImageGeneratorPlugin(Star):
             )
             await event.send(event.chain_result([Plain(feedback)]))
         try:
-            result = await self.video_mgr.generate(
-                prompt, images, audios, videos, duration, options
+            effective = prepared[1].config if prepared else {}
+            if prepared:
+                parameters = video_params(
+                    "", effective, options.duration if options else duration
+                )
+                effective = {
+                    **effective,
+                    **parameters,
+                    "aspect_ratio": parameters["ratio"],
+                }
+            result = await billed_call(
+                getattr(self, "billing", None),
+                event,
+                "video",
+                effective,
+                {
+                    "characters": len(prompt),
+                    "images": len(images),
+                    "audios": len(audios or []),
+                    "videos": len(videos or []),
+                },
+                lambda: self.video_mgr.generate(
+                    prompt, images, audios, videos, duration, options
+                ),
             )
         except VideoDownloadError as exc:
             logger.warning("视频本地下载失败，准备使用公网链接回退：%s", exc)

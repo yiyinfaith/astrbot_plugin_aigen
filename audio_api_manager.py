@@ -17,6 +17,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import aiohttp
 
+from .billing import track
 from .audio_router import AUDIO_MODES, AudioOptions, select_audio_route
 from .generation_capabilities import AUDIO, prune_template_parameters, validate_options
 from .video_api_manager import (
@@ -569,6 +570,7 @@ class AudioApiManager(VideoApiManager):
         try:
             if mode == "openai_speech":
                 session = await self._get_session()
+                track(state="submitted")
                 async with session.post(
                     url,
                     json=body,
@@ -583,6 +585,7 @@ class AudioApiManager(VideoApiManager):
                         else None,
                     ),
                 ) as response:
+                    track(status=response.status)
                     if response.status >= 400:
                         detail = (await response.text()).replace(key, "[redacted]")[
                             :400
@@ -615,6 +618,7 @@ class AudioApiManager(VideoApiManager):
         if mode == "minimax_speech":
             meta = data.get("base_resp") or {}
             if meta.get("status_code", 0) != 0:
+                track(state="failed")
                 raise VideoError(
                     "MiniMax 语音生成失败："
                     + str(meta.get("status_msg", "未知原因"))[:400].replace(
@@ -691,6 +695,7 @@ class AudioApiManager(VideoApiManager):
         while raw is None:
             normalized = status.strip().lower()
             if normalized in failure:
+                track(state="failed")
                 raise VideoError(f"音频任务失败（ID：{task_id}）：{error or status}")
             if artifact_url and (not status or normalized in success):
                 break
@@ -732,6 +737,7 @@ class AudioApiManager(VideoApiManager):
                         f"音频查询中断（ID：{task_id}）：{exc}；勿重复提交。"
                     ) from exc
         if status.strip().lower() in failure:
+            track(state="failed")
             raise VideoError(f"音频任务失败（ID：{task_id}）：{error or status}")
         if raw is not None:
             fmt = str(self.config.get("response_format", "wav"))
@@ -779,8 +785,10 @@ class AudioApiManager(VideoApiManager):
                 > int(self.config.get("max_audio_size_mb", 50)) * 1024 * 1024
             ):
                 raise VideoError("音频输出为空或超过大小上限。")
+            track(state="completed")
             await asyncio.to_thread(path.write_bytes, raw)
         else:
+            track(state="completed")
             try:
                 path = await self.download_audio(artifact_url)
             except (

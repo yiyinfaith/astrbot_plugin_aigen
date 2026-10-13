@@ -125,6 +125,14 @@ def plugin_class():
         "monotonic": monotonic,
         "Plain": Plain,
         "Node": Node,
+        "BILLING_COMMANDS": importlib.import_module(
+            PACKAGE + ".billing_commands"
+        ).COMMANDS,
+        "handle_command": importlib.import_module(
+            PACKAGE + ".billing_commands"
+        ).handle_command,
+        "BillingError": importlib.import_module(PACKAGE + ".billing").BillingError,
+        "billed_call": importlib.import_module(PACKAGE + ".billing").billed_call,
         "AUDIO": capabilities.AUDIO,
         "IMAGE": capabilities.IMAGE,
         "supplied": capabilities.supplied,
@@ -148,6 +156,16 @@ def plugin_class():
         "VideoDownloadError": api.VideoDownloadError,
         "ImageDownloadError": image_api.ImageDownloadError,
         "ApiManager": image_api.ApiManager,
+        "video_params": api.video_params,
+        "detect_aspect_ratio_from_image": importlib.import_module(
+            PACKAGE + ".generation_params"
+        ).detect_aspect_ratio_from_image,
+        "resolve_image_generation_params": importlib.import_module(
+            PACKAGE + ".generation_params"
+        ).resolve_image_generation_params,
+        "openai_size_for_generation": importlib.import_module(
+            PACKAGE + ".generation_params"
+        ).openai_size_for_generation,
         "VideoOptions": router.VideoOptions,
         "parse_video_command": router.parse_video_command,
         "collect_media": inputs.collect_media,

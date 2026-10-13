@@ -18,6 +18,7 @@ import aiohttp
 from astrbot.api import logger
 from PIL import Image
 
+from .billing import track
 from .api_manager import ApiManager
 from .generation_capabilities import prune_template_parameters, validate_options
 from .video_router import VideoError, VideoOptions, integer, select_route
@@ -932,6 +933,8 @@ class VideoApiManager(ApiManager):
         timeout = aiohttp.ClientTimeout(
             total=max(1, int(self.config.get("timeout", 120)))
         )
+        if method == "POST":
+            track(state="submitted")
         async with session.request(
             method,
             url,
@@ -948,6 +951,7 @@ class VideoApiManager(ApiManager):
                 if key
                 else await resp.text()
             )
+            track(raw=text, status=resp.status if method == "POST" else 0)
             if resp.status >= 400:
                 detail = text.replace(key, "[redacted]")
                 try:
@@ -1095,6 +1099,7 @@ class VideoApiManager(ApiManager):
         url_expires_at = _url_expiry(data, url)
         if not task_id and not url:
             if error:
+                track(state="failed")
                 raise VideoError(f"视频提交失败：{error}")
             raise VideoError("接口没有返回任务 ID 或视频地址；请核对任务记录后再提交。")
         info = {
@@ -1132,6 +1137,7 @@ class VideoApiManager(ApiManager):
         while True:
             normalized = status.strip().lower()
             if normalized in failure:
+                track(state="failed")
                 info.update(status=status)
                 await self._save_job_record(job, info)
                 raise VideoError(f"视频任务失败（ID：{task_id}）：{error or status}")
@@ -1174,6 +1180,7 @@ class VideoApiManager(ApiManager):
                     raise VideoError(
                         f"视频查询中断；任务 ID：{task_id}。任务仍可在上游查询，请勿重复提交。"
                     ) from exc
+        track(state="completed")
         info.update(status="completed", url=url)
         if url_expires_at:
             info["url_expires_at"] = url_expires_at

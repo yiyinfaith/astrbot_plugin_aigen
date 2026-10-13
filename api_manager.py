@@ -12,6 +12,7 @@ from urllib.parse import parse_qs
 import aiohttp
 from typing import List, Dict
 from astrbot.api import logger
+from .billing import track
 from .generation_params import (
     detect_aspect_ratio_from_image,
     openai_size_for_generation,
@@ -787,6 +788,7 @@ class ApiManager:
                         break
 
         if "error" in res_data:
+            track(state="failed")
             return json.dumps(res_data["error"], ensure_ascii=False)
 
         img_url = self.extract_image_url(res_data)
@@ -898,6 +900,7 @@ class ApiManager:
                     form.add_field("image", img, filename=filename, content_type=mime)
 
                 current_proxy = self._get_request_proxy(url, proxy)
+                track(state="submitted")
                 async with session.post(
                     url,
                     data=form,
@@ -906,6 +909,7 @@ class ApiManager:
                     timeout=timeout,
                 ) as resp:
                     resp_text = await resp.text()
+                    track(raw=resp_text, status=resp.status)
 
                     if resp.status != 200 and stream:
                         logger.info(
@@ -1100,6 +1104,7 @@ class ApiManager:
 
             for idx, url in enumerate(candidate_urls):
                 current_proxy = self._get_request_proxy(url, proxy)
+                track(state="submitted")
                 async with session.post(
                     url,
                     json=payload,
@@ -1108,6 +1113,7 @@ class ApiManager:
                     timeout=timeout,
                 ) as resp:
                     resp_text = await resp.text()
+                    track(raw=resp_text, status=resp.status)
 
                     if resp.status != 200 and stream:
                         logger.info(
@@ -1293,6 +1299,7 @@ class ApiManager:
 
         try:
             current_proxy = self._get_request_proxy(url, proxy)
+            track(state="submitted")
             async with session.post(
                 url,
                 json=payload,
@@ -1301,6 +1308,7 @@ class ApiManager:
                 timeout=timeout,
             ) as response:
                 response_text = await response.text()
+                track(raw=response_text, status=response.status)
 
                 if response.status != 200:
                     if stream:
@@ -1345,6 +1353,7 @@ class ApiManager:
                         )
 
                 if "error" in response_data:
+                    track(state="failed")
                     return json.dumps(response_data["error"], ensure_ascii=False)
 
                 output_items = response_data.get("output", [])
@@ -1496,6 +1505,7 @@ class ApiManager:
         if not img_url:
             raise ImageDownloadError("结果图片地址为空", "", url_expires_at)
 
+        track(state="completed")
         img_url = self._resolve_result_image_url(img_url, base_url)
         proxy = self._get_request_proxy(img_url, proxy)
 
@@ -1928,6 +1938,7 @@ class ApiManager:
             for idx, candidate_url in enumerate(candidate_urls):
                 active_url = candidate_url
                 current_proxy = self._get_request_proxy(active_url, proxy)
+                track(state="submitted")
                 async with session.post(
                     active_url,
                     json=payload,
@@ -1936,6 +1947,7 @@ class ApiManager:
                     timeout=timeout,
                 ) as resp:
                     resp_text = await resp.text()
+                    track(raw=resp_text, status=resp.status)
                     last_status = resp.status
 
                     # 如果返回 HTML，且后面还有候选地址，则继续尝试常见 API 前缀
@@ -2209,6 +2221,7 @@ class ApiManager:
                     return f"数据解析失败: 返回内容不是 JSON. 内容: {resp_text[:100]}... | URL: {active_url}"
 
             if "error" in res_data:
+                track(state="failed")
                 return json.dumps(res_data["error"], ensure_ascii=False)
 
             img_url = self.extract_image_url(res_data)
