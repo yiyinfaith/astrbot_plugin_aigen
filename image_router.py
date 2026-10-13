@@ -17,7 +17,9 @@ def select_image_route(config: dict, images: list, model: str) -> dict:
     Raises:
         VideoError: If the chosen route is missing or duplicated.
     """
-    effective = dict(config, model=model)
+    from .generation_capabilities import IMAGE, parameter_defaults, supplied
+
+    effective = {**config, **parameter_defaults(config), "model": model}
     if not config.get("auto_route", True) or "routes" not in config:
         return effective
     route = "image_to_image" if images else "text_to_image"
@@ -33,4 +35,8 @@ def select_image_route(config: dict, images: list, model: str) -> dict:
         value = matches[0].get(key)
         if value and value != "inherit":
             effective[key] = value
+    effective.update(
+        supplied({key: matches[0][key] for key in IMAGE if key in matches[0]})
+    )
+    effective.update(parameter_defaults(matches[0]))
     return effective

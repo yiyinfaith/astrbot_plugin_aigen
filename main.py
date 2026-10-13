@@ -18,28 +18,42 @@ from typing import Any, ClassVar
 import aiohttp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.message_components import File, Image, Plain, Record, Video
+from astrbot.api.message_components import File, Image, Node, Plain, Record, Video
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core import AstrBotConfig
 
 from .api_manager import ApiManager, ImageDownloadError
 from .audio_api_manager import AudioApiManager, AudioDownloadError
-from .audio_router import AUDIO_TYPES, AudioOptions, parse_audio_materials
+from .audio_router import (
+    AUDIO_TYPES,
+    AudioOptions,
+    parse_audio_materials,
+    select_audio_route,
+)
 from .config_manager import media_config, migrate_config
 from .data_manager import DataManager
+from .generation_capabilities import (
+    AUDIO,
+    IMAGE,
+    apply_menu_selection,
+    build_menu,
+    configured_capabilities,
+    supplied,
+    validate_options,
+)
 from .image_manager import ImageManager
 from .image_router import select_image_route
 from .utils import extract_image_urls_from_text, match_keyword_in_text, norm_id
 from .video_api_manager import VideoApiManager, VideoDownloadError
 from .video_inputs import collect_media, normalize_media_event, text_media
-from .video_router import VideoError, VideoOptions, parse_video_command
+from .video_router import VideoError, VideoOptions, parse_video_command, select_route
 
 
 @register(
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.2.0",
+    "1.3.0",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -326,6 +340,20 @@ class ImageGeneratorPlugin(Star):
         gid = norm_id(event.get_group_id())
         try:
             effective = select_image_route(self.conf, images, model)
+            image_options = supplied(image_options or {})
+            inherited = supplied(
+                {key: effective[key] for key in IMAGE if key in effective}
+            )
+            image_options = validate_options(
+                "image",
+                effective,
+                {**inherited, **image_options},
+                has_reference=bool(images),
+            )
+            image_options["_infer_prompt_parameters"] = False
+            image_options.setdefault(
+                "resolution", effective.get("image_resolution", "1K")
+            )
         except VideoError as exc:
             return [Plain(str(exc))]
         model = effective["model"]
@@ -521,7 +549,20 @@ class ImageGeneratorPlugin(Star):
                 yield event.chain_result(result)
             return
         collection = self._video_collections.get(key)
-        control = text in {"生成", "取消"} and self._has_astrbot_prefix(event, raw_text)
+        image_start = self._resolve_preset_prompt(raw_text, "image")
+        if self._has_astrbot_prefix(event, raw_text) and (
+            any(
+                text == cmd or text.startswith(cmd + " ") for cmd in self._DRAW_COMMANDS
+            )
+            or (image_start is not None and image_start[1] == "自定义")
+        ):
+            collection = None
+        control = text in {
+            "生成",
+            "取消",
+            "设置",
+            "设置重置",
+        } and self._has_astrbot_prefix(event, raw_text)
         if collection or control:
             event.stop_event()
             restart = self._resolve_preset_prompt(raw_text, "video")
@@ -750,6 +791,57 @@ class ImageGeneratorPlugin(Star):
         except Exception:  # noqa: BLE001
             logger.exception("Could not send video collection timeout notice")
 
+    def _collection_settings_config(
+        self, collection: dict, parameters: dict | None = None
+    ) -> dict:
+        """Resolve a menu route before all required materials have arrived."""
+        if collection["kind"] == "audio":
+            options = parse_audio_materials(
+                collection["text"], collection["audio_mode"]
+            )
+            options.route = collection["audio_type"]
+            _, effective = select_audio_route(
+                self.audio_conf, options, collection["audios"], validate_materials=False
+            )
+        else:
+            options = parse_video_command(collection["text"])
+            overrides = {
+                **options.overrides(),
+                **(collection["parameters"] if parameters is None else parameters),
+            }
+            _, effective = select_route(
+                self.video_conf,
+                collection["images"],
+                collection["audios"],
+                collection["videos"],
+                overrides.get("duration", self.video_conf.get("duration", 5)),
+                overrides,
+                options.prompt,
+                validate_materials=False,
+            )
+        return effective
+
+    async def _send_settings_menu(self, event, sections: list[str]):
+        """Send one QQ merged forward or one complete plain fallback message."""
+        platform = getattr(event, "get_platform_name", lambda: "")()
+        if platform == "aiocqhttp":
+            try:
+                nodes = [
+                    Node(
+                        uin=self._bot_id(event),
+                        name="生成参数设置",
+                        content=[Plain(section)],
+                    )
+                    for section in sections
+                ]
+                await event.send(event.chain_result(nodes))
+                return
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Merged settings forward failed; using one plain message"
+                )
+        await event.send(event.chain_result([Plain("\n\n".join(sections))]))
+
     async def _collect_video_request(
         self,
         event,
@@ -790,12 +882,23 @@ class ImageGeneratorPlugin(Star):
             return [Plain(f"{label}生成功能已关闭。")]
         finish = control == "生成" and not start
         if start:
+            # Reserving the collection below happens before the first await.
+            # A group therefore has one material owner across video and audio.
+            for owner, active in self._video_collections.items():
+                same_chat = owner[:2] == key[:2] if key[1] else owner == key
+                if same_chat and owner != key:
+                    remaining = max(0, int(active["deadline"] - monotonic()))
+                    return [
+                        Plain(
+                            f"本群已有用户正在录入材料，请等待其提交、取消或超时后再开始（剩余约{remaining}秒）。"
+                        )
+                    ]
             if collection is not None:
                 collection["timer"].cancel()
             try:
-                timeout = max(1, int(conf.get("collection_timeout_seconds", 60)))
+                timeout = max(1, int(conf.get("collection_timeout_seconds", 120)))
             except (ValueError, TypeError, OverflowError):
-                timeout = 60
+                timeout = 120
             collection = {
                 "lock": asyncio.Lock(),
                 "text": [],
@@ -813,6 +916,8 @@ class ImageGeneratorPlugin(Star):
                 "audio_mode": audio_mode,
                 "audio_type": audio_type,
                 "type_choices": [],
+                "parameters": {},
+                "settings_menu": None,
             }
             collection["finish_idle"].set()
             self._video_collections[key] = collection
@@ -845,7 +950,7 @@ class ImageGeneratorPlugin(Star):
                             event.chain_result(
                                 [
                                     Plain(
-                                        f"请发送材料，最后发送“/生成”开始生成{label}，{collection['timeout']}秒超时"
+                                        f"请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成{label}，{collection['timeout']}秒超时（整个过程共用）"
                                     )
                                 ]
                             )
@@ -859,6 +964,65 @@ class ImageGeneratorPlugin(Star):
                     self._video_collections.pop(key, None)
                     collection["timer"].cancel()
                     return [Plain("已取消本次材料收集。")]
+                if not start and control in {"设置", "设置重置"}:
+                    if control == "设置重置":
+                        collection["parameters"] = {}
+                        collection["settings_menu"] = None
+                        return [
+                            Plain("已清除本次自定义参数，继续发送材料，最后 /生成。")
+                        ]
+                    try:
+                        effective = self._collection_settings_config(collection)
+                        sections, mapping = build_menu(
+                            kind,
+                            effective,
+                            collection["parameters"],
+                            has_reference=bool(
+                                collection["images"]
+                                or collection["audios"]
+                                or collection["videos"]
+                            ),
+                        )
+                        collection["settings_menu"] = mapping
+                        await self._send_settings_menu(event, sections)
+                        return []
+                    except (VideoError, ValueError, TypeError) as exc:
+                        return [Plain(str(exc))]
+                if collection["settings_menu"] is not None and not start:
+                    if finish:
+                        collection["settings_menu"] = None
+                    else:
+                        try:
+                            chosen = apply_menu_selection(
+                                raw.strip(),
+                                collection["settings_menu"],
+                                collection["parameters"],
+                            )
+                            if chosen is not None:
+                                effective = self._collection_settings_config(
+                                    collection, chosen
+                                )
+                                validate_options(
+                                    kind,
+                                    effective,
+                                    chosen,
+                                    has_reference=bool(
+                                        collection["images"]
+                                        or collection["audios"]
+                                        or collection["videos"]
+                                    ),
+                                )
+                                collection["parameters"] = chosen
+                            collection["settings_menu"] = None
+                            return [
+                                Plain(
+                                    "已退出设置，保留原设置。继续发送材料，最后 /生成。"
+                                    if chosen is None
+                                    else "参数已保存。继续发送材料，最后 /生成；需要调整可再次 /设置。"
+                                )
+                            ]
+                        except (VideoError, ValueError, TypeError) as exc:
+                            return [Plain(str(exc))]
                 selecting_type = kind == "audio" and bool(collection["type_choices"])
                 if selecting_type:
                     choice = raw.strip()
@@ -937,6 +1101,7 @@ class ImageGeneratorPlugin(Star):
                             collection["text"], collection["audio_mode"]
                         )
                         options.route = collection["audio_type"]
+                        options.parameters = dict(collection["parameters"])
                         if not options.route and collection["audios"]:
                             count = len(collection["audios"])
                             if not options.prompt and count == 2:
@@ -958,26 +1123,17 @@ class ImageGeneratorPlugin(Star):
                                     "请提供文字及 1–3 段参考音频；音色转换只输入两段音频。"
                                 )
                             collection["type_choices"] = choices
-                            collection["timer"].cancel()
-                            collection["deadline"] = monotonic() + collection["timeout"]
-                            timer = asyncio.create_task(
-                                self._expire_video_collection(key, collection)
-                            )
-                            collection["timer"] = timer
-                            self._video_collection_tasks.add(timer)
-                            timer.add_done_callback(
-                                self._video_collection_tasks.discard
-                            )
                             return [
                                 Plain(
                                     "请选择音频类型（直接回复名称，不用 /）："
                                     + "、".join(choices)
-                                    + f"。{collection['timeout']}秒内选择，/取消 可取消。"
+                                    + f"。剩余约{max(0, int(collection['deadline'] - monotonic()))}秒，/取消 可取消。"
                                 )
                             ]
                         self.audio_mgr.prepare(options, collection["audios"])
                     else:
                         options = parse_video_command(collection["text"])
+                        options.parameters = dict(collection["parameters"])
                     if (
                         kind == "video"
                         and options.reference_mode
@@ -1306,18 +1462,52 @@ class ImageGeneratorPlugin(Star):
             send_message=send_fallback_message,
         )
 
+    @filter.llm_tool(name="get_generation_capabilities")
+    async def get_generation_capabilities(
+        self, event: AstrMessageEvent, media_type: str = "all"
+    ):
+        """查询管理员配置的媒体路线、模型、可选参数、取值范围和有效默认值，不创建生成任务。
+
+        Args:
+            media_type(string): image、video、audio 或 all。生成前不确定接口或模型能力时调用；未知模型仅返回协议能力。
+        """
+        if media_type not in {"image", "video", "audio", "all"}:
+            yield "媒体类型必须为 image、video、audio 或 all。"
+            return
+        configs = {
+            "image": self.conf,
+            "video": self.video_conf,
+            "audio": self.audio_conf,
+        }
+        try:
+            yield "\n".join(
+                configured_capabilities(kind, conf)
+                for kind, conf in configs.items()
+                if media_type in {kind, "all"}
+            )
+        except (VideoError, ValueError, TypeError) as exc:
+            yield str(exc)
+
     @filter.llm_tool(name="generate_video")
     async def generate_video(
         self,
         event: AstrMessageEvent,
         prompt: str = "",
-        duration: int = 0,
+        duration: float = 0,
         resolution: str = "",
         aspect_ratio: str = "",
         reference_mode: str = "auto",
         seed: int = -2,
-        generate_audio: str = "auto",
+        generate_audio: bool | None = None,
         use_message_media: bool = True,
+        size: str = "",
+        watermark: bool | None = None,
+        negative_prompt: str = "",
+        prompt_extend: bool | None = None,
+        camera_fixed: bool | None = None,
+        return_last_frame: bool | None = None,
+        service_tier: str = "",
+        draft: bool | None = None,
     ):
         """按图片、音频、视频的组合自动选择管理员配置的模型生成视频，成功仅发送视频。
 
@@ -1328,13 +1518,21 @@ class ImageGeneratorPlugin(Star):
 
         Args:
             prompt(string): 常规视频需要提示词；仅动作迁移、音频同步特殊模式留空。
-            duration(number): 正整数秒；0 使用提示词或配置时长。10秒以上可自动选择配置的长视频模型。动作迁移仅声明预扣时长，不裁剪视频。
+            duration(number): 通常为正整数秒；0 使用配置时长。10秒以上可选择长视频模型。动作迁移支持1–3600的小数秒，仅声明预扣时长，不裁剪视频。
             resolution(string): 可选分辨率档位，如480p、768p；留空使用所选路线的配置值，不自动降档。
             aspect_ratio(string): 可选16:9、9:16、1:1、4:3、3:4、21:9、adaptive；留空使用配置值。
             reference_mode(string): 可选，默认auto。普通图生视频、人物运动/跳舞用reference或省略；任何图片数量都不自动触发帧模式。明确首帧/尾帧用first_frame/last_frame（恰好一图），首尾帧用first_last_frame（恰好两图），都不能混音频/视频。动作迁移用motion_transfer（恰好一图一视频），自动对口型用audio_sync（恰好一图一音频）；后两种必须留空prompt。
             seed(number): -2使用配置，-1不发送种子，AutoDL最大999999999999999，Seedance最大2147483647；最小值由模型决定。
-            generate_audio(string): auto使用配置，true/false控制Seedance同时生成音频。
+            generate_audio(boolean): 省略使用配置；true/false控制Seedance同时生成音频。
             use_message_media(boolean): 默认true，缺少对应显式媒体时读取当前/引用消息和@头像；纯文生且不希望使用附带媒体时设false。
+            size(string): OpenAI 视频精确尺寸，可用值请先查询能力工具；不支持的模型会报错。
+            watermark(boolean): 可选水印开关，省略继承配置。
+            negative_prompt(string): DashScope 或自定义模板的负面提示词。
+            prompt_extend(boolean): DashScope 智能扩写开关。
+            camera_fixed(boolean): Seedance 固定镜头开关。
+            return_last_frame(boolean): Seedance 返回尾帧开关，插件仍仅发送视频。
+            service_tier(string): Seedance 服务档位 default 或 flex。
+            draft(boolean): Seedance 草稿模式开关。
         """
         if not self.video_conf.get("enable_llm_tool", True):
             yield "视频生成函数工具已停用。"
@@ -1363,6 +1561,18 @@ class ImageGeneratorPlugin(Star):
                     reference_mode=reference_mode,
                     seed=seed,
                     generate_audio=generate_audio,
+                    parameters=supplied(
+                        {
+                            "size": size,
+                            "watermark": watermark,
+                            "negative_prompt": negative_prompt,
+                            "prompt_extend": prompt_extend,
+                            "camera_fixed": camera_fixed,
+                            "return_last_frame": return_last_frame,
+                            "service_tier": service_tier,
+                            "draft": draft,
+                        }
+                    ),
                 )
                 options.overrides()
                 if use_message_media:
@@ -1435,6 +1645,31 @@ class ImageGeneratorPlugin(Star):
         text: str,
         mode: str = "朗读",
         audio_type: str = "",
+        voice: str = "",
+        speed: float | None = None,
+        response_format: str = "",
+        instructions: str = "",
+        language: str = "",
+        volume: float | None = None,
+        pitch: int | None = None,
+        sample_rate: int | None = None,
+        bitrate: int | None = None,
+        channels: int | None = None,
+        emotion: str = "",
+        temperature: float | None = None,
+        top_p: float | None = None,
+        max_tokens: int | None = None,
+        emo_control_method: str = "",
+        emo_afraid: float | None = None,
+        emo_angry: float | None = None,
+        emo_calm: float | None = None,
+        emo_disgusted: float | None = None,
+        emo_happy: float | None = None,
+        emo_melancholic: float | None = None,
+        emo_sad: float | None = None,
+        emo_random: bool | None = None,
+        emo_surprised: str = "",
+        use_message_media: bool = True,
     ):
         """Generate speech or descriptive audio from text and attached audio.
 
@@ -1442,7 +1677,35 @@ class ImageGeneratorPlugin(Star):
             text(string): Exact reading text, or the audio generation prompt.
             mode(string): 朗读 for TTS; 提示词 for descriptive TTA.
             audio_type(string): Optional 音色克隆/参考音频生成/音频编辑/语音编辑/音色转换.
+            voice(string): 音色 ID，各接口统一此参数，省略继承对应接口配置；可先查询能力。
+            speed(number): 语速，OpenAI 0.25–4，MiniMax 0.5–2。
+            response_format(string): 输出音频格式；受接口限制，使用能力查询返回的可选值。
+            instructions(string): OpenAI 新版 TTS 的朗读风格指令，不改变要朗读的正文。
+            language(string): MiniMax language_boost 或 DashScope language_type。
+            volume(number): MiniMax 音量 0–10，0 也会发送。
+            pitch(number): MiniMax 音调，整数 -12–12。
+            sample_rate(number): MiniMax 采样率 8000/16000/22050/24000/32000/44100。
+            bitrate(number): MiniMax 比特率 32000/64000/128000/256000。
+            channels(number): MiniMax 声道数 1 或 2。
+            emotion(string): MiniMax 情绪，可用值见能力查询。
+            temperature(number): Chat/Gemini 采样随机性，0–2。
+            top_p(number): Chat/Gemini 采样概率，0–1。
+            max_tokens(number): Chat/Gemini 输出 token 上限。
+            emo_control_method(string): IndexTTS-2 情感模式：与音色参考音频相同、使用情感参考音频、使用情感向量控制。
+            emo_afraid(number): IndexTTS-2 恐惧强度 0–1.4，需向量控制模式。
+            emo_angry(number): IndexTTS-2 愤怒强度 0–1.4。
+            emo_calm(number): IndexTTS-2 平静强度 0–1.4。
+            emo_disgusted(number): IndexTTS-2 厌恶强度 0–1.4。
+            emo_happy(number): IndexTTS-2 开心强度 0–1.4。
+            emo_melancholic(number): IndexTTS-2 忧郁强度 0–1.4。
+            emo_sad(number): IndexTTS-2 悲伤强度 0–1.4。
+            emo_random(boolean): IndexTTS-2 随机情感开关，false 也会发送。
+            emo_surprised(string): IndexTTS-2 当前只支持字符串 0。
+            use_message_media(boolean): 是否读取当前和引用消息中的音频，默认 true。
         """
+        parameters = supplied(
+            {key: value for key, value in locals().items() if key in AUDIO}
+        )
         if not self.audio_conf.get("enabled", True) or not self.audio_conf.get(
             "enable_llm_tool", True
         ):
@@ -1471,14 +1734,18 @@ class ImageGeneratorPlugin(Star):
         task = asyncio.current_task()
         self._video_generation_tasks.add(task)
         try:
-            _, images, audios, videos = await self._video_command_inputs(
-                event, "", "自定义"
-            )
+            if use_message_media:
+                _, images, audios, videos = await self._video_command_inputs(
+                    event, "", "自定义"
+                )
+            else:
+                images, audios, videos = [], [], []
             if images or videos:
                 yield "生音频不接受图片或视频。"
                 return
             options = parse_audio_materials([text], mode)
             options.route = AUDIO_TYPES.get(audio_type, "")
+            options.parameters = parameters
             for part in await self._generate_audio(
                 event, options, audios, tool_call=True
             ):
@@ -1499,14 +1766,20 @@ class ImageGeneratorPlugin(Star):
         quality: str = "",
         background: str = "",
         output_format: str = "",
-        output_compression: int = 0,
+        output_compression: int | None = None,
         moderation: str = "",
         style: str = "",
-        n: int = 0,
-        max_num_results: int = 0,
+        n: int | None = None,
+        max_num_results: int | None = None,
         input_fidelity: str = "",
-        partial_images: int = 0,
+        partial_images: int | None = None,
         action: str = "",
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        seed: int | None = None,
+        max_tokens: int | None = None,
+        use_message_media: bool = True,
     ):
         """使用统一图片生成入口生成或编辑图片。
 
@@ -1520,14 +1793,20 @@ class ImageGeneratorPlugin(Star):
             quality(string): 可选 OpenAI 画质：auto、low、medium、high、xhigh、max；旧版 DALL-E 兼容接口可填写 standard、hd。
             background(string): 可选背景：auto、transparent、opaque。
             output_format(string): 可选输出格式：png、jpeg、webp。
-            output_compression(number): 可选输出压缩率 0-100；0 表示不发送此字段。
+            output_compression(number): 可选输出压缩率 0-100；0 会原样发送，省略使用默认。
             moderation(string): 可选内容审核级别：auto、low。
             style(string): 可选风格：vivid、natural；主要适用于 DALL-E 3 兼容模型。
-            n(number): 可选生成数量；0 表示使用插件默认值 1，插件回复第一张图片。
+            n(number): 可选生成数量 1–10，省略使用默认，插件回复第一张图片。
             max_num_results(number): 可选 Responses 图片工具生成数量，1-50；未填写时使用接口默认值。
             input_fidelity(string): 可选编辑参考图保真度：low、high；没有输入图片时忽略。
             partial_images(number): 可选流式中间图片数量：0-3；仅由支持该字段的 OpenAI 图片接口处理。
             action(string): 可选 Responses 图片工具动作：auto、generate、edit；留空由接口自动判断。
+            temperature(number): Gemini/Chat 采样随机性，0–2。
+            top_p(number): Gemini/Chat 采样概率，0–1。
+            top_k(number): Gemini 候选 token 数，正整数。
+            seed(number): Gemini/Chat 随机种子，非负整数。
+            max_tokens(number): Gemini/Chat 最大输出 token 数。
+            use_message_media(boolean): 默认 true 读取当前或引用图片，纯文生时可设 false。
         """
         if not self.conf.get("enable_llm_tool", True):
             yield "图片生成函数工具当前已在插件配置中停用。"
@@ -1550,9 +1829,10 @@ class ImageGeneratorPlugin(Star):
             prompt = self._clean_message(self._event_message_text(event))
 
         images: list[bytes] = []
-        images = await self._extract_images(
-            event, prompt, "自定义", strict=True, extra_sources=[]
-        )
+        if use_message_media:
+            images = await self._extract_images(
+                event, prompt, "自定义", strict=True, extra_sources=[]
+            )
         if not prompt and images:
             prompt = "请根据参考图片生成一张高质量图片，保留主体特征并自然完成画面。"
         if not prompt:
@@ -1574,6 +1854,11 @@ class ImageGeneratorPlugin(Star):
             "input_fidelity": str(input_fidelity or "").strip(),
             "partial_images": partial_images,
             "action": str(action or "").strip(),
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "seed": seed,
+            "max_tokens": max_tokens,
         }
 
         result = await self._generate(

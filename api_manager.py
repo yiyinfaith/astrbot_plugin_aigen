@@ -705,7 +705,7 @@ class ApiManager:
             partial_images = int(options.get("partial_images") or 0)
         except (TypeError, ValueError):
             partial_images = 0
-        if include_gpt_image_fields and include_partial_images and 0 < partial_images <= 3:
+        if include_gpt_image_fields and include_partial_images and options.get("partial_images") is not None and 0 <= partial_images <= 3:
             if multipart:
                 target.add_field("partial_images", str(partial_images))
             else:
@@ -717,7 +717,7 @@ class ApiManager:
             compression = 0
         if (
             include_gpt_image_fields or include_response_tool_fields
-        ) and 0 <= compression <= 100 and compression:
+        ) and 0 <= compression <= 100 and options.get("output_compression") is not None:
             if multipart:
                 target.add_field("output_compression", str(compression))
             else:
@@ -1243,6 +1243,8 @@ class ApiManager:
         )
         image_options = image_options or {}
         _, _, quality_values, fidelity_values = self._openai_model_capabilities(model)
+        if not quality_values:
+            quality_values = {"auto", "low", "medium", "high", "xhigh", "max"}
         resolution = generation_params["resolution"]
         final_prompt = (
             f"(Masterpiece, Best Quality, {resolution} Resolution), {prompt}"
@@ -1762,7 +1764,7 @@ class ApiManager:
             )
 
         generation_params = resolve_image_generation_params(
-            prompt,
+            prompt if (image_options or {}).get("_infer_prompt_parameters", True) else "",
             default_resolution=self.config.get("image_resolution", "1K"),
             default_aspect_ratio=default_aspect_ratio,
             resolution=resolution or (image_options or {}).get("resolution"),
@@ -1894,6 +1896,14 @@ class ApiManager:
             # gateways accept Gemini-specific ``modalities``/``image_config``
             # extensions, but those are deliberately confined to their own
             # custom endpoint mode rather than mixed into this protocol.
+
+        for source, target in (("temperature", "temperature"), ("top_p", "topP"), ("top_k", "topK"), ("seed", "seed"), ("max_tokens", "maxOutputTokens")):
+            value = (image_options or {}).get(source)
+            if value is not None:
+                if mode == "gemini_official":
+                    payload["generationConfig"][target] = value
+                else:
+                    payload[source] = value
 
         # 4. 发送请求
         try:

@@ -18,6 +18,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 import aiohttp
 
 from .audio_router import AUDIO_MODES, AudioOptions, select_audio_route
+from .generation_capabilities import AUDIO, prune_template_parameters, validate_options
 from .video_api_manager import (
     VideoApiManager,
     VideoDownloadError,
@@ -73,7 +74,6 @@ class AudioApiManager(VideoApiManager):
             effective.get("interface_mode"),
             effective.get("base_url"),
             tuple(self._normalize_keys(effective.get("api_keys"))),
-            effective.get("voice"),
             effective.get("audio_intent"),
         )
         manager = self._route_managers.get(cache_key)
@@ -83,8 +83,11 @@ class AudioApiManager(VideoApiManager):
             if effective.get("api_keys") == self.config.get("api_keys"):
                 manager.get_key = self.get_key
             self._route_managers[cache_key] = manager
-        manager.build_request(options.prompt, audios)
-        return route, manager
+        request_manager = AudioApiManager(effective, self.data_dir.parent)
+        request_manager._get_session = self._get_session
+        request_manager.get_key = manager.get_key
+        request_manager.build_request(options.prompt, audios)
+        return route, request_manager
 
     def build_request(self, text: str, audios: list[str]):
         """Encode the configured audio protocol without discarding any reference.
@@ -130,6 +133,8 @@ class AudioApiManager(VideoApiManager):
                 "response_format": fmt,
                 "speed": speed,
             }
+            if c.get("instructions"):
+                body["instructions"] = c["instructions"]
             create = "/v1/audio/speech"
         elif mode == "minimax_speech":
             if not 0.5 <= speed <= 2 or fmt not in {"wav", "mp3", "pcm", "flac"}:
@@ -146,6 +151,22 @@ class AudioApiManager(VideoApiManager):
                 },
                 "audio_setting": {"sample_rate": 32000, "format": fmt, "channel": 1},
             }
+            for source, target in (
+                ("volume", "vol"),
+                ("pitch", "pitch"),
+                ("emotion", "emotion"),
+            ):
+                if source in c:
+                    body["voice_setting"][target] = c[source]
+            for source, target in (
+                ("sample_rate", "sample_rate"),
+                ("bitrate", "bitrate"),
+                ("channels", "channel"),
+            ):
+                if source in c:
+                    body["audio_setting"][target] = c[source]
+            if c.get("language"):
+                body["language_boost"] = c["language"]
             create = "/v1/t2a_v2"
         elif mode in {"minimax", "autodl_native"}:
             if model in {"IndexTTS-2", "indextts2-v1"}:
@@ -191,6 +212,35 @@ class AudioApiManager(VideoApiManager):
                     "/api/v1/comfyui/comfyui_workflow/indextts2-v1",
                     "/api/v1/comfyui/comfyui_workflow/result/{task_id}",
                 )
+            if model in {"IndexTTS-2", "indextts2-v1"}:
+                controls = {
+                    key: c[key] for key in AUDIO if key.startswith("emo_") and key in c
+                }
+                validate_options("audio", c, controls, has_reference=bool(audios))
+                method = controls.get(
+                    "emo_control_method",
+                    "使用情感参考音频" if len(audios) == 2 else "与音色参考音频相同",
+                )
+                if method == "使用情感参考音频" and len(audios) != 2:
+                    raise VideoError(
+                        "情感参考模式需要两段音频：音色参考在前，情感参考在后。"
+                    )
+                if len(audios) == 2 and method != "使用情感参考音频":
+                    raise VideoError(
+                        "两段参考音频必须使用情感参考模式，避免忽略第二段音频。"
+                    )
+                if (
+                    any(
+                        key.startswith("emo_")
+                        and key not in {"emo_control_method", "emo_random"}
+                        for key in controls
+                    )
+                    and method != "使用情感向量控制"
+                ):
+                    raise VideoError("设置情感向量时请选择“使用情感向量控制”。")
+                body.update(controls)
+                if controls or len(audios) == 2 or mode == "autodl_native":
+                    body["emo_control_method"] = method
         elif mode == "openai_chat":
             if fmt not in {"wav", "mp3", "opus", "flac", "pcm"}:
                 raise VideoError("OpenAI Chat 音频输出不支持此格式。")
@@ -211,6 +261,9 @@ class AudioApiManager(VideoApiManager):
                 "messages": [{"role": "user", "content": content}],
                 "stream": False,
             }
+            for name in ("temperature", "top_p", "max_tokens"):
+                if name in c:
+                    body[name] = c[name]
             if route == "voice_conversion":
                 body["messages"].insert(
                     0,
@@ -246,6 +299,13 @@ class AudioApiManager(VideoApiManager):
                     },
                 },
             }
+            for source, target in (
+                ("temperature", "temperature"),
+                ("top_p", "topP"),
+                ("max_tokens", "maxOutputTokens"),
+            ):
+                if source in c:
+                    body["generationConfig"][target] = c[source]
             if route == "voice_conversion":
                 body["systemInstruction"] = {
                     "parts": [
@@ -269,7 +329,7 @@ class AudioApiManager(VideoApiManager):
                 "input": {
                     "text": text,
                     "voice": str(c.get("dashscope_voice", "Cherry")),
-                    "language_type": "Auto",
+                    "language_type": c.get("language", "Auto"),
                 },
             }
             create = "/api/v1/services/aigc/multimodal-generation/generation"
@@ -316,22 +376,24 @@ class AudioApiManager(VideoApiManager):
                 raise VideoError(
                     "音频自定义模板必须传递全部音频；多音频请用 {audios}，音色转换可用 {source_audio} 和 {target_audio}。"
                 )
+            template_values = {
+                "{model}": model,
+                "{text}": text,
+                "{prompt}": text,
+                "{audios}": audios,
+                "{audio}": audios[0] if audios else "",
+                "{source_audio}": audios[0] if audios else "",
+                "{target_audio}": audios[1] if len(audios) > 1 else "",
+                "{route}": route,
+                "{voice}": c.get("voice", "alloy"),
+                "{format}": fmt,
+                "{speed}": speed,
+                "{stream}": False,
+                **{"{" + key + "}": c[key] for key in AUDIO if key in c},
+            }
             body = render_template(
-                template,
-                {
-                    "{model}": model,
-                    "{text}": text,
-                    "{prompt}": text,
-                    "{audios}": audios,
-                    "{audio}": audios[0] if audios else "",
-                    "{source_audio}": audios[0] if audios else "",
-                    "{target_audio}": audios[1] if len(audios) > 1 else "",
-                    "{route}": route,
-                    "{voice}": c.get("voice", "alloy"),
-                    "{format}": fmt,
-                    "{speed}": speed,
-                    "{stream}": False,
-                },
+                prune_template_parameters(template, "audio", template_values),
+                template_values,
             )
             headers.update({str(k): str(v) for k, v in extra.items()})
             create, query = (

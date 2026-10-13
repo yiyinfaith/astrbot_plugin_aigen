@@ -29,11 +29,17 @@ utils = importlib.import_module(PACKAGE + ".utils")
 audio_api = importlib.import_module(PACKAGE + ".audio_api_manager")
 audio_router = importlib.import_module(PACKAGE + ".audio_router")
 image_router = importlib.import_module(PACKAGE + ".image_router")
+capabilities = importlib.import_module(PACKAGE + ".generation_capabilities")
 
 
 class Plain:
     def __init__(self, text):
         self.text = text
+
+
+class Node:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
 
 
 class MessageChain(list):
@@ -118,6 +124,16 @@ def plugin_class():
         "timezone": timezone,
         "monotonic": monotonic,
         "Plain": Plain,
+        "Node": Node,
+        "AUDIO": capabilities.AUDIO,
+        "IMAGE": capabilities.IMAGE,
+        "supplied": capabilities.supplied,
+        "validate_options": capabilities.validate_options,
+        "build_menu": capabilities.build_menu,
+        "apply_menu_selection": capabilities.apply_menu_selection,
+        "configured_capabilities": capabilities.configured_capabilities,
+        "select_route": router.select_route,
+        "select_audio_route": audio_router.select_audio_route,
         "MessageChain": MessageChain,
         "Video": Video,
         "Image": Image,
@@ -556,7 +572,8 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("整数", result[0][0].text)
         self.plugin.video_mgr.generate.assert_not_awaited()
         self.assertEqual(
-            event.sent[0][0].text, "请发送材料，最后发送“/生成”开始生成视频，60秒超时"
+            event.sent[0][0].text,
+            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成视频，120秒超时（整个过程共用）",
         )
 
     async def test_multimedia_order_and_mention_avatar_are_preserved(self):

@@ -45,7 +45,7 @@
                 "type": "text",
                 "editor_mode": true,
                 "editor_language": "markdown",
-                "default": "🎨 图片：/生图 <提示词>，可附带或引用图片。\n🎬 视频：先 /生视频，然后依次发送文字、图片、QQ语音、视频或媒体文件；多段文字按顺序合并，最后 /生成。收集时不逐条回复；/取消 可清空重来。启动后请在配置的收集时限内发送 /生成，默认60秒；超时会提示取消。\n首帧、尾帧：关键词 + 提示词 + 一图。首尾帧：关键词 + 提示词 + 两图。普通生视频1–9图均为参考图，不自动选择帧模式。音频最多3段。\n动作迁移：关键词 + 一图一视频，不发提示词。音频同步：关键词 + 一图一音频，不发提示词。其他多媒体组合需提示词和管理员配置模型。\n可用 --duration 1 --resolution 480p --ratio 16:9。\n🎵 音频：/生音频 朗读 或 /生音频 提示词，第二个参数可选音色克隆、参考音频生成、音频编辑、语音编辑、音色转换。随后发送文字、QQ语音或音频文件，最后 /生成；多段文字合并。未指定类型且有音频时，回复类型名称后生成。/取消 可取消，默认60秒超时。"
+                "default": "🎨 图片：/生图 <提示词>，可附带或引用图片。\n🎬 视频：先 /生视频，然后依次发送文字、图片、QQ语音、视频或媒体文件；多段文字按顺序合并，最后 /生成。收集时不逐条回复；/取消 可清空重来。启动后请在配置的收集时限内发送 /生成，默认120秒；超时会提示取消。\n首帧、尾帧：关键词 + 提示词 + 一图。首尾帧：关键词 + 提示词 + 两图。普通生视频1–9图均为参考图，不自动选择帧模式。音频最多3段。\n动作迁移：关键词 + 一图一视频，不发提示词。音频同步：关键词 + 一图一音频，不发提示词。其他多媒体组合需提示词和管理员配置模型。\n录入阶段发送 /设置，以一条消息选择要修改的编号，空格分隔；0 退出设置，/生成 提交。设置和音频类型选择共用启动起的120秒时限，不重置。每个群同时只允许一人录入，仅收集发起者材料；提交后其他人可开始。生图仍一次性发送，使用默认参数。\n🎵 音频：/生音频 朗读 或 /生音频 提示词，第二个参数可选音色克隆、参考音频生成、音频编辑、语音编辑、音色转换。随后发送文字、QQ语音或音频文件，最后 /生成；多段文字合并。未指定类型且有音频时，回复类型名称后生成。/取消 可取消，默认120秒超时。"
             },
             "llm_cooldown_seconds": {
                 "description": "【LLM】工具调用冷却时间(秒)",
@@ -257,6 +257,12 @@
                                 "type": "text",
                                 "default": "",
                                 "hint": "留空使用生图主接口 Keys。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -295,6 +301,12 @@
                                 "type": "text",
                                 "default": "",
                                 "hint": "留空使用生图主接口 Keys。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     }
@@ -315,6 +327,12 @@
                         "api_keys": ""
                     }
                 ]
+            },
+            "parameter_defaults": {
+                "description": "生成参数默认值（可选 JSON）",
+                "type": "text",
+                "default": "",
+                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
             }
         }
     },
@@ -459,6 +477,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -538,6 +562,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -617,6 +647,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -696,6 +732,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -775,6 +817,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -854,6 +902,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -933,6 +987,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -1012,6 +1072,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -1091,6 +1157,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -1170,6 +1242,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -1249,6 +1327,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -1328,6 +1412,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -1407,6 +1497,12 @@
                                 "type": "string",
                                 "default": "",
                                 "hint": "留空使用视频默认比例。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     }
@@ -1630,8 +1726,8 @@
             "collection_timeout_seconds": {
                 "description": "视频材料收集超时（秒）",
                 "type": "int",
-                "default": 60,
-                "hint": "从发送 /生视频 或其他视频启动前缀开始计时，默认 60 秒，最小 1 秒。发送材料不会重置计时；到时未发送 /生成 会主动提示取消并清空材料。截止前收到 /生成 时会等此前材料读取完成。"
+                "default": 120,
+                "hint": "从启动起共用的总时限，默认120秒；材料、/设置、音频类型选择都不暂停或重置计时。超时主动取消。"
             },
             "custom_prompt_need_prefix": {
                 "description": "【触发】自定义提示词需要 AstrBot 前缀",
@@ -1792,6 +1888,12 @@
                 "condition": {
                     "interface_mode": "custom_endpoint"
                 }
+            },
+            "parameter_defaults": {
+                "description": "生成参数默认值（可选 JSON）",
+                "type": "text",
+                "default": "",
+                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
             }
         }
     },
@@ -2051,8 +2153,8 @@
             "collection_timeout_seconds": {
                 "description": "材料收集超时时间（秒）",
                 "type": "int",
-                "default": 60,
-                "hint": "从开始收集计时，不随材料重置；类型询问也使用此时限。"
+                "default": 120,
+                "hint": "从启动起共用的总时限，默认120秒；材料、/设置、音频类型选择都不暂停或重置计时。超时主动取消。"
             },
             "enable_llm_tool": {
                 "description": "启用 LLM 生音频工具",
@@ -2189,10 +2291,16 @@
                                 "hint": "留空使用生音频主接口 Keys。"
                             },
                             "voice": {
-                                "description": "本路线 OpenAI 音色（可选）",
+                                "description": "本路线音色（可选）",
                                 "type": "string",
                                 "default": "",
-                                "hint": "留空跟随主设置。"
+                                "hint": "留空继承对应接口的音色；填写后按选定协议映射。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -2247,10 +2355,16 @@
                                 "hint": "留空使用生音频主接口 Keys。"
                             },
                             "voice": {
-                                "description": "本路线 OpenAI 音色（可选）",
+                                "description": "本路线音色（可选）",
                                 "type": "string",
                                 "default": "",
-                                "hint": "留空跟随主设置。"
+                                "hint": "留空继承对应接口的音色；填写后按选定协议映射。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -2305,10 +2419,16 @@
                                 "hint": "留空使用生音频主接口 Keys。"
                             },
                             "voice": {
-                                "description": "本路线 OpenAI 音色（可选）",
+                                "description": "本路线音色（可选）",
                                 "type": "string",
                                 "default": "",
-                                "hint": "留空跟随主设置。"
+                                "hint": "留空继承对应接口的音色；填写后按选定协议映射。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -2363,10 +2483,16 @@
                                 "hint": "留空使用生音频主接口 Keys。"
                             },
                             "voice": {
-                                "description": "本路线 OpenAI 音色（可选）",
+                                "description": "本路线音色（可选）",
                                 "type": "string",
                                 "default": "",
-                                "hint": "留空跟随主设置。"
+                                "hint": "留空继承对应接口的音色；填写后按选定协议映射。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -2421,10 +2547,16 @@
                                 "hint": "留空使用生音频主接口 Keys。"
                             },
                             "voice": {
-                                "description": "本路线 OpenAI 音色（可选）",
+                                "description": "本路线音色（可选）",
                                 "type": "string",
                                 "default": "",
-                                "hint": "留空跟随主设置。"
+                                "hint": "留空继承对应接口的音色；填写后按选定协议映射。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -2479,10 +2611,16 @@
                                 "hint": "留空使用生音频主接口 Keys。"
                             },
                             "voice": {
-                                "description": "本路线 OpenAI 音色（可选）",
+                                "description": "本路线音色（可选）",
                                 "type": "string",
                                 "default": "",
-                                "hint": "留空跟随主设置。"
+                                "hint": "留空继承对应接口的音色；填写后按选定协议映射。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     },
@@ -2537,10 +2675,16 @@
                                 "hint": "留空使用生音频主接口 Keys。"
                             },
                             "voice": {
-                                "description": "本路线 OpenAI 音色（可选）",
+                                "description": "本路线音色（可选）",
                                 "type": "string",
                                 "default": "",
-                                "hint": "留空跟随主设置。"
+                                "hint": "留空继承对应接口的音色；填写后按选定协议映射。"
+                            },
+                            "parameter_defaults": {
+                                "description": "生成参数默认值（可选 JSON）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
                         }
                     }
@@ -2669,6 +2813,12 @@
                 "type": "string",
                 "default": "",
                 "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            },
+            "parameter_defaults": {
+                "description": "生成参数默认值（可选 JSON）",
+                "type": "text",
+                "default": "",
+                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
             }
         }
     }

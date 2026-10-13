@@ -6,6 +6,7 @@ import asyncio
 import base64
 import io
 import json
+import math
 import re
 import time
 import uuid
@@ -18,6 +19,7 @@ from astrbot.api import logger
 from PIL import Image
 
 from .api_manager import ApiManager
+from .generation_capabilities import prune_template_parameters, validate_options
 from .video_router import VideoError, VideoOptions, integer, select_route
 
 VIDEO_MODES = (
@@ -276,11 +278,26 @@ def media_sources(value: str, kind: str = "") -> list[str]:
 
 
 def video_params(prompt: str, config: dict, duration: int = 0) -> dict:
-    seconds = integer(duration or config.get("duration", 5), "视频时长", 1)
+    raw_duration = duration or config.get("duration", 5)
+    if config.get("model") in {
+        "wan2.2-animate-move",
+        "wan2.2animate-v4-motion_retargeting",
+    } or config.get("_allow_fractional_duration"):
+        if isinstance(raw_duration, bool):
+            raise VideoError("视频时长必须是有效数字。")
+        try:
+            seconds = float(raw_duration)
+        except (TypeError, ValueError) as exc:
+            raise VideoError("视频时长必须是有效数字。") from exc
+        if not math.isfinite(seconds) or not 1 <= seconds <= 3600:
+            raise VideoError("动作迁移声明时长必须为 1–3600 秒。")
+        seconds = int(seconds) if seconds.is_integer() else seconds
+    else:
+        seconds = integer(raw_duration, "视频时长", 1)
     match = re.search(
         r"(?<![\d.])(-?\d+(?:\.\d+)?)\s*(?:秒|seconds?\b|s\b)", prompt, re.IGNORECASE
     )
-    if not duration and match:
+    if not duration and match and not config.get("_duration_explicit"):
         seconds = integer(match.group(1), "视频时长", 1)
     resolution = str(config.get("resolution", "480p")).lower()
     match = re.search(r"(?<!\w)(\d{3,4})[pP](?!\w)", prompt)
@@ -371,7 +388,11 @@ class VideoApiManager(ApiManager):
                 media_sources(source, kind)
         options = options or VideoOptions(duration=duration)
         overrides = options.overrides()
-        p = video_params(prompt, {**self.config, **overrides}, options.duration)
+        p = video_params(
+            "",
+            {**self.config, **overrides, "_allow_fractional_duration": True},
+            overrides.get("duration", 0),
+        )
         route, effective = select_route(
             self.config, images, audios, videos, p["duration"], overrides, prompt
         )
@@ -381,8 +402,22 @@ class VideoApiManager(ApiManager):
         ):
             raise VideoError("此类生视频需要提示词；请发送文字材料后再 /生成。")
         effective["_has_reference"] = bool(images or audios or videos)
-        effective["_resolution_explicit"] = bool(options.resolution)
-        effective["_ratio_explicit"] = bool(options.aspect_ratio)
+        effective["_resolution_explicit"] = True
+        effective["_ratio_explicit"] = True
+        effective["_duration_explicit"] = True
+        validate_options(
+            "video",
+            effective,
+            {
+                **effective.get("_provided_parameters", {}),
+                **{
+                    key: value
+                    for key, value in overrides.items()
+                    if key != "reference_mode"
+                },
+            },
+            has_reference=effective["_has_reference"],
+        )
         manager = VideoApiManager(effective, self.data_dir.parent)
         # Requests share the session and key pool while per-task configuration
         # remains independent under concurrent image/audio/video calls.
@@ -393,7 +428,7 @@ class VideoApiManager(ApiManager):
             [image_source(i) for i in images],
             audios,
             videos,
-            options.duration,
+            overrides.get("duration", 0),
         )
         return route, manager
 
@@ -639,6 +674,14 @@ class VideoApiManager(ApiManager):
                     watermark=bool(c.get("watermark", False)),
                     generate_audio=bool(c.get("generate_audio", False)),
                 )
+                for name in (
+                    "camera_fixed",
+                    "return_last_frame",
+                    "service_tier",
+                    "draft",
+                ):
+                    if name in c:
+                        body[name] = c[name]
             elif not caps or caps[5] or caps[6] == "E":
                 body.update(
                     resolution={"480p": "480P", "768p": "768P", "1440p": "2K"}.get(
@@ -708,7 +751,7 @@ class VideoApiManager(ApiManager):
                     "input": {
                         "image_url": images[0],
                         "video_url": videos[0],
-                        "watermark": False,
+                        "watermark": bool(c.get("watermark", False)),
                     },
                     "parameters": {"mode": "wan-std", "check_image": True},
                 }
@@ -716,6 +759,8 @@ class VideoApiManager(ApiManager):
                 input_body = {}
                 if prompt.strip():
                     input_body["prompt"] = prompt
+                if c.get("negative_prompt"):
+                    input_body["negative_prompt"] = c["negative_prompt"]
                 reference_mode = c.get("reference_mode", "reference")
                 if reference_mode == "first_last_frame":
                     if len(images) != 2:
@@ -749,6 +794,8 @@ class VideoApiManager(ApiManager):
                 }
                 if seed >= 0:
                     parameters["seed"] = seed
+                if "prompt_extend" in c:
+                    parameters["prompt_extend"] = c["prompt_extend"]
                 body = {"model": model, "input": input_body, "parameters": parameters}
         else:
             try:
@@ -760,22 +807,40 @@ class VideoApiManager(ApiManager):
                 ) from exc
             if not isinstance(template, dict) or not isinstance(extra_headers, dict):
                 raise VideoError("自定义请求模板和请求头必须是 JSON 对象。")
-            body = render_template(
-                template,
-                {
-                    "{model}": model,
-                    "{prompt}": prompt,
-                    "{duration}": p["duration"],
-                    "{resolution}": p["resolution"],
-                    "{ratio}": p["ratio"],
-                    "{size}": p["size"],
-                    "{reference_mode}": c.get("reference_mode", "reference"),
-                    "{images}": images,
-                    "{image}": images[0] if images else "",
-                    "{audios}": audios,
-                    "{videos}": videos,
-                    "{stream}": bool(c.get("use_stream")),
+            template_values = {
+                "{model}": model,
+                "{prompt}": prompt,
+                "{duration}": p["duration"],
+                "{resolution}": p["resolution"],
+                "{ratio}": p["ratio"],
+                "{aspect_ratio}": p["ratio"],
+                "{size}": p["size"],
+                "{reference_mode}": c.get("reference_mode", "reference"),
+                "{images}": images,
+                "{image}": images[0] if images else "",
+                "{audios}": audios,
+                "{videos}": videos,
+                "{stream}": bool(c.get("use_stream")),
+                **{
+                    "{" + key + "}": value
+                    for key, value in c.items()
+                    if key
+                    in (
+                        "seed",
+                        "watermark",
+                        "generate_audio",
+                        "negative_prompt",
+                        "prompt_extend",
+                        "camera_fixed",
+                        "return_last_frame",
+                        "service_tier",
+                        "draft",
+                    )
                 },
+            }
+            body = render_template(
+                prune_template_parameters(template, "video", template_values),
+                template_values,
             )
             headers.update({str(k): str(v) for k, v in extra_headers.items()})
         if (

@@ -69,7 +69,8 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         start, result = await self.receive("/生视频")
         self.assertEqual(result, [])
         self.assertEqual(
-            start.sent[0][0].text, "请发送材料，最后发送“/生成”开始生成视频，60秒超时"
+            start.sent[0][0].text,
+            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成视频，120秒超时（整个过程共用）",
         )
         for text in ("一只猫在雪地中跑", "镜头平稳跟随", "最后看向镜头"):
             event, result = await self.receive(text)
@@ -218,7 +219,7 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
     async def test_sender_group_and_platform_sessions_are_isolated(self):
         scopes = [
             ("99", "group1", "qq:group1"),
-            ("100", "group1", "qq:group1"),
+            ("100", "group3", "qq:group3"),
             ("99", "group2", "qq:group2"),
             ("99", "group1", "telegram:group1"),
         ]
@@ -324,14 +325,14 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
     async def test_default_timeout_notifies_without_another_incoming_message(self):
         await self.receive("/生视频 猫")
         collection = next(iter(self.plugin._video_collections.values()))
-        self.assertEqual(collection["timeout"], 60)
-        self.assertAlmostEqual(collection["deadline"] - monotonic(), 60, delta=1)
+        self.assertEqual(collection["timeout"], 120)
+        self.assertAlmostEqual(collection["deadline"] - monotonic(), 120, delta=1)
         collection["deadline"] = monotonic() - 1
         await asyncio.wait_for(asyncio.shield(collection["timer"]), 1)
         self.assertFalse(self.plugin._video_collections)
         origin, chain = self.plugin.context.send_message.await_args.args
         self.assertEqual(origin, "qq:group")
-        self.assertIn("60秒", chain[0].text)
+        self.assertIn("120秒", chain[0].text)
         self.assertIn("已取消本次生视频", chain[0].text)
         self.plugin.video_mgr.generate.assert_not_awaited()
         _, result = await self.receive("/生成")
@@ -341,7 +342,8 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         self.config["collection_timeout_seconds"] = 1
         start, _ = await self.receive("/做视频")
         self.assertEqual(
-            start.sent[0][0].text, "请发送材料，最后发送“/生成”开始生成视频，1秒超时"
+            start.sent[0][0].text,
+            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成视频，1秒超时（整个过程共用）",
         )
         collection = next(iter(self.plugin._video_collections.values()))
         deadline = collection["deadline"]
@@ -374,7 +376,9 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(old["timer"], return_exceptions=True)
         self.assertTrue(old["timer"].cancelled())
         self.plugin.context.send_message.assert_not_awaited()
-        await self.receive("/生视频 他人的提示词", sender="100")
+        await self.receive(
+            "/生视频 他人的提示词", sender="100", group="other", origin="qq:other"
+        )
         new["deadline"] = monotonic() - 1
         # Explicitly exercise stale ownership after the replacement.
         old["deadline"] = monotonic() - 1
@@ -383,7 +387,7 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         await self.plugin._expire_video_collection(("qq:group", "group", "99"), new)
         self.assertEqual(len(self.plugin._video_collections), 1)
         self.plugin.context.send_message.assert_awaited_once()
-        await self.receive("/生成", sender="100")
+        await self.receive("/生成", sender="100", group="other", origin="qq:other")
         self.assertEqual(
             self.plugin.video_mgr.generate.await_args.args[0], "他人的提示词"
         )
@@ -655,7 +659,7 @@ class VideoConfigUpgradeTest(unittest.TestCase):
                 self.assertEqual(json.loads(snapshot.read_text("utf-8")), before)
                 self.assertFalse(migrate_config(config, Path(tmp)))
             expected = copy.deepcopy(before)
-            expected["_config_layout_version"] = 4
+            expected["_config_layout_version"] = 5
             if help_text == LEGACY_COLLECTION_HELP_TEXT:
                 expected["global_settings"]["help_text"] = schema_defaults(schema)[
                     "global_settings"
@@ -666,7 +670,7 @@ class VideoConfigUpgradeTest(unittest.TestCase):
         config = {"_config_layout_version": 2, "video_settings": {}}
         with tempfile.TemporaryDirectory() as tmp:
             migrate_config(config, Path(tmp))
-        self.assertEqual(config["video_settings"]["collection_timeout_seconds"], 60)
+        self.assertEqual(config["video_settings"]["collection_timeout_seconds"], 120)
 
     def test_only_old_default_help_is_updated_custom_help_is_preserved(self):
         schema = json.loads(

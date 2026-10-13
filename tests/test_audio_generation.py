@@ -317,7 +317,8 @@ class AudioCollectionTest(unittest.IsolatedAsyncioTestCase):
     async def test_text_only_merges_verbatim_and_sends_one_summary_and_only_audio(self):
         start, _ = await self.receive("/生音频 朗读")
         self.assertEqual(
-            start.sent[0][0].text, "请发送材料，最后发送“/生成”开始生成音频，60秒超时"
+            start.sent[0][0].text,
+            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成音频，120秒超时（整个过程共用）",
         )
         for text in ["第一句话。", "第二句话！"]:
             event, result = await self.receive(text)
@@ -475,7 +476,7 @@ class AudioHTTPTest(unittest.IsolatedAsyncioTestCase):
         _, first = manager.prepare(options, [])
         self.assertEqual(await first.get_key(), "route-key-a")
         _, second = manager.prepare(options, [])
-        self.assertIs(first, second)
+        self.assertIsNot(first, second)
         self.assertEqual(await second.get_key(), "route-key-b")
 
     async def test_sync_hex_base64_pcm_and_custom_audio_decoding(self):

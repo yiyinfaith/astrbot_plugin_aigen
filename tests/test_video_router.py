@@ -3,8 +3,14 @@ import json
 import unittest
 from pathlib import Path
 
+from test_video_plugin import router
+
 from config_manager import schema_defaults
-from video_router import VideoError, VideoOptions, parse_video_command, select_route
+
+VideoError = router.VideoError
+VideoOptions = router.VideoOptions
+parse_video_command = router.parse_video_command
+select_route = router.select_route
 
 
 class RoutingTest(unittest.TestCase):

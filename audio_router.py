@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .video_router import VideoError
 
@@ -42,6 +42,7 @@ class AudioOptions:
     prompt: str = ""
     prompt_segments: int = 0
     route: str = ""
+    parameters: dict = field(default_factory=dict)
 
 
 def parse_audio_materials(fragments: list[str], mode: str) -> AudioOptions:
@@ -67,7 +68,11 @@ def parse_audio_materials(fragments: list[str], mode: str) -> AudioOptions:
 
 
 def select_audio_route(
-    config: dict, options: AudioOptions, audios: list
+    config: dict,
+    options: AudioOptions,
+    audios: list,
+    *,
+    validate_materials: bool = True,
 ) -> tuple[str, dict]:
     """Validate materials, then choose one configured audio route.
 
@@ -92,7 +97,9 @@ def select_audio_route(
     if route not in AUDIO_ROUTES:
         raise VideoError("不支持的音频类型。")
     count = len(audios)
-    if route == "voice_conversion":
+    if not validate_materials:
+        pass
+    elif route == "voice_conversion":
         if count != 2 or options.prompt:
             raise VideoError(
                 "音色转换需要恰好两段音频：先原语音，后目标音色；不输入正文文字。"
@@ -114,7 +121,9 @@ def select_audio_route(
             raise VideoError("音频编辑和语音编辑需要恰好一段原始音频。")
         if count > 3:
             raise VideoError(f"此类生音频最多接收 3 段参考音频，当前 {count} 段。")
-    effective = dict(config)
+    from .generation_capabilities import AUDIO, parameter_defaults, supplied
+
+    effective = {**config, **parameter_defaults(config)}
     if config.get("auto_route", True):
         rules = config.get("routes", [])
         matches = [
@@ -132,6 +141,33 @@ def select_audio_route(
         for key in ("interface_mode", "base_url", "api_keys", "voice"):
             if rule.get(key) and rule[key] != "inherit":
                 effective[key] = rule[key]
+        effective.update(supplied({key: rule[key] for key in AUDIO if key in rule}))
+        effective.update(parameter_defaults(rule))
+    from .generation_capabilities import validate_options
+
+    defaults = {
+        **parameter_defaults(config),
+        **(parameter_defaults(rule) if config.get("auto_route", True) else {}),
+    }
+    effective.update(
+        validate_options(
+            "audio",
+            effective,
+            {**defaults, **options.parameters},
+            has_reference=bool(audios),
+        )
+    )
+    if (
+        "voice" in options.parameters
+        or "voice" in defaults
+        or (config.get("auto_route", True) and rule.get("voice"))
+    ):
+        voice_field = {
+            "minimax_speech": "minimax_voice",
+            "gemini_official": "gemini_voice",
+            "dashscope": "dashscope_voice",
+        }.get(effective.get("interface_mode"), "voice")
+        effective[voice_field] = effective["voice"]
     effective["audio_route"] = route
     effective["audio_intent"] = options.mode
     return route, effective

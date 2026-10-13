@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+LEGACY_V120_HELP_TEXT = "🎨 图片：/生图 <提示词>，可附带或引用图片。\n🎬 视频：先 /生视频，然后依次发送文字、图片、QQ语音、视频或媒体文件；多段文字按顺序合并，最后 /生成。收集时不逐条回复；/取消 可清空重来。启动后请在配置的收集时限内发送 /生成，默认60秒；超时会提示取消。\n首帧、尾帧：关键词 + 提示词 + 一图。首尾帧：关键词 + 提示词 + 两图。普通生视频1–9图均为参考图，不自动选择帧模式。音频最多3段。\n动作迁移：关键词 + 一图一视频，不发提示词。音频同步：关键词 + 一图一音频，不发提示词。其他多媒体组合需提示词和管理员配置模型。\n可用 --duration 1 --resolution 480p --ratio 16:9。\n🎵 音频：/生音频 朗读 或 /生音频 提示词，第二个参数可选音色克隆、参考音频生成、音频编辑、语音编辑、音色转换。随后发送文字、QQ语音或音频文件，最后 /生成；多段文字合并。未指定类型且有音频时，回复类型名称后生成。/取消 可取消，默认60秒超时。"
+
 LEGACY_HELP_TEXT = "🎨 图片：/生图 <提示词>、/画图 <提示词>，可附带或引用图片、@他人取头像。预设关键词按配置触发。\n🎬 视频：/生视频 <提示词>，根据图片/音频/视频自动选择模型，可直接发送或引用媒体、@他人取头像。\n参数：--duration 1 --resolution 480p --ratio 16:9；--frames 表示明确使用两张图作为首尾帧。图片、音频、视频请直接发送或引用，不要填写媒体 URL。\n例如：/生视频 一只猫在雪地奔跑 --duration 1\n模型和所需媒体以插件配置为准；任何人都可使用，不设次数限制。"
 
 LEGACY_COLLECTION_HELP_TEXT = "🎨 图片：/生图 <提示词>，可附带或引用图片。\n🎬 视频：先 /生视频，然后依次发送文字、图片、QQ语音、视频或媒体文件；多段文字按顺序合并，最后 /生成。收集时不逐条回复；/取消 可清空重来。30分钟未发材料会过期。\n首帧、尾帧：关键词 + 提示词 + 一图。首尾帧：关键词 + 提示词 + 两图。普通生视频1–9图均为参考图，不自动选择帧模式。音频最多3段。\n动作迁移：关键词 + 一图一视频，不发提示词。音频同步：关键词 + 一图一音频，不发提示词。其他多媒体组合需提示词和管理员配置模型。\n可用 --duration 1 --resolution 480p --ratio 16:9。"
@@ -226,14 +228,14 @@ def migrate_generation_settings(config: Any, backup_dir: Path, *, backup=True) -
     Raises:
         OSError: If backing up or saving fails.
     """
-    if config.get("_config_layout_version", 0) >= 4:
+    if config.get("_config_layout_version", 0) >= 5:
         return False
     original = copy.deepcopy(dict(config))
     upgraded = copy.deepcopy(original)
     if backup:
         backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        snapshot = backup_dir / f"config_before_v1.2.0_{stamp}.json"
+        snapshot = backup_dir / f"config_before_v1.3.0_{stamp}.json"
         snapshot.write_text(
             json.dumps(original, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -246,7 +248,15 @@ def migrate_generation_settings(config: Any, backup_dir: Path, *, backup=True) -
         image.setdefault(field, copy.deepcopy(defaults["image_settings"][field]))
     upgraded.setdefault("audio_settings", copy.deepcopy(defaults["audio_settings"]))
     upgraded.setdefault("video_settings", {}).pop("generating_msg_template", None)
-    upgraded["_config_layout_version"] = 4
+    for group in ("video_settings", "audio_settings"):
+        settings = upgraded[group]
+        if settings.get("collection_timeout_seconds", 60) == 60:
+            settings["collection_timeout_seconds"] = 120
+    if upgraded.get("global_settings", {}).get("help_text") == LEGACY_V120_HELP_TEXT:
+        upgraded["global_settings"]["help_text"] = defaults["global_settings"][
+            "help_text"
+        ]
+    upgraded["_config_layout_version"] = 5
     config.clear()
     config.update(upgraded)
     try:

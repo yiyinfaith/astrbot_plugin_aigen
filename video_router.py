@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 
@@ -44,6 +45,8 @@ ROUTES = {
 
 
 def integer(value, label: str, minimum: int, maximum: int | None = None) -> int:
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        value = int(value)
     if isinstance(value, bool) or not re.fullmatch(r"-?\d+", str(value)):
         raise VideoError(f"{label}必须是整数。")
     result = int(value)
@@ -59,13 +62,14 @@ class VideoOptions:
     images: list[str] = field(default_factory=list)
     audios: list[str] = field(default_factory=list)
     videos: list[str] = field(default_factory=list)
-    duration: int = 0
+    duration: int | float = 0
     resolution: str = ""
     aspect_ratio: str = ""
     reference_mode: str = "auto"
     seed: int = -2
-    generate_audio: str = "auto"
+    generate_audio: str | bool | None = "auto"
     prompt_segments: int = 0
+    parameters: dict = field(default_factory=dict)
 
     def overrides(self) -> dict:
         values = {}
@@ -79,11 +83,25 @@ class VideoOptions:
             values["reference_mode"] = self.reference_mode
         if self.seed != -2:
             values["seed"] = self.seed
-        if self.generate_audio != "auto":
-            if self.generate_audio not in {"true", "false"}:
+        if self.generate_audio not in (None, "auto"):
+            if isinstance(self.generate_audio, bool):
+                values["generate_audio"] = self.generate_audio
+            elif self.generate_audio not in {"true", "false"}:
                 raise VideoError("generate_audio 只能是 auto、true 或 false。")
-            values["generate_audio"] = self.generate_audio == "true"
-        integer(self.duration, "时长", 0)
+            else:
+                values["generate_audio"] = self.generate_audio == "true"
+        if (
+            isinstance(self.duration, bool)
+            or not isinstance(self.duration, (int, float))
+            or not math.isfinite(self.duration)
+            or self.duration < 0
+        ):
+            raise VideoError("时长必须是非负数字；仅动作迁移支持小数秒。")
+        if (
+            self.reference_mode != "motion_transfer"
+            and int(self.duration) != self.duration
+        ):
+            raise VideoError("此类视频时长必须是整数；仅动作迁移支持小数秒。")
         integer(self.seed, "随机种子", -2, 999999999999999)
         if self.reference_mode not in {
             "auto",
@@ -97,6 +115,7 @@ class VideoOptions:
             raise VideoError(
                 "图片用途必须是 auto、reference、first_frame、last_frame、first_last_frame、motion_transfer 或 audio_sync。"
             )
+        values.update(self.parameters)
         return values
 
 
@@ -222,6 +241,8 @@ def select_route(
     seconds: int,
     overrides: dict | None = None,
     prompt: str = "",
+    *,
+    validate_materials: bool = True,
 ) -> tuple[str, dict]:
     overrides = overrides or {}
     reference = overrides.get("reference_mode", "auto")
@@ -232,17 +253,17 @@ def select_route(
     if reference in {"motion_transfer", "audio_sync"}:
         label = ROUTES[reference][0]
         required = (1, 0, 1) if reference == "motion_transfer" else (1, 1, 0)
-        if (len(images), len(audios), len(videos)) != required:
+        if validate_materials and (len(images), len(audios), len(videos)) != required:
             raise VideoError(
                 f"{label}需要恰好 {required[0]} 张图片、{required[1]} 段音频、{required[2]} 段视频；"
                 f"当前图片 {len(images)}、音频 {len(audios)}、视频 {len(videos)}。"
             )
-        if str(prompt or "").strip():
+        if validate_materials and str(prompt or "").strip():
             raise VideoError(f"{label}不支持输入提示词，请只发送路由关键词和所需媒体。")
         route = reference
     elif reference in {"first_frame", "last_frame", "first_last_frame"}:
         count = 2 if reference == "first_last_frame" else 1
-        if len(images) != count or audios or videos:
+        if validate_materials and (len(images) != count or audios or videos):
             raise VideoError(
                 f"{reference} 需要恰好 {count} 张图片，不能混用音频或视频；当前图片 {len(images)}、音频 {len(audios)}、视频 {len(videos)}。"
             )
@@ -262,14 +283,17 @@ def select_route(
     else:
         route = "image_to_video" if images else "text_to_video"
     if (
-        not videos
+        validate_materials
+        and not videos
         and reference not in {"motion_transfer", "audio_sync"}
         and (len(images) > 9 or len(audios) > 3)
     ):
         raise VideoError(
             f"此类生视频最多接收 9 张图片、3 段音频；当前图片 {len(images)}、音频 {len(audios)}。未提交生成任务。"
         )
-    effective = dict(config)
+    from .generation_capabilities import VIDEO, parameter_defaults, supplied
+
+    effective = {**config, **parameter_defaults(config)}
     if config.get("auto_route", True):
         label, default_model, default_long = ROUTES[route]
         rules = config.get("routes", {})
@@ -289,10 +313,21 @@ def select_route(
         short_model = str(rule.get("model", default_model) or "").strip()
         configured_long_model = rule.get("long_model", default_long)
         long_model = str(configured_long_model or "").strip()
+        effective["_long_model"] = long_model
+        effective["_long_interface_mode"] = rule.get("long_interface_mode", "inherit")
         # A long interface belongs to the concrete long-model selection.  If
         # no long model is configured, keep using the short model and its
         # interface even when the requested duration exceeds ten seconds.
-        is_long_model = seconds > 10 and bool(long_model)
+        route_defaults = parameter_defaults(rule)
+        requested_seconds = overrides.get(
+            "duration",
+            route_defaults.get(
+                "duration",
+                rule.get("duration")
+                or parameter_defaults(config).get("duration", seconds),
+            ),
+        )
+        is_long_model = requested_seconds > 10 and bool(long_model)
         model = long_model if is_long_model else short_model
         if not model:
             raise VideoError(
@@ -312,6 +347,12 @@ def select_route(
             )
             if value:
                 effective[key] = value
+        effective.update(supplied({key: rule[key] for key in VIDEO if key in rule}))
+        effective.update(route_defaults)
+        effective["_provided_parameters"] = {
+            **parameter_defaults(config),
+            **route_defaults,
+        }
     effective.update(overrides)
     effective["reference_mode"] = reference
     return route, effective

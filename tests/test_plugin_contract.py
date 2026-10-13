@@ -65,7 +65,7 @@ class PluginContractTest(unittest.TestCase):
         main = (ROOT / "main.py").read_text(encoding="utf-8")
         api = (ROOT / "api_manager.py").read_text(encoding="utf-8")
         schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
-        self.assertEqual(main.count("@filter.llm_tool"), 3)
+        self.assertEqual(main.count("@filter.llm_tool"), 4)
         self.assertIn('@filter.llm_tool(name="generate_image")', main)
         self.assertIn("async def generate_image(", main)
         for field in (
@@ -75,13 +75,13 @@ class PluginContractTest(unittest.TestCase):
             "quality: str =",
             "background: str =",
             "output_format: str =",
-            "output_compression: int =",
+            "output_compression: int | None =",
             "moderation: str =",
             "style: str =",
-            "n: int =",
-            "max_num_results: int =",
+            "n: int | None =",
+            "max_num_results: int | None =",
             "input_fidelity: str =",
-            "partial_images: int =",
+            "partial_images: int | None =",
             "action: str =",
         ):
             self.assertIn(field, main)
