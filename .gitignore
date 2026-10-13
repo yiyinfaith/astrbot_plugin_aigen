@@ -24,6 +24,7 @@ preset_ref_images/
 fonts/
 config_backups/
 video/
+audio/
 .env
 .env.*
 *.mp4

@@ -1,6 +1,6 @@
-from pathlib import Path
 import json
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -55,14 +55,17 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn("image_resolution", image_schema)
         self.assertEqual(len(image_schema["prompt_list"]["default"]), 44)
         visible = [name for name, node in schema.items() if not node.get("invisible")]
-        self.assertEqual(visible, ["global_settings", "image_settings", "video_settings"])
+        self.assertEqual(
+            visible,
+            ["global_settings", "image_settings", "video_settings", "audio_settings"],
+        )
         self.assertNotIn("仅generic模式", json.dumps(schema, ensure_ascii=False))
 
     def test_single_tool_and_unified_generation_path_are_present(self):
         main = (ROOT / "main.py").read_text(encoding="utf-8")
         api = (ROOT / "api_manager.py").read_text(encoding="utf-8")
         schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
-        self.assertEqual(main.count("@filter.llm_tool"), 2)
+        self.assertEqual(main.count("@filter.llm_tool"), 3)
         self.assertIn('@filter.llm_tool(name="generate_image")', main)
         self.assertIn("async def generate_image(", main)
         for field in (

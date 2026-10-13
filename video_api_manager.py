@@ -862,6 +862,8 @@ class VideoApiManager(ApiManager):
             else "Bearer " + key
         )
         request_headers = {**headers, "Authorization": authorization}
+        if self.config.get("interface_mode") == "gemini_official":
+            request_headers = {**headers, "x-goog-api-key": key}
         timeout = aiohttp.ClientTimeout(
             total=max(1, int(self.config.get("timeout", 120)))
         )

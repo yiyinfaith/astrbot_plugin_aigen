@@ -655,7 +655,7 @@ class VideoConfigUpgradeTest(unittest.TestCase):
                 self.assertEqual(json.loads(snapshot.read_text("utf-8")), before)
                 self.assertFalse(migrate_config(config, Path(tmp)))
             expected = copy.deepcopy(before)
-            expected["_config_layout_version"] = 3
+            expected["_config_layout_version"] = 4
             if help_text == LEGACY_COLLECTION_HELP_TEXT:
                 expected["global_settings"]["help_text"] = schema_defaults(schema)[
                     "global_settings"

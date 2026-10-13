@@ -2,7 +2,7 @@
     "global_settings": {
         "description": "🌐 全局设置",
         "type": "object",
-        "hint": "图片和视频共同使用：网络、工具冷却、显示和帮助。",
+        "hint": "图片、视频和音频共同使用：网络、工具冷却、显示和帮助。",
         "items": {
             "show_model_info": {
                 "description": "【显示】显示模型信息",
@@ -45,7 +45,7 @@
                 "type": "text",
                 "editor_mode": true,
                 "editor_language": "markdown",
-                "default": "🎨 图片：/生图 <提示词>，可附带或引用图片。\n🎬 视频：先 /生视频，然后依次发送文字、图片、QQ语音、视频或媒体文件；多段文字按顺序合并，最后 /生成。收集时不逐条回复；/取消 可清空重来。启动后请在配置的收集时限内发送 /生成，默认60秒；超时会提示取消。\n首帧、尾帧：关键词 + 提示词 + 一图。首尾帧：关键词 + 提示词 + 两图。普通生视频1–9图均为参考图，不自动选择帧模式。音频最多3段。\n动作迁移：关键词 + 一图一视频，不发提示词。音频同步：关键词 + 一图一音频，不发提示词。其他多媒体组合需提示词和管理员配置模型。\n可用 --duration 1 --resolution 480p --ratio 16:9。"
+                "default": "🎨 图片：/生图 <提示词>，可附带或引用图片。\n🎬 视频：先 /生视频，然后依次发送文字、图片、QQ语音、视频或媒体文件；多段文字按顺序合并，最后 /生成。收集时不逐条回复；/取消 可清空重来。启动后请在配置的收集时限内发送 /生成，默认60秒；超时会提示取消。\n首帧、尾帧：关键词 + 提示词 + 一图。首尾帧：关键词 + 提示词 + 两图。普通生视频1–9图均为参考图，不自动选择帧模式。音频最多3段。\n动作迁移：关键词 + 一图一视频，不发提示词。音频同步：关键词 + 一图一音频，不发提示词。其他多媒体组合需提示词和管理员配置模型。\n可用 --duration 1 --resolution 480p --ratio 16:9。\n🎵 音频：/生音频 朗读 或 /生音频 提示词，第二个参数可选音色克隆、参考音频生成、音频编辑、语音编辑、音色转换。随后发送文字、QQ语音或音频文件，最后 /生成；多段文字合并。未指定类型且有音频时，回复类型名称后生成。/取消 可取消，默认60秒超时。"
             },
             "llm_cooldown_seconds": {
                 "description": "【LLM】工具调用冷却时间(秒)",
@@ -208,6 +208,113 @@
                 "type": "int",
                 "hint": "当生成的图片下载失败时，自动重试的次数。",
                 "default": 3
+            },
+            "auto_route": {
+                "description": "启用自动路由",
+                "type": "bool",
+                "default": true,
+                "hint": "根据是否输入图片选择文生图或图生图。"
+            },
+            "routes": {
+                "description": "自动路由模型",
+                "type": "template_list",
+                "condition": {
+                    "auto_route": true
+                },
+                "templates": {
+                    "text_to_image": {
+                        "name": "文生图",
+                        "description": "文生图",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用默认生图模型。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "留空或 inherit 跟随主接口。",
+                                "options": [
+                                    "inherit",
+                                    "openai_image",
+                                    "openai_chat",
+                                    "openai_response",
+                                    "gemini_official",
+                                    "custom_endpoint"
+                                ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用生图主接口。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "留空使用生图主接口 Keys。"
+                            }
+                        }
+                    },
+                    "image_to_image": {
+                        "name": "图生图",
+                        "description": "图生图",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用默认生图模型。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "inherit",
+                                "hint": "留空或 inherit 跟随主接口。",
+                                "options": [
+                                    "inherit",
+                                    "openai_image",
+                                    "openai_chat",
+                                    "openai_response",
+                                    "gemini_official",
+                                    "custom_endpoint"
+                                ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用生图主接口。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "留空使用生图主接口 Keys。"
+                            }
+                        }
+                    }
+                },
+                "default": [
+                    {
+                        "__template_key": "text_to_image",
+                        "model": "",
+                        "interface_mode": "inherit",
+                        "base_url": "",
+                        "api_keys": ""
+                    },
+                    {
+                        "__template_key": "image_to_image",
+                        "model": "",
+                        "interface_mode": "inherit",
+                        "base_url": "",
+                        "api_keys": ""
+                    }
+                ]
             }
         }
     },
@@ -1550,12 +1657,6 @@
                 "default": [],
                 "hint": "格式：关键词:完整提示词。与生图预设分开保存；预设优先引用图 > 发送图 > @头像 > 发送者头像，仅取一图；自定义提示词支持多图。"
             },
-            "generating_msg_template": {
-                "description": "视频生成进度文案",
-                "type": "string",
-                "default": "🎬 收到请求，正在生成视频 [{preset}]...",
-                "hint": "兼容旧配置保留；视频指令统一发送“共收到x图片，x音频，x视频，x段提示词，生成中”。多段提示词仍合并为一段提交。"
-            },
             "poll_interval": {
                 "description": "任务查询间隔（秒）",
                 "type": "int",
@@ -1874,5 +1975,701 @@
         "type": "list",
         "default": null,
         "invisible": true
+    },
+    "audio_settings": {
+        "description": "🎵 生音频设置",
+        "type": "object",
+        "hint": "TTS、音色克隆、TTA、音频条件生成、音频编辑、音色转换、语音编辑。",
+        "items": {
+            "enabled": {
+                "description": "启用生音频",
+                "type": "bool",
+                "default": true
+            },
+            "interface_mode": {
+                "description": "接口模式",
+                "type": "string",
+                "default": "minimax",
+                "hint": "所有方向可单独指定格式；不同接口有不同媒体能力。",
+                "options": [
+                    "minimax",
+                    "openai_speech",
+                    "openai_chat",
+                    "minimax_speech",
+                    "gemini_official",
+                    "dashscope",
+                    "autodl_native",
+                    "custom_endpoint"
+                ],
+                "labels": [
+                    "MiniMax 工作流 V2（New API）",
+                    "OpenAI Speech",
+                    "OpenAI Chat 音频输出",
+                    "MiniMax 官方 TTS",
+                    "Gemini 官方音频",
+                    "DashScope Qwen TTS",
+                    "AutoDL 原生 IndexTTS-2",
+                    "自定义音频接口"
+                ]
+            },
+            "base_url": {
+                "description": "接口地址",
+                "type": "string",
+                "default": "",
+                "hint": "填写基础 URL；留空跟随生视频接口地址。"
+            },
+            "api_keys": {
+                "description": "API Keys",
+                "type": "text",
+                "default": "",
+                "hint": "支持按行填写多个 Key；留空跟随生视频 Keys。"
+            },
+            "model": {
+                "description": "默认音频模型（关闭自动路由时使用）",
+                "type": "string",
+                "default": ""
+            },
+            "auto_route": {
+                "description": "启用自动路由",
+                "type": "bool",
+                "default": true,
+                "hint": "朗读对应 TTS，提示词对应 TTA；带音频时按所选类型路由。"
+            },
+            "extra_prefix": {
+                "description": "自定义前缀",
+                "type": "list",
+                "default": [
+                    "生音频"
+                ],
+                "hint": "可填多个，例如 生音频、配音；可带 /，参数之间用空格。/生音频 始终可用。"
+            },
+            "custom_prompt_need_prefix": {
+                "description": "自定义前缀需要 AstrBot 前缀",
+                "type": "bool",
+                "default": true
+            },
+            "collection_timeout_seconds": {
+                "description": "材料收集超时时间（秒）",
+                "type": "int",
+                "default": 60,
+                "hint": "从开始收集计时，不随材料重置；类型询问也使用此时限。"
+            },
+            "enable_llm_tool": {
+                "description": "启用 LLM 生音频工具",
+                "type": "bool",
+                "default": true
+            },
+            "voice": {
+                "description": "OpenAI 音色",
+                "type": "string",
+                "default": "alloy"
+            },
+            "minimax_voice": {
+                "description": "MiniMax 官方 voice_id",
+                "type": "string",
+                "default": "male-qn-qingse"
+            },
+            "gemini_voice": {
+                "description": "Gemini 音色",
+                "type": "string",
+                "default": "Kore"
+            },
+            "dashscope_voice": {
+                "description": "DashScope 音色",
+                "type": "string",
+                "default": "Cherry"
+            },
+            "response_format": {
+                "description": "音频输出格式",
+                "type": "string",
+                "default": "wav",
+                "hint": "优先 WAV；部分接口输出格式由上游决定，发送语音前转为 WAV。",
+                "options": [
+                    "wav",
+                    "mp3",
+                    "opus",
+                    "aac",
+                    "flac",
+                    "pcm"
+                ]
+            },
+            "speed": {
+                "description": "语速",
+                "type": "float",
+                "default": 1.0,
+                "hint": "OpenAI Speech 0.25–4，MiniMax 官方 0.5–2；工作流接口不额外发送不支持的语速字段。"
+            },
+            "poll_interval": {
+                "description": "任务查询间隔（秒）",
+                "type": "float",
+                "default": 5.0
+            },
+            "poll_timeout": {
+                "description": "生成等待超时（秒）",
+                "type": "int",
+                "default": 900
+            },
+            "result_audio_download_timeout": {
+                "description": "音频下载超时（秒）",
+                "type": "int",
+                "default": 300
+            },
+            "audio_delivery_retries": {
+                "description": "音频发送尝试次数",
+                "type": "int",
+                "default": 2,
+                "hint": "仅重试发送已生成的产物，不重新提交生成请求。"
+            },
+            "max_audio_size_mb": {
+                "description": "音频下载大小上限（MB）",
+                "type": "int",
+                "default": 50
+            },
+            "cache_hours": {
+                "description": "音频缓存保留时间（小时）",
+                "type": "int",
+                "default": 24
+            },
+            "routes": {
+                "description": "自动路由模型",
+                "type": "template_list",
+                "condition": {
+                    "auto_route": true
+                },
+                "hint": "仅按选定意图和材料路由，不用文字内容猜测 TTS/TTA；编辑和转换类型可在启动时选，也可在 /生成 后选。",
+                "templates": {
+                    "text_to_audio": {
+                        "name": "提示词生音频（TTA）",
+                        "description": "提示词生音频（TTA）",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空表示未配置，此方向不会提交任务。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "minimax",
+                                "hint": "本路线可独立选择接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "minimax",
+                                    "openai_speech",
+                                    "openai_chat",
+                                    "minimax_speech",
+                                    "gemini_official",
+                                    "dashscope",
+                                    "autodl_native",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随主接口",
+                                    "MiniMax 工作流 V2（New API）",
+                                    "OpenAI Speech",
+                                    "OpenAI Chat 音频输出",
+                                    "MiniMax 官方 TTS",
+                                    "Gemini 官方音频",
+                                    "DashScope Qwen TTS",
+                                    "AutoDL 原生 IndexTTS-2",
+                                    "自定义音频接口"
+                                ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用生音频主接口。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "留空使用生音频主接口 Keys。"
+                            },
+                            "voice": {
+                                "description": "本路线 OpenAI 音色（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随主设置。"
+                            }
+                        }
+                    },
+                    "text_to_speech": {
+                        "name": "文字生音频（TTS）",
+                        "description": "文字生音频（TTS）",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空表示未配置，此方向不会提交任务。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "minimax",
+                                "hint": "本路线可独立选择接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "minimax",
+                                    "openai_speech",
+                                    "openai_chat",
+                                    "minimax_speech",
+                                    "gemini_official",
+                                    "dashscope",
+                                    "autodl_native",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随主接口",
+                                    "MiniMax 工作流 V2（New API）",
+                                    "OpenAI Speech",
+                                    "OpenAI Chat 音频输出",
+                                    "MiniMax 官方 TTS",
+                                    "Gemini 官方音频",
+                                    "DashScope Qwen TTS",
+                                    "AutoDL 原生 IndexTTS-2",
+                                    "自定义音频接口"
+                                ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用生音频主接口。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "留空使用生音频主接口 Keys。"
+                            },
+                            "voice": {
+                                "description": "本路线 OpenAI 音色（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随主设置。"
+                            }
+                        }
+                    },
+                    "reference_to_speech": {
+                        "name": "文字＋参考音频生音频（音色克隆）",
+                        "description": "文字＋参考音频生音频（音色克隆）",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID",
+                                "type": "string",
+                                "default": "IndexTTS-2",
+                                "hint": "留空表示未配置，此方向不会提交任务。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "minimax",
+                                "hint": "本路线可独立选择接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "minimax",
+                                    "openai_speech",
+                                    "openai_chat",
+                                    "minimax_speech",
+                                    "gemini_official",
+                                    "dashscope",
+                                    "autodl_native",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随主接口",
+                                    "MiniMax 工作流 V2（New API）",
+                                    "OpenAI Speech",
+                                    "OpenAI Chat 音频输出",
+                                    "MiniMax 官方 TTS",
+                                    "Gemini 官方音频",
+                                    "DashScope Qwen TTS",
+                                    "AutoDL 原生 IndexTTS-2",
+                                    "自定义音频接口"
+                                ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用生音频主接口。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "留空使用生音频主接口 Keys。"
+                            },
+                            "voice": {
+                                "description": "本路线 OpenAI 音色（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随主设置。"
+                            }
+                        }
+                    },
+                    "reference_to_audio": {
+                        "name": "提示词＋参考音频生音频（音频条件 TTA）",
+                        "description": "提示词＋参考音频生音频（音频条件 TTA）",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空表示未配置，此方向不会提交任务。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "minimax",
+                                "hint": "本路线可独立选择接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "minimax",
+                                    "openai_speech",
+                                    "openai_chat",
+                                    "minimax_speech",
+                                    "gemini_official",
+                                    "dashscope",
+                                    "autodl_native",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随主接口",
+                                    "MiniMax 工作流 V2（New API）",
+                                    "OpenAI Speech",
+                                    "OpenAI Chat 音频输出",
+                                    "MiniMax 官方 TTS",
+                                    "Gemini 官方音频",
+                                    "DashScope Qwen TTS",
+                                    "AutoDL 原生 IndexTTS-2",
+                                    "自定义音频接口"
+                                ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用生音频主接口。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "留空使用生音频主接口 Keys。"
+                            },
+                            "voice": {
+                                "description": "本路线 OpenAI 音色（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随主设置。"
+                            }
+                        }
+                    },
+                    "audio_editing": {
+                        "name": "音频编辑",
+                        "description": "音频编辑",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空表示未配置，此方向不会提交任务。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "minimax",
+                                "hint": "本路线可独立选择接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "minimax",
+                                    "openai_speech",
+                                    "openai_chat",
+                                    "minimax_speech",
+                                    "gemini_official",
+                                    "dashscope",
+                                    "autodl_native",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随主接口",
+                                    "MiniMax 工作流 V2（New API）",
+                                    "OpenAI Speech",
+                                    "OpenAI Chat 音频输出",
+                                    "MiniMax 官方 TTS",
+                                    "Gemini 官方音频",
+                                    "DashScope Qwen TTS",
+                                    "AutoDL 原生 IndexTTS-2",
+                                    "自定义音频接口"
+                                ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用生音频主接口。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "留空使用生音频主接口 Keys。"
+                            },
+                            "voice": {
+                                "description": "本路线 OpenAI 音色（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随主设置。"
+                            }
+                        }
+                    },
+                    "voice_conversion": {
+                        "name": "音色转换",
+                        "description": "音色转换",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空表示未配置，此方向不会提交任务。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "minimax",
+                                "hint": "本路线可独立选择接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "minimax",
+                                    "openai_speech",
+                                    "openai_chat",
+                                    "minimax_speech",
+                                    "gemini_official",
+                                    "dashscope",
+                                    "autodl_native",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随主接口",
+                                    "MiniMax 工作流 V2（New API）",
+                                    "OpenAI Speech",
+                                    "OpenAI Chat 音频输出",
+                                    "MiniMax 官方 TTS",
+                                    "Gemini 官方音频",
+                                    "DashScope Qwen TTS",
+                                    "AutoDL 原生 IndexTTS-2",
+                                    "自定义音频接口"
+                                ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用生音频主接口。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "留空使用生音频主接口 Keys。"
+                            },
+                            "voice": {
+                                "description": "本路线 OpenAI 音色（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随主设置。"
+                            }
+                        }
+                    },
+                    "speech_editing": {
+                        "name": "语音编辑",
+                        "description": "语音编辑",
+                        "items": {
+                            "model": {
+                                "description": "模型 ID",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空表示未配置，此方向不会提交任务。"
+                            },
+                            "interface_mode": {
+                                "description": "接口格式",
+                                "type": "string",
+                                "default": "minimax",
+                                "hint": "本路线可独立选择接口格式。",
+                                "options": [
+                                    "inherit",
+                                    "minimax",
+                                    "openai_speech",
+                                    "openai_chat",
+                                    "minimax_speech",
+                                    "gemini_official",
+                                    "dashscope",
+                                    "autodl_native",
+                                    "custom_endpoint"
+                                ],
+                                "labels": [
+                                    "跟随主接口",
+                                    "MiniMax 工作流 V2（New API）",
+                                    "OpenAI Speech",
+                                    "OpenAI Chat 音频输出",
+                                    "MiniMax 官方 TTS",
+                                    "Gemini 官方音频",
+                                    "DashScope Qwen TTS",
+                                    "AutoDL 原生 IndexTTS-2",
+                                    "自定义音频接口"
+                                ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空使用生音频主接口。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "text",
+                                "default": "",
+                                "hint": "留空使用生音频主接口 Keys。"
+                            },
+                            "voice": {
+                                "description": "本路线 OpenAI 音色（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随主设置。"
+                            }
+                        }
+                    }
+                },
+                "default": [
+                    {
+                        "__template_key": "text_to_audio",
+                        "model": "",
+                        "interface_mode": "minimax",
+                        "base_url": "",
+                        "api_keys": "",
+                        "voice": ""
+                    },
+                    {
+                        "__template_key": "text_to_speech",
+                        "model": "",
+                        "interface_mode": "minimax",
+                        "base_url": "",
+                        "api_keys": "",
+                        "voice": ""
+                    },
+                    {
+                        "__template_key": "reference_to_speech",
+                        "model": "IndexTTS-2",
+                        "interface_mode": "minimax",
+                        "base_url": "",
+                        "api_keys": "",
+                        "voice": ""
+                    },
+                    {
+                        "__template_key": "reference_to_audio",
+                        "model": "",
+                        "interface_mode": "minimax",
+                        "base_url": "",
+                        "api_keys": "",
+                        "voice": ""
+                    },
+                    {
+                        "__template_key": "audio_editing",
+                        "model": "",
+                        "interface_mode": "minimax",
+                        "base_url": "",
+                        "api_keys": "",
+                        "voice": ""
+                    },
+                    {
+                        "__template_key": "voice_conversion",
+                        "model": "",
+                        "interface_mode": "minimax",
+                        "base_url": "",
+                        "api_keys": "",
+                        "voice": ""
+                    },
+                    {
+                        "__template_key": "speech_editing",
+                        "model": "",
+                        "interface_mode": "minimax",
+                        "base_url": "",
+                        "api_keys": "",
+                        "voice": ""
+                    }
+                ]
+            },
+            "custom_create_path": {
+                "description": "自定义提交路径",
+                "type": "string",
+                "default": "/v2/video_generation",
+                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            },
+            "custom_query_path": {
+                "description": "自定义查询路径（可选）",
+                "type": "string",
+                "default": "/v2/query/video_generation/{task_id}",
+                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            },
+            "custom_body_template": {
+                "description": "自定义请求体 JSON",
+                "type": "text",
+                "default": "{\"model\":\"{model}\",\"prompt\":\"{prompt}\",\"audios\":\"{audios}\"}",
+                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            },
+            "custom_headers": {
+                "description": "自定义请求头 JSON",
+                "type": "text",
+                "default": "{}",
+                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            },
+            "custom_id_path": {
+                "description": "响应任务 ID 路径",
+                "type": "string",
+                "default": "id",
+                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            },
+            "custom_status_path": {
+                "description": "响应状态路径",
+                "type": "string",
+                "default": "status",
+                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            },
+            "custom_url_path": {
+                "description": "响应音频 URL 路径",
+                "type": "string",
+                "default": "url",
+                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            },
+            "custom_error_path": {
+                "description": "响应错误路径",
+                "type": "string",
+                "default": "error.message",
+                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            },
+            "custom_base64_path": {
+                "description": "响应 Base64 音频路径",
+                "type": "string",
+                "default": "audio_base64",
+                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            },
+            "custom_success_status": {
+                "description": "额外成功状态（逗号分隔）",
+                "type": "string",
+                "default": "",
+                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            },
+            "custom_failure_status": {
+                "description": "额外失败状态（逗号分隔）",
+                "type": "string",
+                "default": "",
+                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+            }
+        }
     }
 }

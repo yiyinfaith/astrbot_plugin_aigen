@@ -26,6 +26,9 @@ router = importlib.import_module(PACKAGE + ".video_router")
 api = importlib.import_module(PACKAGE + ".video_api_manager")
 inputs = importlib.import_module(PACKAGE + ".video_inputs")
 utils = importlib.import_module(PACKAGE + ".utils")
+audio_api = importlib.import_module(PACKAGE + ".audio_api_manager")
+audio_router = importlib.import_module(PACKAGE + ".audio_router")
+image_router = importlib.import_module(PACKAGE + ".image_router")
 
 
 class Plain:
@@ -47,8 +50,9 @@ class Video:
 
 
 class Record:
-    def __init__(self, file):
+    def __init__(self, file, url=""):
         self.file = file
+        self.url = url
 
 
 class Event(FakeEvent):
@@ -117,9 +121,17 @@ def plugin_class():
         "MessageChain": MessageChain,
         "Video": Video,
         "Image": Image,
+        "Record": Record,
+        "File": File,
+        "AudioOptions": audio_router.AudioOptions,
+        "AudioDownloadError": audio_api.AudioDownloadError,
+        "AUDIO_TYPES": audio_router.AUDIO_TYPES,
+        "parse_audio_materials": audio_router.parse_audio_materials,
+        "select_image_route": image_router.select_image_route,
         "VideoError": router.VideoError,
         "VideoDownloadError": api.VideoDownloadError,
         "ImageDownloadError": image_api.ImageDownloadError,
+        "ApiManager": image_api.ApiManager,
         "VideoOptions": router.VideoOptions,
         "parse_video_command": router.parse_video_command,
         "collect_media": inputs.collect_media,
@@ -143,6 +155,8 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.context = SimpleNamespace(send_message=AsyncMock(return_value=True))
         self.plugin.conf = {"model": "image", "llm_cooldown_seconds": 0}
         self.plugin.video_conf = {"model": "video", "llm_cooldown_seconds": 0}
+        self.plugin.audio_conf = {"model": "audio", "llm_cooldown_seconds": 0}
+        self.plugin.audio_mgr = SimpleNamespace(_session=None)
         self.plugin._llm_last_call = {}
         self.plugin._video_collections = {}
         self.plugin._video_busy = set()

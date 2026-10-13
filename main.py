@@ -18,14 +18,17 @@ from typing import Any, ClassVar
 import aiohttp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.message_components import Image, Plain, Video
+from astrbot.api.message_components import File, Image, Plain, Record, Video
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core import AstrBotConfig
 
 from .api_manager import ApiManager, ImageDownloadError
+from .audio_api_manager import AudioApiManager, AudioDownloadError
+from .audio_router import AUDIO_TYPES, AudioOptions, parse_audio_materials
 from .config_manager import media_config, migrate_config
 from .data_manager import DataManager
 from .image_manager import ImageManager
+from .image_router import select_image_route
 from .utils import extract_image_urls_from_text, match_keyword_in_text, norm_id
 from .video_api_manager import VideoApiManager, VideoDownloadError
 from .video_inputs import collect_media, normalize_media_event, text_media
@@ -35,8 +38,8 @@ from .video_router import VideoError, VideoOptions, parse_video_command
 @register(
     "astrbot_plugin_aigen",
     "yiyinfaith",
-    "统一图片、视频生成与关键词预设插件",
-    "1.1.2",
+    "统一图片、视频、音频生成与关键词预设插件",
+    "1.2.0",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -61,10 +64,16 @@ class ImageGeneratorPlugin(Star):
         self.root_conf = config
         self.conf = media_config(config, "image")
         self.video_conf = media_config(config, "video")
+        self.audio_conf = media_config(config, "audio")
+        for name in ("base_url", "api_keys"):
+            if not self.audio_conf.get(name):
+                self.audio_conf[name] = self.video_conf.get(name, "")
         self.data_mgr = DataManager(data_dir, self.conf, self.video_conf)
         self.img_mgr = ImageManager(self.conf)
         self.api_mgr = ApiManager(self.conf)
+        self._image_route_managers = {}
         self.video_mgr = VideoApiManager(self.video_conf, data_dir)
+        self.audio_mgr = AudioApiManager(self.audio_conf, data_dir)
         self._cleanup_task = None
         self._llm_last_call: dict[str, float] = {}
         self._video_collections: dict[tuple[str, str, str], dict] = {}
@@ -100,7 +109,7 @@ class ImageGeneratorPlugin(Star):
                 await self._cleanup_task
             except asyncio.CancelledError:
                 pass
-        for manager in (self.api_mgr, self.video_mgr):
+        for manager in (self.api_mgr, self.video_mgr, getattr(self, "audio_mgr", None)):
             session = getattr(manager, "_session", None)
             if session is not None and not session.closed:
                 await session.close()
@@ -123,6 +132,15 @@ class ImageGeneratorPlugin(Star):
                 await asyncio.to_thread(cleanup)
             except OSError as exc:
                 logger.warning("Could not clean video cache: %s", exc)
+            audio_mgr = getattr(self, "audio_mgr", None)
+            if audio_mgr is not None:
+                audio_cutoff = (
+                    datetime.now(timezone.utc).timestamp()
+                    - max(1, int(self.audio_conf.get("cache_hours", 24))) * 3600
+                )
+                for path in audio_mgr.data_dir.glob("*"):
+                    if path.is_file() and path.stat().st_mtime < audio_cutoff:
+                        path.unlink(missing_ok=True)
 
     def _bot_id(self, event: AstrMessageEvent) -> str:
         """Resolve the current bot ID for image extraction filtering."""
@@ -306,6 +324,32 @@ class ImageGeneratorPlugin(Star):
         """
         uid = norm_id(event.get_sender_id())
         gid = norm_id(event.get_group_id())
+        try:
+            effective = select_image_route(self.conf, images, model)
+        except VideoError as exc:
+            return [Plain(str(exc))]
+        model = effective["model"]
+        manager = self.api_mgr
+        if any(
+            effective.get(key) != self.conf.get(key)
+            for key in ("interface_mode", "base_url", "api_keys")
+        ):
+            cache_key = (
+                bool(images),
+                model,
+                effective.get("interface_mode"),
+                effective.get("base_url"),
+                tuple(ApiManager._normalize_keys(effective.get("api_keys"))),
+            )
+            if not hasattr(self, "_image_route_managers"):
+                self._image_route_managers = {}
+            manager = self._image_route_managers.get(cache_key)
+            if manager is None:
+                manager = ApiManager(effective)
+                manager._get_session = self.api_mgr._get_session
+                if effective.get("api_keys") == self.conf.get("api_keys"):
+                    manager.get_key = self.api_mgr.get_key
+                self._image_route_managers[cache_key] = manager
 
         display_name = "" if preset_name in {"", "自定义"} else preset_name
         template = str(
@@ -323,7 +367,7 @@ class ImageGeneratorPlugin(Star):
         source_expiry = ""
         try:
             start = datetime.now(timezone.utc)
-            result = await self.api_mgr.call_api(
+            result = await manager.call_api(
                 images,
                 prompt,
                 model,
@@ -464,6 +508,18 @@ class ImageGeneratorPlugin(Star):
         key = self._video_session_key(event)
         if self._terminating:
             return
+        audio_argument = self._resolve_audio_command(raw_text)
+        if audio_argument is not None and (
+            self._has_astrbot_prefix(event, raw_text)
+            or not getattr(self, "audio_conf", {}).get(
+                "custom_prompt_need_prefix", True
+            )
+        ):
+            event.stop_event()
+            result = await self._start_audio_request(event, audio_argument)
+            if result:
+                yield event.chain_result(result)
+            return
         collection = self._video_collections.get(key)
         control = text in {"生成", "取消"} and self._has_astrbot_prefix(event, raw_text)
         if collection or control:
@@ -565,6 +621,68 @@ class ImageGeneratorPlugin(Star):
         if result:
             yield event.chain_result(result)
 
+    def _resolve_audio_command(self, raw: str) -> str | None:
+        """Match one audio prefix on a token boundary.
+
+        Args:
+            raw: Text from the incoming message.
+
+        Returns:
+            The command arguments, or None when this is not an audio command.
+        """
+        text = self._clean_message(raw)
+        prefixes = getattr(self, "audio_conf", {}).get("extra_prefix", ["生音频"])
+        if isinstance(prefixes, str):
+            prefixes = [prefixes]
+        for prefix in sorted(
+            {"生音频", *(str(p).strip().lstrip("/") for p in prefixes or [])},
+            key=len,
+            reverse=True,
+        ):
+            if prefix and (text == prefix or text.startswith(prefix + " ")):
+                return text[len(prefix) :].strip()
+        return None
+
+    async def _start_audio_request(self, event, argument: str) -> list[Any]:
+        """Require an intent and accept one optional audio type.
+
+        Args:
+            event: Incoming AstrBot message event.
+            argument: One required intent and an optional type, separated by spaces.
+
+        Returns:
+            A selection hint, validation error, or collection start result.
+        """
+        parts = argument.split()
+        if not parts:
+            return [
+                Plain(
+                    "请选择一个参数：/生音频 朗读 或 /生音频 提示词。第二个参数可选音频类型，参数之间用空格。"
+                )
+            ]
+        if parts[0] not in {"朗读", "提示词"}:
+            return [Plain("生音频第一个参数只能从“朗读”和“提示词”里面选。")]
+        if len(parts) > 2 or (len(parts) == 2 and parts[1] not in AUDIO_TYPES):
+            return [
+                Plain(
+                    "第二个参数可选：音色克隆、参考音频生成、音频编辑、语音编辑、音色转换。启动后再发送正文，参数之间用空格。"
+                )
+            ]
+        requested = AUDIO_TYPES[parts[1]] if len(parts) == 2 else ""
+        if (
+            requested in {"reference_to_speech", "speech_editing"}
+            and parts[0] != "朗读"
+        ):
+            return [Plain("音色克隆、语音编辑请使用 /生音频 朗读。")]
+        if (
+            requested in {"reference_to_audio", "audio_editing"}
+            and parts[0] != "提示词"
+        ):
+            return [Plain("参考音频生成、音频编辑请使用 /生音频 提示词。")]
+        return await self._collect_video_request(
+            event, start=True, kind="audio", audio_mode=parts[0], audio_type=requested
+        )
+
     async def _video_command_inputs(self, event, prompt, preset_name):
         options = parse_video_command(prompt)
         if (
@@ -621,18 +739,27 @@ class ImageGeneratorPlugin(Star):
         self._video_collections.pop(key, None)
         if collection["timer"] is not asyncio.current_task():
             collection["timer"].cancel()
+        label = "音频" if collection.get("kind") == "audio" else "视频"
         try:
             await self.context.send_message(
                 key[0],
                 MessageChain().message(
-                    f"材料收集已超时（{collection['timeout']}秒），已取消本次生视频。请重新发送 /生视频 开始。"
+                    f"材料收集已超时（{collection['timeout']}秒），已取消本次生{label}。请重新发送 /生{label} 开始。"
                 ),
             )
         except Exception:  # noqa: BLE001
             logger.exception("Could not send video collection timeout notice")
 
     async def _collect_video_request(
-        self, event, prompt=None, preset_name="自定义", *, start=False
+        self,
+        event,
+        prompt=None,
+        preset_name="自定义",
+        *,
+        start=False,
+        kind="video",
+        audio_mode="朗读",
+        audio_type="",
     ) -> list[Any]:
         """Collect ordered messages and submit once after the finish command.
 
@@ -654,17 +781,19 @@ class ImageGeneratorPlugin(Star):
         control = (
             self._clean_message(raw) if self._has_astrbot_prefix(event, raw) else ""
         )
-        if not self.video_conf.get("enabled", True):
-            return [Plain("视频生成功能已关闭。")]
         collection = self._video_collections.get(key)
+        if not start and collection is not None:
+            kind = collection.get("kind", "video")
+        conf = self.audio_conf if kind == "audio" else self.video_conf
+        label = "音频" if kind == "audio" else "视频"
+        if not conf.get("enabled", True):
+            return [Plain(f"{label}生成功能已关闭。")]
         finish = control == "生成" and not start
         if start:
             if collection is not None:
                 collection["timer"].cancel()
             try:
-                timeout = max(
-                    1, int(self.video_conf.get("collection_timeout_seconds", 60))
-                )
+                timeout = max(1, int(conf.get("collection_timeout_seconds", 60)))
             except (ValueError, TypeError, OverflowError):
                 timeout = 60
             collection = {
@@ -680,6 +809,10 @@ class ImageGeneratorPlugin(Star):
                 "pending_finishes": 0,
                 "finish_idle": asyncio.Event(),
                 "preset": preset_name,
+                "kind": kind,
+                "audio_mode": audio_mode,
+                "audio_type": audio_type,
+                "type_choices": [],
             }
             collection["finish_idle"].set()
             self._video_collections[key] = collection
@@ -689,12 +822,14 @@ class ImageGeneratorPlugin(Star):
             timer.add_done_callback(self._video_collection_tasks.discard)
         elif collection is None:
             return [
-                Plain("没有正在收集的材料，或本次收集已超时取消；请先发送 /生视频。")
+                Plain(
+                    f"没有正在收集的材料，或本次收集已超时取消；请先发送 /生{label}。"
+                )
             ]
         elif monotonic() >= collection["deadline"]:
             if not collection["pending_finishes"]:
                 await self._expire_video_collection(key, collection)
-            return [Plain("材料收集已超时，请重新发送 /生视频。")]
+            return [Plain(f"材料收集已超时，请重新发送 /生{label}。")]
         if finish:
             collection["pending_finishes"] += 1
             collection["finish_idle"].clear()
@@ -710,7 +845,7 @@ class ImageGeneratorPlugin(Star):
                             event.chain_result(
                                 [
                                     Plain(
-                                        f"请发送材料，最后发送“/生成”开始生成视频，{collection['timeout']}秒超时"
+                                        f"请发送材料，最后发送“/生成”开始生成{label}，{collection['timeout']}秒超时"
                                     )
                                 ]
                             )
@@ -724,7 +859,22 @@ class ImageGeneratorPlugin(Star):
                     self._video_collections.pop(key, None)
                     collection["timer"].cancel()
                     return [Plain("已取消本次材料收集。")]
+                selecting_type = kind == "audio" and bool(collection["type_choices"])
+                if selecting_type:
+                    choice = raw.strip()
+                    if choice not in collection["type_choices"]:
+                        return [
+                            Plain(
+                                "请直接回复音频类型（不用 /）："
+                                + "、".join(collection["type_choices"])
+                                + "；也可 /取消。"
+                            )
+                        ]
+                    collection["audio_type"] = AUDIO_TYPES[choice]
+                    collection["type_choices"] = []
                 text = str(prompt or "") if start else "" if finish else raw.strip()
+                if selecting_type:
+                    text = ""
                 if text:
                     if sum(map(len, collection["text"])) + len(text) > 2_000_000:
                         collection["errors"].append(
@@ -733,9 +883,16 @@ class ImageGeneratorPlugin(Star):
                     else:
                         collection["text"].append(text)
                 try:
-                    _, images, audios, videos = await self._video_command_inputs(
-                        event, "", "自定义"
-                    )
+                    if selecting_type:
+                        images, audios, videos = [], [], []
+                    else:
+                        _, images, audios, videos = await self._video_command_inputs(
+                            event, "", "自定义"
+                        )
+                    if kind == "audio" and (images or videos):
+                        raise VideoError(
+                            "生音频只接收文字、QQ 语音或音频文件，不支持图片和视频。"
+                        )
                     added_size = sum(
                         len(src)
                         for bucket in (images, audios, videos)
@@ -763,7 +920,7 @@ class ImageGeneratorPlugin(Star):
                     or self._video_collections.get(key) is not collection
                 ):
                     return []
-                if not finish:
+                if not finish and not selecting_type:
                     return []
                 if collection["errors"]:
                     return [
@@ -775,21 +932,71 @@ class ImageGeneratorPlugin(Star):
                     ]
                 try:
                     merged = " ".join(collection["text"])
-                    options = parse_video_command(collection["text"])
-                    if options.reference_mode in {
-                        "first_frame",
-                        "last_frame",
-                        "first_last_frame",
-                        "motion_transfer",
-                        "audio_sync",
-                    } and not re.match(
-                        r"^(首帧|尾帧|首尾帧|动作迁移|音频同步)(?:\s+|$)",
-                        merged.strip(),
+                    if kind == "audio":
+                        options = parse_audio_materials(
+                            collection["text"], collection["audio_mode"]
+                        )
+                        options.route = collection["audio_type"]
+                        if not options.route and collection["audios"]:
+                            count = len(collection["audios"])
+                            if not options.prompt and count == 2:
+                                choices = ["音色转换"]
+                            elif options.prompt and count <= 3:
+                                choices = (
+                                    ["音色克隆"]
+                                    if options.mode == "朗读"
+                                    else ["参考音频生成"]
+                                )
+                                if count == 1:
+                                    choices.append(
+                                        "语音编辑"
+                                        if options.mode == "朗读"
+                                        else "音频编辑"
+                                    )
+                            else:
+                                raise VideoError(
+                                    "请提供文字及 1–3 段参考音频；音色转换只输入两段音频。"
+                                )
+                            collection["type_choices"] = choices
+                            collection["timer"].cancel()
+                            collection["deadline"] = monotonic() + collection["timeout"]
+                            timer = asyncio.create_task(
+                                self._expire_video_collection(key, collection)
+                            )
+                            collection["timer"] = timer
+                            self._video_collection_tasks.add(timer)
+                            timer.add_done_callback(
+                                self._video_collection_tasks.discard
+                            )
+                            return [
+                                Plain(
+                                    "请选择音频类型（直接回复名称，不用 /）："
+                                    + "、".join(choices)
+                                    + f"。{collection['timeout']}秒内选择，/取消 可取消。"
+                                )
+                            ]
+                        self.audio_mgr.prepare(options, collection["audios"])
+                    else:
+                        options = parse_video_command(collection["text"])
+                    if (
+                        kind == "video"
+                        and options.reference_mode
+                        in {
+                            "first_frame",
+                            "last_frame",
+                            "first_last_frame",
+                            "motion_transfer",
+                            "audio_sync",
+                        }
+                        and not re.match(
+                            r"^(首帧|尾帧|首尾帧|动作迁移|音频同步)(?:\s+|$)",
+                            merged.strip(),
+                        )
                     ):
                         raise VideoError(
                             "特殊类别请在文字材料开头明确填写“首尾帧”“首帧”“尾帧”“动作迁移”或“音频同步”关键词。"
                         )
-                    if (
+                    if kind == "video" and (
                         options.images
                         or options.audios
                         or options.videos
@@ -799,13 +1006,14 @@ class ImageGeneratorPlugin(Star):
                         raise VideoError(
                             "请直接发送图片、QQ 语音、视频或媒体文件，不接受媒体 URL 参数。"
                         )
-                    self.video_mgr.prepare(
-                        options.prompt,
-                        collection["images"],
-                        collection["audios"],
-                        collection["videos"],
-                        options=options,
-                    )
+                    if kind == "video":
+                        self.video_mgr.prepare(
+                            options.prompt,
+                            collection["images"],
+                            collection["audios"],
+                            collection["videos"],
+                            options=options,
+                        )
                 except (VideoError, OSError, ValueError, TypeError) as exc:
                     return [
                         Plain(
@@ -823,6 +1031,8 @@ class ImageGeneratorPlugin(Star):
         task = asyncio.current_task()
         self._video_generation_tasks.add(task)
         try:
+            if kind == "audio":
+                return await self._generate_audio(event, options, collection["audios"])
             return await self._generate_video(
                 event,
                 options.prompt,
@@ -837,6 +1047,107 @@ class ImageGeneratorPlugin(Star):
         finally:
             self._video_busy.discard(key)
             self._video_generation_tasks.discard(task)
+
+    async def _generate_audio(
+        self, event, options: AudioOptions, audios: list[str], *, tool_call=False
+    ) -> list[Any]:
+        """Generate once, then deliver audio without a success caption.
+
+        Args:
+            event: The event receiving progress and the final artifact.
+            options: Parsed audio intent and exact merged text.
+            audios: Ordered audio materials.
+            tool_call: Whether the LLM owns progress/error narration.
+
+        Returns:
+            An error chain, or no elements after successful delivery.
+        """
+        try:
+            self.audio_mgr.prepare(options, audios)
+            if not tool_call:
+                label = "文字" if options.mode == "朗读" else "提示词"
+                await event.send(
+                    event.chain_result(
+                        [
+                            Plain(
+                                f"共收到0图片，{len(audios)}音频，0视频，{options.prompt_segments}段{label}，生成中"
+                            )
+                        ]
+                    )
+                )
+            result = await self.audio_mgr.generate(options, audios)
+        except AudioDownloadError as exc:
+            return [
+                Plain(f"{exc}\n已生成的音频地址：{exc.url}\n请下载原结果，勿重复提交。")
+            ]
+        except (VideoError, aiohttp.ClientError, OSError, ValueError) as exc:
+            logger.warning("Audio generation failed: %s", exc)
+            return [Plain(str(exc))]
+        except Exception:  # noqa: BLE001
+            logger.exception("Unexpected audio generation failure")
+            return [
+                Plain(
+                    "音频生成发生内部错误，请联系管理员；勿立即重复提交，以免重复付费。"
+                )
+            ]
+        try:
+            await self.data_mgr.record_usage(
+                event.get_sender_id(), event.get_group_id(), "audio"
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not record audio usage; delivering completed audio")
+        path = result.path
+        if path.suffix.lower() != ".wav":
+            try:
+                from astrbot.core.utils.media_utils import convert_audio_format
+
+                converted = path.with_name(path.stem + "_delivery.wav")
+                path = Path(
+                    await convert_audio_format(str(path), "wav", str(converted))
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Could not convert completed audio; delivering its original file"
+                )
+                try:
+                    await event.send(
+                        event.chain_result(
+                            [File(file=str(result.path), name=result.path.name)]
+                        )
+                    )
+                    return []
+                except Exception:  # noqa: BLE001
+                    return [
+                        Plain(
+                            "音频已生成，但语音转换及文件发送失败；请联系管理员获取原产物，勿重复生成。"
+                            + (f"\n{result.url}" if result.url else "")
+                        )
+                    ]
+        attempts = max(
+            1, min(5, int(self.audio_conf.get("audio_delivery_retries", 2) or 2))
+        )
+        for attempt in range(attempts):
+            try:
+                await event.send(
+                    event.chain_result([Record(file=str(path), url=str(path))])
+                )
+                return []
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Completed audio delivery attempt %d failed", attempt + 1
+                )
+        try:
+            await event.send(
+                event.chain_result([File(file=str(result.path), name=result.path.name)])
+            )
+            return []
+        except Exception:  # noqa: BLE001
+            return [
+                Plain(
+                    "音频已生成，但平台发送失败；请获取原产物，勿重复生成。"
+                    + (f"\n{result.url}" if result.url else "")
+                )
+            ]
 
     async def _generate_video(
         self,
@@ -1103,6 +1414,79 @@ class ImageGeneratorPlugin(Star):
         )
         if result:
             yield event.chain_result(result)
+
+    @filter.command("生音频", prefix_optional=False)
+    async def audio_command(self, event: AstrMessageEvent):
+        """Collect audio materials after a required reading/prompting selector.
+
+        Args:
+            event: Incoming AstrBot message event.
+        """
+        event.stop_event()
+        argument = self._resolve_audio_command(self._event_message_text(event))
+        result = await self._start_audio_request(event, argument or "")
+        if result:
+            yield event.chain_result(result)
+
+    @filter.llm_tool(name="generate_audio")
+    async def generate_audio(
+        self,
+        event: AstrMessageEvent,
+        text: str,
+        mode: str = "朗读",
+        audio_type: str = "",
+    ):
+        """Generate speech or descriptive audio from text and attached audio.
+
+        Args:
+            text(string): Exact reading text, or the audio generation prompt.
+            mode(string): 朗读 for TTS; 提示词 for descriptive TTA.
+            audio_type(string): Optional 音色克隆/参考音频生成/音频编辑/语音编辑/音色转换.
+        """
+        if not self.audio_conf.get("enabled", True) or not self.audio_conf.get(
+            "enable_llm_tool", True
+        ):
+            yield "生音频工具已关闭。"
+            return
+        if mode not in {"朗读", "提示词"} or (
+            audio_type and audio_type not in AUDIO_TYPES
+        ):
+            yield "音频模式或类型无效。"
+            return
+        uid = norm_id(event.get_sender_id())
+        cooldown_key = "audio:" + uid
+        cooldown = max(0, int(self.audio_conf.get("llm_cooldown_seconds", 60)))
+        if (
+            monotonic() - self._llm_last_call.get(cooldown_key, float("-inf"))
+            < cooldown
+        ):
+            yield "生音频工具冷却中，请稍后再试。"
+            return
+        key = self._video_session_key(event)
+        if key in self._video_busy:
+            yield "已有生成任务正在运行，请等待结果。"
+            return
+        self._llm_last_call[cooldown_key] = monotonic()
+        self._video_busy.add(key)
+        task = asyncio.current_task()
+        self._video_generation_tasks.add(task)
+        try:
+            _, images, audios, videos = await self._video_command_inputs(
+                event, "", "自定义"
+            )
+            if images or videos:
+                yield "生音频不接受图片或视频。"
+                return
+            options = parse_audio_materials([text], mode)
+            options.route = AUDIO_TYPES.get(audio_type, "")
+            for part in await self._generate_audio(
+                event, options, audios, tool_call=True
+            ):
+                if isinstance(part, Plain):
+                    yield part.text
+        finally:
+            self._video_busy.discard(key)
+            self._video_generation_tasks.discard(task)
 
     @filter.llm_tool(name="generate_image")
     async def generate_image(

@@ -41,7 +41,11 @@ def migrate_config(config: Any, backup_dir: Path) -> bool:
     Only this one-time upgrade reads them; grouped settings take over afterward.
     """
     if config.get("_config_layout_version", 0) >= 1:
-        return migrate_video_settings(config, backup_dir)
+        changed = migrate_video_settings(config, backup_dir)
+        return (
+            migrate_generation_settings(config, backup_dir, backup=not changed)
+            or changed
+        )
     schema = json.loads(
         Path(__file__).with_name("_conf_schema.json").read_text("utf-8")
     )
@@ -58,6 +62,7 @@ def migrate_config(config: Any, backup_dir: Path) -> bool:
             "global_settings",
             "image_settings",
             "video_settings",
+            "audio_settings",
             "_config_layout_version",
         }
         and value is not None
@@ -98,6 +103,7 @@ def migrate_config(config: Any, backup_dir: Path) -> bool:
         config.update(original)
         raise
     migrate_video_settings(config, backup_dir, backup=False)
+    migrate_generation_settings(config, backup_dir, backup=False)
     return bool(legacy)
 
 
@@ -204,6 +210,54 @@ def migrate_video_settings(config: Any, backup_dir: Path, *, backup=True) -> boo
         config.update(original)
         raise
     return backup
+
+
+def migrate_generation_settings(config: Any, backup_dir: Path, *, backup=True) -> bool:
+    """Add image/audio routes and remove the unused video progress field.
+
+    Args:
+        config: Current grouped AstrBot configuration.
+        backup_dir: Directory for the original configuration snapshot.
+        backup: Whether an earlier upgrade has not already backed up this load.
+
+    Returns:
+        Whether the current settings layout was upgraded.
+
+    Raises:
+        OSError: If backing up or saving fails.
+    """
+    if config.get("_config_layout_version", 0) >= 4:
+        return False
+    original = copy.deepcopy(dict(config))
+    upgraded = copy.deepcopy(original)
+    if backup:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        snapshot = backup_dir / f"config_before_v1.2.0_{stamp}.json"
+        snapshot.write_text(
+            json.dumps(original, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        snapshot.chmod(0o600)
+    defaults = schema_defaults(
+        json.loads(Path(__file__).with_name("_conf_schema.json").read_text("utf-8"))
+    )
+    image = upgraded.setdefault("image_settings", {})
+    for field in ("auto_route", "routes"):
+        image.setdefault(field, copy.deepcopy(defaults["image_settings"][field]))
+    upgraded.setdefault("audio_settings", copy.deepcopy(defaults["audio_settings"]))
+    upgraded.setdefault("video_settings", {}).pop("generating_msg_template", None)
+    upgraded["_config_layout_version"] = 4
+    config.clear()
+    config.update(upgraded)
+    try:
+        save = getattr(config, "save_config", None)
+        if callable(save):
+            save()
+    except Exception:
+        config.clear()
+        config.update(original)
+        raise
+    return True
 
 
 def media_config(config: dict, kind: str = "image") -> dict:
