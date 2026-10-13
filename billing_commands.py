@@ -14,20 +14,8 @@ COMMANDS = {
     "我的账单",
     "计费订单",
     "结算订单",
-    "计费帮助",
 }
 ADMIN_COMMANDS = {"生成卡密", "剩余卡密", "作废卡密", "计费订单", "结算订单"}
-HELP = """计费始终启用，未配置价格的模型免费。余额单位由管理员定价决定。
-/余额：查询可用和冻结余额
-/兑换卡密 <卡密>：一次性充值，建议私聊
-/我的账单 [页码]：查询自己的生成订单
-管理员命令（请私聊机器人）：
-/生成卡密 <面额> [数量]：数量默认1，最多100
-/剩余卡密 [页码]：列出剩余有效卡密，每页20条
-/作废卡密 <卡密>：使尚未兑换的卡密失效
-/计费订单 [页码]：查询待核对订单
-/结算订单 <订单ID> <金额>：核对上游后结算，0表示退款；不能超过冻结额度
-生成前预留余额，成功后结算差额；明确失败退款。状态不明或缺少实际用量时保留冻结，等待管理员核对。发送失败不重复扣费。"""
 
 
 def handle_command(service, event, text: str) -> str:
@@ -51,17 +39,15 @@ def handle_command(service, event, text: str) -> str:
     try:
         owner = service.owner(event)
         store = service.store
-        if command == "计费帮助":
-            return HELP
         if command == "余额":
-            available, held = store.balance(owner)
-            return f"用户 ID：{event.get_sender_id()}\n可用余额：{money(available)}\n冻结余额：{money(held)}\n/我的账单 查询订单；/兑换卡密 <卡密> 充值。"
+            available, _held = store.balance(owner)
+            return f"用户 ID：{event.get_sender_id()}\n余额：{money(available)}\n/我的账单 查询订单；/兑换卡密 <卡密> 充值。"
         if command == "兑换卡密":
             if len(args) != 1:
                 return "用法：/兑换卡密 <卡密>，建议私聊机器人兑换。"
             amount = store.redeem(owner, args[0])
-            available, held = store.balance(owner)
-            return f"兑换成功，充值 {money(amount)}。可用余额 {money(available)}，冻结 {money(held)}。"
+            available, _held = store.balance(owner)
+            return f"兑换成功，充值 {money(amount)}。余额 {money(available)}。"
         if command == "生成卡密":
             if not 1 <= len(args) <= 2:
                 return "用法：/生成卡密 <面额> [数量]"
@@ -83,9 +69,7 @@ def handle_command(service, event, text: str) -> str:
             return "卡密已作废。" if count else "卡密不存在或已兑换/作废。"
         if command == "结算订单":
             if len(args) != 2:
-                return (
-                    "用法：/结算订单 <订单ID> <金额>；0表示退款。请先核对上游实际结果。"
-                )
+                return "用法：/结算订单 <订单ID> <金额>；旧待核对订单仅供核对，不会自动扣费。"
             changed = store.finish(
                 args[0], units(args[1]), f"管理员 {owner} 人工核对结算", admin=True
             )
@@ -99,10 +83,11 @@ def handle_command(service, event, text: str) -> str:
         total, rows = store.listing(kind, owner, page)
         lines = [f"{command}：共 {total} 条，第 {page}/{max(1, (total + 19) // 20)} 页"]
         states = {
-            "reserved": "生成中",
+            "running": "生成中",
+            "reserved": "旧订单",
             "review": "待核对",
             "settled": "已结算",
-            "refunded": "已退款",
+            "refunded": "未扣费/已退款",
         }
         for row in rows:
             if kind == "cards":
@@ -110,7 +95,7 @@ def handle_command(service, event, text: str) -> str:
             else:
                 evidence = json.loads(row["details"]).get("result", {})
                 lines.append(
-                    f"{row['id']}｜{row['model']}｜{states[row['status']]}｜预留 {money(row['reserved'])}｜已扣 {money(row['charged']) if row['charged'] is not None else '待定'}\n{row['note']}"
+                    f"{row['id']}｜{row['model']}｜{states[row['status']]}｜已扣 {money(row['charged']) if row['charged'] is not None else '待定'}\n{row['note']}"
                     + (f"\n用户 {row['owner']}" if kind == "review" else "")
                     + (
                         f"\n上游任务：{evidence['task_id']}"
@@ -127,6 +112,6 @@ def handle_command(service, event, text: str) -> str:
     except BillingError as exc:
         return str(exc)
     except (ValueError, TypeError):
-        return "参数格式错误，请发送 /计费帮助 查看用法。"
+        return "参数格式错误，请发送 /ai生成帮助 查看用法。"
     except sqlite3.Error:
         return "账本暂时不可用，请联系管理员；不要重复提交生成。"

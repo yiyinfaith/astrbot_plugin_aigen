@@ -11,10 +11,13 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from .billing_expression import TOKENS, PricingExpression
+from .billing_expression import BillingExpressionError as BillingError
 
 SCALE = Decimal(1_000_000)
 LIMIT = 10**15
@@ -38,10 +41,6 @@ REQUEST_NAMES = {
 USAGE_NAMES = {"seconds", "input_tokens", "output_tokens", "total_tokens"}
 CURRENT: ContextVar = ContextVar("aigen_billing", default=None)
 LOGGER = logging.getLogger(__name__)
-
-
-class BillingError(ValueError):
-    """A pricing or accounting operation cannot proceed safely."""
 
 
 def units(value) -> int:
@@ -78,7 +77,7 @@ def money(value: int) -> str:
     )
 
 
-class Expression:
+class _LegacyExpression:
     """Evaluate a small numeric expression language without Python eval.
 
     Args:
@@ -241,6 +240,96 @@ class Expression:
             raise BillingError("价格表达式计算失败，请检查类型和除数。") from exc
 
 
+class Expression:
+    """Use New API pricing syntax while reading previously saved Python rules.
+
+    Args:
+        source: Administrator expression text.
+        token_mode: Divide New API token prices by one million at settlement.
+    """
+
+    def __init__(self, source: str, *, token_mode=False):
+        self.token_mode = token_mode
+        self.legacy = False
+        try:
+            self.parser = PricingExpression(source)
+        except BillingError as original:
+            try:
+                self.parser = _LegacyExpression(source)
+                self.legacy = True
+            except BillingError:
+                raise original from None
+        self.names = self.parser.names
+        self.usage_keys = getattr(self.parser, "usage_keys", set())
+        self.dynamic = bool(
+            self.names & USAGE_NAMES
+            or self.names & (TOKENS - {"image_count"})
+            or self.usage_keys
+            - {
+                "requests",
+                "resolution",
+                "orientation",
+                "characters",
+                "quality",
+                "image_count",
+            }
+        )
+
+    def evaluate(self, values: dict) -> int:
+        """Evaluate real currency cost with normalized token accounting.
+
+        Args:
+            values: Request and actual usage facts.
+
+        Returns:
+            Full integer fee, without a per-request cap.
+        """
+        if self.legacy:
+            return self.parser.evaluate(values)
+        context = dict(values)
+        optional = {
+            key: context.get(key, 0)
+            for key in ("cr", "cc", "cc1h", "img", "img_cr", "img_o", "ai", "ao")
+        }
+        # Missing optional provider dimensions follow New API's zero default;
+        # missing aggregate input/output usage remains unknown, never guessed.
+        image_cache = optional["img_cr"] if "img_cr" in self.names else 0
+        if image_cache and not 0 <= image_cache <= min(optional["cr"], optional["img"]):
+            image_cache = 0
+        optional["cr"] -= image_cache
+        optional["img"] -= image_cache
+        optional["img_cr"] = image_cache
+        context.update(optional)
+        raw_input, raw_output = (
+            context.get("input_tokens"),
+            context.get("output_tokens"),
+        )
+        context["len"] = raw_input
+        if raw_input is not None:
+            context["p"] = max(
+                0,
+                raw_input
+                - sum(
+                    optional[key]
+                    for key in ("cr", "cc", "cc1h", "img", "img_cr", "ai")
+                    if key in self.names
+                ),
+            )
+        if raw_output is not None:
+            context["c"] = max(
+                0,
+                raw_output
+                - sum(optional[key] for key in ("img_o", "ao") if key in self.names),
+            )
+        context["_trace"] = {}
+        value, _tier = self.parser.evaluate_raw(context)
+        return units(
+            value / 1_000_000
+            if self.token_mode or context["_trace"].get("fixed")
+            else value
+        )
+
+
 class BillingStore:
     """Persist atomic balance, card and order changes in a private SQLite file."""
 
@@ -253,17 +342,50 @@ class BillingStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.transaction() as db:
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS balances (owner TEXT PRIMARY KEY, amount INTEGER NOT NULL CHECK(amount >= 0));
-                CREATE TABLE IF NOT EXISTS cards (code TEXT PRIMARY KEY, amount INTEGER NOT NULL CHECK(amount > 0), creator TEXT NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, redeemed_by TEXT, redeemed_at TEXT);
-                CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, owner TEXT NOT NULL, model TEXT NOT NULL, media TEXT NOT NULL, reserved INTEGER NOT NULL, charged INTEGER, status TEXT NOT NULL, details TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-                CREATE TABLE IF NOT EXISTS ledger (id INTEGER PRIMARY KEY, owner TEXT NOT NULL, delta INTEGER NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-                CREATE INDEX IF NOT EXISTS orders_owner ON orders(owner, created);
-            """)
-            # Hot reload waits for running tasks before constructing this store.
-            db.execute(
-                "UPDATE orders SET status='review', note='进程中断或热重载，需核对上游任务' WHERE status='reserved'"
+            statements = (
+                "CREATE TABLE IF NOT EXISTS balances (owner TEXT PRIMARY KEY, amount INTEGER NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS cards (code TEXT PRIMARY KEY, amount INTEGER NOT NULL CHECK(amount > 0), creator TEXT NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, redeemed_by TEXT, redeemed_at TEXT)",
+                "CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, owner TEXT NOT NULL, model TEXT NOT NULL, media TEXT NOT NULL, reserved INTEGER NOT NULL, charged INTEGER, status TEXT NOT NULL, details TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                "CREATE TABLE IF NOT EXISTS ledger (id INTEGER PRIMARY KEY, owner TEXT NOT NULL, delta INTEGER NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                "CREATE INDEX IF NOT EXISTS orders_owner ON orders(owner, created)",
             )
+            for statement in statements:
+                db.execute(statement)
+            schema = db.execute(
+                "SELECT sql FROM sqlite_master WHERE name='balances'"
+            ).fetchone()[0]
+            if "CHECK" in schema.upper():
+                db.execute(
+                    "ALTER TABLE balances RENAME TO balances_before_actual_billing"
+                )
+                db.execute(
+                    "CREATE TABLE balances (owner TEXT PRIMARY KEY, amount INTEGER NOT NULL)"
+                )
+                db.execute(
+                    "INSERT INTO balances SELECT owner,amount FROM balances_before_actual_billing"
+                )
+                db.execute("DROP TABLE balances_before_actual_billing")
+            # Old holds and interrupted requests have no usable completed result.
+            # Release them exactly once; never charge a late/recovered failure.
+            for row in db.execute(
+                "SELECT * FROM orders WHERE status IN ('reserved','running','review')"
+            ).fetchall():
+                db.execute(
+                    "UPDATE balances SET amount=amount+? WHERE owner=?",
+                    (row["reserved"], row["owner"]),
+                )
+                db.execute(
+                    "UPDATE orders SET reserved=0,charged=0,status='refunded',note='升级/中断时未取得完整成功结果，本次不扣费' WHERE id=?",
+                    (row["id"],),
+                )
+                db.execute(
+                    "INSERT INTO ledger(owner,delta,kind,ref) VALUES(?,?,'refund',?)",
+                    (row["owner"], row["reserved"], row["id"]),
+                )
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS orders_one_running_owner ON orders(owner) WHERE status='running'"
+            )
+            db.execute("PRAGMA user_version=2")
         self.path.chmod(0o600)
 
     @contextmanager
@@ -360,50 +482,46 @@ class BillingStore:
             )
         return value
 
-    def reserve(
-        self, owner: str, media: str, model: str, amount: int, details: dict
+    def begin(
+        self, owner: str, media: str, model: str, expected: int | None, details: dict
     ) -> str:
-        """Freeze funds before generation, preventing concurrent overspending.
+        """Register one charged task per user without freezing or capping funds.
 
         Args:
             owner: Charged balance identity.
-            media: Image, video or audio family.
-            model: Final selected model ID.
-            amount: Positive fixed-point reservation.
-            details: Immutable price and request metadata without secrets.
+            media: Requested media family.
+            model: Final selected model.
+            expected: Known fixed fee, or None for usage determined on completion.
+            details: Price and request metadata without credentials.
 
         Returns:
             New accounting order ID.
-
-        Raises:
-            BillingError: If funds are insufficient or the amount is invalid.
         """
-        if type(amount) is not int or not 0 < amount <= LIMIT:
-            raise BillingError("预留金额无效。")
         order = secrets.token_hex(12)
         with self.transaction() as db:
             db.execute("INSERT OR IGNORE INTO balances VALUES(?,0)", (owner,))
-            if not db.execute(
-                "UPDATE balances SET amount=amount-? WHERE owner=? AND amount>=?",
-                (amount, owner, amount),
-            ).rowcount:
+            if db.execute(
+                "SELECT 1 FROM orders WHERE owner=? AND status='running'", (owner,)
+            ).fetchone():
                 raise BillingError(
-                    f"余额不足，本次需预留 {money(amount)}；请 /余额 查询，或 /兑换卡密 <卡密> 充值。"
+                    "该用户已有收费任务正在生成，请等待结束；免费模型不受影响。"
+                )
+            balance = db.execute(
+                "SELECT amount FROM balances WHERE owner=?", (owner,)
+            ).fetchone()[0]
+            if balance <= 0 or (expected is not None and balance < expected):
+                raise BillingError(
+                    "余额不足；请 /余额 查询，或 /兑换卡密 <卡密> 充值。"
                 )
             db.execute(
-                "INSERT INTO orders(id,owner,model,media,reserved,status,details) VALUES(?,?,?,?,?,'reserved',?)",
+                "INSERT INTO orders(id,owner,model,media,reserved,status,details) VALUES(?,?,?,?,0,'running',?)",
                 (
                     order,
                     owner,
                     model,
                     media,
-                    amount,
-                    json.dumps(details, ensure_ascii=False),
+                    json.dumps(details, ensure_ascii=False, default=str),
                 ),
-            )
-            db.execute(
-                "INSERT INTO ledger(owner,delta,kind,ref) VALUES(?,?,'reserve',?)",
-                (owner, -amount, order),
             )
         return order
 
@@ -443,8 +561,8 @@ class BillingStore:
                     (note[:500], order),
                 )
                 return True
-            if charge < 0 or charge > row["reserved"]:
-                raise BillingError("结算金额不能超过已冻结额度。")
+            if type(charge) is not int or charge < 0:
+                raise BillingError("结算金额必须是非负整数单位。")
             refund = row["reserved"] - charge
             db.execute(
                 "UPDATE balances SET amount=amount+? WHERE owner=?",
@@ -469,7 +587,7 @@ class BillingStore:
         """
         with self.transaction() as db:
             row = db.execute(
-                "SELECT details FROM orders WHERE id=? AND status='reserved'", (order,)
+                "SELECT details FROM orders WHERE id=? AND status='running'", (order,)
             ).fetchone()
             if row:
                 details = json.loads(row[0])
@@ -516,7 +634,7 @@ class BillingStore:
         if kind == "cards":
             table, clause, args = "cards", "redeemed_by IS NULL", ()
         elif kind == "review":
-            table, clause, args = "orders", "status='review'", ()
+            table, clause, args = "orders", "1=1", ()
         elif kind == "orders":
             table, clause, args = "orders", "owner=?", (owner,)
         else:
@@ -619,8 +737,10 @@ class BillingService:
             **counts,
         )
         mode = rule.get("mode", "request")
-        if mode == "expression":
-            expression = Expression(str(rule.get("expression", "0")))
+        if mode in {"expression", "token_expression"}:
+            expression = Expression(
+                str(rule.get("expression", "0")), token_mode=mode == "token_expression"
+            )
         elif mode == "tokens":
             input_price, output_price = (
                 units(rule.get("input_price", "0")),
@@ -632,6 +752,11 @@ class BillingService:
             if output_price:
                 pieces.append(f"output_tokens * {money(output_price)} / 1000000")
             expression = Expression(" + ".join(pieces) or "0")
+        elif mode == "autodl_seconds":
+            price = units(rule.get("price", "0"))
+            expression = Expression(
+                f'tier("base", u("seconds") * {money(price)})' if price else "0"
+            )
         elif mode in {"request", "seconds", "characters"}:
             price = units(rule.get("price", "0"))
             expression = Expression(
@@ -646,17 +771,55 @@ class BillingService:
             )
         else:
             raise BillingError("不支持的计费方式。")
-        dynamic = bool(expression.names & USAGE_NAMES)
-        reserved = (
-            units(rule.get("reserve", "0")) if dynamic else expression.evaluate(values)
+        request = {
+            key: value
+            for key, value in config.items()
+            if key in REQUEST_NAMES
+            or key
+            in {
+                "generate_audio",
+                "seed",
+                "emotion",
+                "service_tier",
+                "draft",
+                "watermark",
+                "n",
+                "response_format",
+                "negative_prompt",
+            }
+        }
+        request.update(
+            {key: value for key, value in values.items() if key in REQUEST_NAMES}
         )
-        if dynamic and reserved <= 0:
-            raise BillingError(
-                f"模型 {model} 按实际用量计费，需配置大于 0 的单次预留上限。"
-            )
-        if reserved == 0:
+        request.update(seconds=values["duration"], ratio=values["aspect_ratio"])
+        request["parameters"] = dict(request)
+        values["_request"] = request
+        values["_now"] = now.astimezone(timezone.utc).isoformat()
+        values["image_count"] = config.get("n", 1) or 1
+        # These are the AutoDL usage-profile facts validated by the selected route.
+        ratio = str(values["aspect_ratio"])
+        orientation = (
+            "square"
+            if ratio == "1:1"
+            else "portrait"
+            if ratio in {"9:16", "3:4", "4:5"}
+            else "landscape"
+            if ratio and ratio != "adaptive"
+            else ""
+        )
+        facts = {"requests": 1, "characters": values.get("characters", 0)}
+        facts["image_count"] = values["image_count"]
+        if values["quality"]:
+            facts["quality"] = values["quality"]
+        if values["resolution"]:
+            facts["resolution"] = values["resolution"]
+        if orientation:
+            facts["orientation"] = orientation
+        values["_usage"] = facts
+        expected = None if expression.dynamic else expression.evaluate(values)
+        if expected == 0:
             return None
-        return expression, values, reserved, dict(rule)
+        return expression, values, expected, dict(rule)
 
 
 class Usage:
@@ -717,6 +880,36 @@ class Usage:
                         if type(value) in (int, float) and 0 <= value <= 1e12:
                             self.values[target] = value
                             break
+                input_details = (
+                    usage.get("input_tokens_details")
+                    or usage.get("prompt_tokens_details")
+                    or {}
+                )
+                output_details = (
+                    usage.get("output_tokens_details")
+                    or usage.get("completion_tokens_details")
+                    or {}
+                )
+                input_details = input_details if isinstance(input_details, dict) else {}
+                output_details = (
+                    output_details if isinstance(output_details, dict) else {}
+                )
+                optional = {
+                    "cr": input_details.get(
+                        "cached_tokens", usage.get("cachedContentTokenCount")
+                    ),
+                    "cc": usage.get("cache_creation_input_tokens"),
+                    "img": input_details.get("image_tokens"),
+                    "ai": input_details.get("audio_tokens"),
+                    "img_o": output_details.get("image_tokens"),
+                    "ao": output_details.get("audio_tokens"),
+                }
+                cached = input_details.get("cached_tokens_details") or {}
+                if isinstance(cached, dict):
+                    optional["img_cr"] = cached.get("image_tokens")
+                for name, value in optional.items():
+                    if type(value) in (int, float) and 0 <= value <= 1e12:
+                        self.values[name] = value
             # MiniMax speech audio_length is documented in milliseconds.
             extra = nested.get("extra_info")
             if (
@@ -792,12 +985,12 @@ async def billed_call(service, event, media: str, config: dict, counts: dict, ca
     quote = service.quote(media, config, counts) if service else None
     if quote is None:
         return await callback()
-    expression, values, reserved, rule = quote
-    order = service.store.reserve(
+    expression, values, expected, rule = quote
+    order = service.store.begin(
         service.owner(event),
         media,
         str(config["model"]),
-        reserved,
+        expected,
         {"rule": rule, "request": values},
     )
     usage = Usage(service.store, order)
@@ -816,10 +1009,14 @@ async def billed_call(service, event, media: str, config: dict, counts: dict, ca
     try:
         note = ""
         charge = None
-        if usage.state == "completed":
+        facts = {}
+        if usage.state == "completed" and not isinstance(error, asyncio.CancelledError):
             # Probe only local completed artifacts; never download again for billing.
             path = getattr(result, "path", None)
-            if path and "seconds" in expression.names:
+            if path and (
+                "seconds" in expression.names
+                or expression.usage_keys & {"seconds", "actual_seconds"}
+            ):
                 try:
                     process = await asyncio.create_subprocess_exec(
                         "ffprobe",
@@ -851,17 +1048,28 @@ async def billed_call(service, event, media: str, config: dict, counts: dict, ca
                 except asyncio.CancelledError as exc:
                     error = exc
             try:
-                actual = expression.evaluate({**values, **usage.values})
-                charge = min(reserved, actual)
-                note = "成功，实际费用 " + money(actual)
-                if actual > reserved:
-                    note += "；已按预留上限封顶"
+                if isinstance(error, asyncio.CancelledError):
+                    raise BillingError("生成在结算前取消，本次不扣费")
+                facts = {**values.get("_usage", {}), **usage.values}
+                if "total_tokens" in usage.values:
+                    facts["tokens"] = usage.values["total_tokens"]
+                if "seconds" in usage.values:
+                    facts["actual_seconds"] = usage.values["seconds"]
+                    if str(config["model"]) in {"IndexTTS-2", "indextts2-v1"}:
+                        facts["seconds"] = max(10, usage.values["seconds"])
+                charge = expression.evaluate(
+                    {**values, **usage.values, "_usage": facts}
+                )
+                note = "成功，按实际用量扣费 " + money(charge)
+                if (
+                    facts.get("seconds") != usage.values.get("seconds")
+                    and "seconds" in facts
+                ):
+                    note += f"；AutoDL 最低计费规则：实际 {usage.values['seconds']} 秒，计费 {facts['seconds']} 秒"
             except BillingError as exc:
-                note = str(exc)
-        elif usage.state in {"new", "failed"}:
-            charge, note = 0, "生成前失败或上游明确拒绝/失败，退回预留"
+                charge, note = 0, str(exc) + "；无可核验实际费用，本次不扣费"
         else:
-            note = "上游状态不明，保留冻结额度，请核对原任务"
+            charge, note = 0, "生成失败、取消或未返回完整成功结果，本次不扣费"
         if usage.task_id:
             note += f"；上游任务 {usage.task_id}"
         try:
@@ -871,6 +1079,7 @@ async def billed_call(service, event, media: str, config: dict, counts: dict, ca
                 note,
                 evidence={
                     "usage": usage.values,
+                    "billing_usage": facts,
                     "state": usage.state,
                     "task_id": usage.task_id,
                     "path": str(getattr(result, "path", "")),
@@ -879,15 +1088,15 @@ async def billed_call(service, event, media: str, config: dict, counts: dict, ca
         except sqlite3.Error:
             # A completed artifact must still be delivered. Its durable hold is
             # recoverable after the database/storage problem has been resolved.
-            LOGGER.exception("Could not settle billing order %s; retaining hold", order)
+            LOGGER.exception(
+                "Could not settle billing order %s; no charge recorded", order
+            )
             charge = None
         if charge is None:
-            LOGGER.warning("Billing order %s needs review: %s", order, note)
-            suffix = f"\n订单 {order} 待核对，已冻结 {money(reserved)}；/我的账单 可查询，请勿重复提交。"
-            if isinstance(result, str):
-                result += suffix
-            if isinstance(error, Exception):
-                error.args = (str(error) + suffix,)
+            LOGGER.warning(
+                "Billing order %s could not be settled; no charge recorded", order
+            )
+
     finally:
         service.tasks.discard(task)
     if error is not None:

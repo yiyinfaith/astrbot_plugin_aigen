@@ -67,23 +67,27 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(sum(bool(value) for value in values), 1)
         self.assertEqual(self.store.listing("cards")[0], 0)
 
-    def test_simultaneous_reservations_cannot_overspend(self):
+    def test_simultaneous_requests_only_start_one_paid_task_per_user(self):
         self.credit("1")
 
-        def reserve(_):
+        def begin(_):
             try:
-                return self.store.reserve("u", "video", "m", 700000, {})
+                return self.store.begin("u", "video", "m", None, {})
             except b.BillingError:
                 return None
 
         with ThreadPoolExecutor(max_workers=8) as pool:
-            orders = list(pool.map(reserve, range(12)))
+            orders = list(pool.map(begin, range(12)))
         self.assertEqual(sum(bool(order) for order in orders), 1)
-        self.assertEqual(self.store.balance("u"), (300000, 700000))
+        self.assertEqual(self.store.balance("u"), (1000000, 0))
+        self.store.finish(
+            next(order for order in orders if order), 1500000, "actual fee"
+        )
+        self.assertEqual(self.store.balance("u"), (-500000, 0))
 
     def test_settlement_refund_and_repeated_delivery_are_idempotent(self):
         self.credit()
-        order = self.store.reserve("u", "audio", "m", 4000000, {})
+        order = self.store.begin("u", "audio", "m", 4000000, {})
         self.store.finish(order, 1250000, "success")
         self.assertFalse(self.store.finish(order, 0, "retry"))
         self.assertEqual(self.store.balance("u"), (8750000, 0))
@@ -93,17 +97,38 @@ class LedgerTest(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(total, 8750000)
 
-    def test_crash_recovery_retains_funds_and_manual_settlement_is_bounded(self):
+    def test_crash_recovery_does_not_charge_and_releases_old_holds_once(self):
         self.credit()
-        order = self.store.reserve("u", "audio", "m", 4000000, {})
-        with self.assertRaises(b.BillingError):
-            self.store.finish(order, 0, "admin", admin=True)
+        order = self.store.begin("u", "audio", "m", None, {})
+        with self.store.transaction() as db:
+            db.execute("UPDATE balances SET amount=amount-4000000 WHERE owner='u'")
+            db.execute(
+                "UPDATE orders SET status='reserved',reserved=4000000 WHERE id=?",
+                (order,),
+            )
+            db.execute(
+                "INSERT INTO ledger(owner,delta,kind,ref) VALUES('u',-4000000,'reserve',?)",
+                (order,),
+            )
+            db.execute("ALTER TABLE balances RENAME TO original_balances")
+            db.execute(
+                "CREATE TABLE balances(owner TEXT PRIMARY KEY, amount INTEGER NOT NULL CHECK(amount >= 0))"
+            )
+            db.execute("INSERT INTO balances SELECT * FROM original_balances")
+            db.execute("DROP TABLE original_balances")
         reopened = b.BillingStore(self.store.path)
-        self.assertEqual(reopened.listing("review")[0], 1)
-        with self.assertRaises(b.BillingError):
-            reopened.finish(order, 4000001, "admin", admin=True)
-        reopened.finish(order, 0, "admin", admin=True)
         self.assertEqual(reopened.balance("u"), (10000000, 0))
+        self.assertEqual(reopened.listing("orders", "u")[1][0]["charged"], 0)
+        self.assertFalse(reopened.finish(order, 1000000, "late success"))
+        reopened = b.BillingStore(self.store.path)
+        self.assertEqual(reopened.balance("u"), (10000000, 0))
+        with reopened.transaction() as db:
+            self.assertEqual(
+                db.execute("SELECT SUM(delta) FROM ledger WHERE owner='u'").fetchone()[
+                    0
+                ],
+                10000000,
+            )
 
     def test_card_random_collision_rolls_back_entire_batch(self):
         with (
@@ -239,7 +264,7 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
             await self.call(AsyncMock(side_effect=ValueError("bad local input")))
         self.assertEqual(self.balance(), (9000000, 0))
 
-    async def test_uncertain_submit_and_cancel_retain_hold(self):
+    async def test_uncertain_submit_and_cancel_do_not_charge(self):
         async def unknown():
             b.track(state="submitted")
             raise TimeoutError
@@ -253,8 +278,8 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(asyncio.CancelledError):
             await self.call(canceled)
-        self.assertEqual(self.balance(), (8000000, 2000000))
-        self.assertEqual(self.service.store.listing("review")[0], 2)
+        self.assertEqual(self.balance(), (10000000, 0))
+        self.assertEqual(self.service.store.listing("orders", self.owner)[0], 2)
 
     async def test_definite_upstream_failure_refunds(self):
         async def failed():
@@ -275,7 +300,7 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
             await self.call(failed_download)
         self.assertEqual(self.balance(), (9000000, 0))
 
-    async def test_tokens_from_usage_are_not_guessed_and_cap_is_enforced(self):
+    async def test_tokens_use_full_actual_fee_and_missing_usage_is_free(self):
         self.rule(mode="tokens", input_price="1", output_price="2", reserve="3")
 
         async def generated():
@@ -289,7 +314,7 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
         await self.call(generated)
         self.assertEqual(self.balance(), (8000000, 0))
         await self.call(AsyncMock(return_value=b"missing usage"))
-        self.assertEqual(self.balance(), (5000000, 3000000))
+        self.assertEqual(self.balance(), (8000000, 0))
 
         async def above_cap():
             b.track(
@@ -298,10 +323,18 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
             return b"image"
 
         await self.call(above_cap)
-        self.assertEqual(self.balance(), (2000000, 3000000))
+        self.assertEqual(self.balance(), (-6000000, 0))
+        callback = AsyncMock(return_value=b"next")
+        with self.assertRaises(b.BillingError):
+            await self.call(callback)
+        callback.assert_not_called()
 
-    async def test_concurrent_request_usage_is_isolated(self):
-        self.rule(mode="tokens", input_price="1", reserve="4")
+    async def test_concurrent_users_keep_actual_usage_isolated(self):
+        self.rule(mode="tokens", input_price="1")
+        other = Identity(uid="other")
+        other_owner = self.service.owner(other)
+        card = self.service.store.create_cards("admin", "10", 1)[0]
+        self.service.store.redeem(other_owner, card)
 
         async def generate(tokens):
             b.track(payload={"usage": {"input_tokens": tokens}})
@@ -309,14 +342,28 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
             return b"image"
 
         await asyncio.gather(
-            self.call(lambda: generate(1000000)), self.call(lambda: generate(2000000))
+            self.call(lambda: generate(1000000)),
+            b.billed_call(
+                self.service,
+                other,
+                "video",
+                {"model": "m"},
+                {},
+                lambda: generate(2000000),
+            ),
         )
-        self.assertEqual(self.balance(), (7000000, 0))
+        self.assertEqual(self.balance(), (9000000, 0))
+        self.assertEqual(self.service.store.balance(other_owner), (8000000, 0))
 
-    async def test_dynamic_pricing_requires_positive_reserve(self):
+    async def test_dynamic_pricing_has_no_reservation_setting(self):
         self.rule(mode="seconds", price="0.1")
-        with self.assertRaises(b.BillingError):
-            await self.call(AsyncMock())
+
+        async def generated():
+            b.track(payload={"usage": {"duration_seconds": 1.5}})
+            return b"media"
+
+        await self.call(generated)
+        self.assertEqual(self.balance(), (9850000, 0))
 
     async def test_old_instance_cannot_submit_after_hot_reload_begins(self):
         self.service.closed = True
@@ -358,7 +405,7 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
             await self.call(AsyncMock(return_value=result))
         self.assertEqual(self.balance(), (9500000, 0))
 
-    async def test_missing_probe_and_usage_keep_order_for_review(self):
+    async def test_missing_probe_and_usage_do_not_charge(self):
         self.rule(mode="seconds", price="0.2", reserve="3")
         result = SimpleNamespace(path=Path(self.directory.name) / "result.mp4")
         with patch.object(
@@ -367,10 +414,10 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
             AsyncMock(side_effect=FileNotFoundError),
         ):
             self.assertIs(await self.call(AsyncMock(return_value=result)), result)
-        self.assertEqual(self.balance(), (7000000, 3000000))
+        self.assertEqual(self.balance(), (10000000, 0))
 
     async def test_submission_evidence_survives_process_interruption(self):
-        order = self.service.store.reserve(self.owner, "video", "m", 1000000, {})
+        order = self.service.store.begin(self.owner, "video", "m", 1000000, {})
         usage = b.Usage(self.service.store, order)
         token = b.CURRENT.set(usage)
         try:
@@ -387,7 +434,7 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
         reply = commands.handle_command(self.service, Identity(admin=True), "计费订单")
         self.assertIn("upstream-123", reply)
         self.assertIn("input_tokens", reply)
-        self.assertEqual(self.balance(), (9000000, 1000000))
+        self.assertEqual(self.balance(), (10000000, 0))
 
     async def test_database_settlement_failure_does_not_discard_paid_media(self):
         import sqlite3
@@ -403,7 +450,7 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 await self.call(AsyncMock(return_value=b"completed")), b"completed"
             )
-        self.assertEqual(self.balance(), (9000000, 1000000))
+        self.assertEqual(self.balance(), (10000000, 0))
 
     async def test_admin_commands_guard_secrets_and_cross_user_history(self):
         response = commands.handle_command(self.service, self.event, "生成卡密 3 1")
@@ -439,7 +486,7 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
             "无效",
             commands.handle_command(self.service, self.event, "兑换卡密 " + card),
         )
-        order = self.service.store.reserve(self.owner, "video", "m", 1000000, {})
+        order = self.service.store.begin(self.owner, "video", "m", 1000000, {})
         self.service.store.finish(order, None, "unknown")
         self.assertIn(
             "已结算",
@@ -601,7 +648,7 @@ class SharedGenerationPathsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(self.plugin._video_collections[key], collection)
         self.assertEqual(collection["text"], [])
 
-    async def test_hot_reload_cancels_active_charged_image_and_retains_order(self):
+    async def test_hot_reload_cancels_active_image_without_charging(self):
         entered = asyncio.Event()
 
         async def pending():
@@ -623,9 +670,7 @@ class SharedGenerationPathsTest(unittest.IsolatedAsyncioTestCase):
         await self.plugin.terminate()
         self.assertTrue(task.cancelled())
         self.assertFalse(self.plugin.billing.tasks)
-        self.assertEqual(
-            self.plugin.billing.store.balance(self.owner), (9000000, 1000000)
-        )
+        self.assertEqual(self.plugin.billing.store.balance(self.owner), (10000000, 0))
 
 
 if __name__ == "__main__":

@@ -61,7 +61,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.0",
+    "1.4.1",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -591,7 +591,7 @@ class ImageGeneratorPlugin(Star):
             event.stop_event()
             response = handle_command(self.billing, event, text)
             if len(response) > 1000:
-                await self._send_settings_menu(event, [response])
+                await self._send_settings_menu(event, [response], title="余额与卡密")
             else:
                 yield event.chain_result([Plain(response)])
             return
@@ -880,7 +880,9 @@ class ImageGeneratorPlugin(Star):
             )
         return effective
 
-    async def _send_settings_menu(self, event, sections: list[str]):
+    async def _send_settings_menu(
+        self, event, sections: list[str], title="生成参数设置"
+    ):
         """Send one QQ merged forward or one complete plain fallback message."""
         platform = getattr(event, "get_platform_name", lambda: "")()
         if platform == "aiocqhttp":
@@ -888,7 +890,7 @@ class ImageGeneratorPlugin(Star):
                 nodes = [
                     Node(
                         uin=self._bot_id(event),
-                        name="生成参数设置",
+                        name=title,
                         content=[Plain(section)],
                     )
                     for section in sections
@@ -2005,6 +2007,11 @@ class ImageGeneratorPlugin(Star):
         prefix_optional=True,
     )
     async def help_command(self, event: AstrMessageEvent):
-        """Send the help text configured in the plugin settings."""
+        """Send configured help as one merged-forward message.
+
+        Args:
+            event: The requesting AstrBot event.
+        """
         text = str(self.conf.get("help_text", "帮助文档未配置。"))
-        yield event.chain_result([Plain(text)])
+        event.stop_event()
+        await self._send_settings_menu(event, [text], title="AI生成帮助")
