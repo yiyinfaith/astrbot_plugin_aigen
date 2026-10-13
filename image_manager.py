@@ -429,8 +429,20 @@ class ImageManager:
             for value in values
         )
 
-    async def _quoted_image_sources(self, event, reply) -> list[str]:
-        """Resolve quoted image tokens to URLs or AstrBot cache paths."""
+    async def _quoted_image_sources(self, event, reply, strict=False) -> list[str]:
+        """Resolve quoted image tokens to URLs or AstrBot cache paths.
+
+        Args:
+            event: Incoming platform event used for media lookups.
+            reply: Quoted message component.
+            strict: Whether every extracted image must resolve successfully.
+
+        Returns:
+            Usable quoted image sources.
+
+        Raises:
+            ValueError: If a quoted image is unreadable in strict mode.
+        """
         try:
             from astrbot.core.utils.quoted_message.image_resolver import ImageResolver
             from astrbot.core.utils.quoted_message_parser import (
@@ -440,8 +452,28 @@ class ImageManager:
             return []
         try:
             refs = list(await extract_quoted_message_images(event, reply))
-            refs = await ImageResolver(event).resolve_for_llm(refs)
-            return [str(ref).strip() for ref in refs if str(ref).strip()]
+            resolver = ImageResolver(event)
+            if strict:
+                sources = []
+                # The host deduplicates batches, which would hide partial
+                # failures or collapse distinct references to the same image.
+                for ref in refs:
+                    resolved = await resolver.resolve_for_llm([ref])
+                    resolved = [
+                        str(value).strip() for value in resolved if str(value).strip()
+                    ]
+                    if not resolved:
+                        raise ValueError(
+                            "有引用图片无法解析，请重新发送图片；未提交生成任务。"
+                        )
+                    sources.extend(resolved)
+                return sources
+            resolved = await resolver.resolve_for_llm(refs)
+            return [str(ref).strip() for ref in resolved if str(ref).strip()]
+        except ValueError:
+            if strict:
+                raise
+            return []
         except Exception as exc:  # noqa: BLE001
             logger.debug("Quoted image URL resolution failed: %s", exc)
             return []
@@ -478,14 +510,14 @@ class ImageManager:
     async def extract_image_sources_from_event(
         self,
         event: AstrMessageEvent,
-        ignore_id: str = None,
+        ignore_id: str | None = None,
         context=None,
         include_at_avatar: bool = True,
         max_images: int | None = None,
         include_sender_avatar: bool = False,
         strict: bool = False,
         preserve_duplicates: bool = False,
-    ) -> List[str]:
+    ) -> list[str]:
         """Collect usable image sources from components and quoted messages."""
         quoted: list[str] = []
         message: list[str] = []
@@ -524,10 +556,16 @@ class ImageManager:
                             if source:
                                 add(quoted, source)
                                 found = True
+                            elif strict:
+                                raise ValueError(
+                                    "有参考图片无法解析，请重新发送图片；未提交生成任务。"
+                                )
                         elif isinstance(child, At):
                             add_at(getattr(child, "qq", getattr(child, "user_id", "")))
                     if not found:
-                        for source in await self._quoted_image_sources(event, seg):
+                        for source in await self._quoted_image_sources(
+                            event, seg, strict=strict
+                        ):
                             add(quoted, source)
                             found = True
                     if not found and context and getattr(seg, "id", None):
@@ -543,6 +581,13 @@ class ImageManager:
                                     )
                                     if source:
                                         add(quoted, source)
+                                    elif strict:
+                                        raise ValueError(
+                                            "有引用图片无法解析，请重新发送图片；未提交生成任务。"
+                                        )
+                        except ValueError:
+                            if strict:
+                                raise
                         except Exception as exc:  # noqa: BLE001
                             logger.debug("Quoted image component fetch failed: %s", exc)
                 elif self._is_image_component(seg):
@@ -552,6 +597,10 @@ class ImageManager:
                     )
                     if source:
                         add(message, source)
+                    elif strict:
+                        raise ValueError(
+                            "有参考图片无法解析，请重新发送图片；未提交生成任务。"
+                        )
                 elif isinstance(seg, At):
                     add_at(getattr(seg, "qq", getattr(seg, "user_id", "")))
 

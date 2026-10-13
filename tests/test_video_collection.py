@@ -278,6 +278,36 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         _, result = await self.receive("/生成")
         self.assertIn("没有正在收集", result[0][0].text)
 
+    async def test_unprefixed_material_does_not_restart_when_prefix_is_required(self):
+        await self.receive("/生视频 第一段")
+        for text in ("生视频 第二段", "生成视频 第三段", "做视频 第四段"):
+            event, result = await self.receive(text)
+            self.assertEqual((event.sent, result), ([], []))
+        await self.receive("/生成")
+        self.assertEqual(
+            self.plugin.video_mgr.generate.await_args.args[0],
+            "第一段 生视频 第二段 生成视频 第三段 做视频 第四段",
+        )
+
+    async def test_custom_prefix_without_slash_can_restart_when_allowed(self):
+        self.config["custom_prompt_need_prefix"] = False
+        await self.receive("/生视频 旧提示词")
+        start, _ = await self.receive("做视频 新提示词")
+        self.assertTrue(start.sent)
+        await self.receive("/生成")
+        self.assertEqual(self.plugin.video_mgr.generate.await_args.args[0], "新提示词")
+
+    async def test_one_unreadable_image_blocks_the_entire_submission(self):
+        await self.receive("/生视频 人物转身")
+        event, result = await self.receive(
+            chain=[Image("https://media.test/good.png"), Image("")]
+        )
+        self.assertEqual((event.sent, result), ([], []))
+        finish, result = await self.receive("/生成")
+        self.assertEqual(finish.sent, [])
+        self.assertIn("有参考图片无法解析", result[0][0].text)
+        self.plugin.video_mgr.generate.assert_not_awaited()
+
     async def test_prompt_count_excludes_route_options_and_blank_messages(self):
         await self.receive("/生视频 首帧", [Image("https://media.test/face.png")])
         for text in ("人物转身\n镜头跟随", "--duration", "1", "  ", "暖色光线"):

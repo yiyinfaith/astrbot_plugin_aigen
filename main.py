@@ -36,7 +36,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频生成与关键词预设插件",
-    "1.1.1",
+    "1.1.2",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -472,7 +472,12 @@ class ImageGeneratorPlugin(Star):
             is_start = any(
                 text == cmd or text.startswith(cmd + " ")
                 for cmd in self._VIDEO_COMMANDS
-            ) or (restart is not None and restart[1] == "自定义")
+            ) and self._has_astrbot_prefix(event, raw_text)
+            if restart is not None and restart[1] == "自定义":
+                is_start = is_start or (
+                    self._has_astrbot_prefix(event, raw_text)
+                    or not self.video_conf.get("custom_prompt_need_prefix", True)
+                )
             result = await self._collect_video_request(
                 event,
                 self._resolve_video_prompt(raw_text)[0]
@@ -1023,42 +1028,52 @@ class ImageGeneratorPlugin(Star):
         if not self.video_conf.get("enable_llm_tool", True):
             yield "视频生成函数工具已停用。"
             return
+        if self._terminating:
+            yield "视频插件正在重载，请稍后再试。"
+            return
         uid = "video:" + norm_id(event.get_sender_id())
         cooldown = max(0, int(self.video_conf.get("llm_cooldown_seconds", 60)))
-        elapsed = monotonic() - self._llm_last_call.get(uid, 0)
+        claimed_at = monotonic()
+        elapsed = claimed_at - self._llm_last_call.get(uid, 0)
         if elapsed < cooldown:
             yield f"视频工具冷却中，请 {int(cooldown - elapsed) + 1} 秒后再试。"
             return
-        try:
-            options = VideoOptions(
-                prompt=str(prompt or ""),
-                duration=duration,
-                resolution=resolution,
-                aspect_ratio=aspect_ratio,
-                reference_mode=reference_mode,
-                seed=seed,
-                generate_audio=generate_audio,
-            )
-            options.overrides()
-            if use_message_media:
-                media_event = await normalize_media_event(event, self.img_mgr)
-                images = await self.img_mgr.extract_image_sources_from_event(
-                    media_event,
-                    ignore_id=self._bot_id(event),
-                    context=event,
-                    include_at_avatar=True,
-                    strict=True,
-                )
-                audios, videos = await collect_media(media_event, self.img_mgr)
-            else:
-                images, audios, videos = [], [], []
-        except (VideoError, ValueError, TypeError, OSError) as exc:
-            yield str(exc)
-            return
-        self._llm_last_call[uid] = monotonic()
+        # Reserve before any media I/O so concurrent calls cannot both pass.
+        self._llm_last_call[uid] = claimed_at
         task = asyncio.current_task()
         self._video_generation_tasks.add(task)
         try:
+            try:
+                options = VideoOptions(
+                    prompt=str(prompt or ""),
+                    duration=duration,
+                    resolution=resolution,
+                    aspect_ratio=aspect_ratio,
+                    reference_mode=reference_mode,
+                    seed=seed,
+                    generate_audio=generate_audio,
+                )
+                options.overrides()
+                if use_message_media:
+                    media_event = await normalize_media_event(event, self.img_mgr)
+                    images = await self.img_mgr.extract_image_sources_from_event(
+                        media_event,
+                        ignore_id=self._bot_id(event),
+                        context=event,
+                        include_at_avatar=True,
+                        strict=True,
+                    )
+                    audios, videos = await collect_media(media_event, self.img_mgr)
+                else:
+                    images, audios, videos = [], [], []
+            except (VideoError, ValueError, TypeError, OSError) as exc:
+                if self._llm_last_call.get(uid) == claimed_at:
+                    self._llm_last_call.pop(uid, None)
+                yield str(exc)
+                return
+            if self._terminating:
+                yield "视频插件正在重载，请稍后再试。"
+                return
             result = await self._generate_video(
                 event,
                 options.prompt,
@@ -1070,12 +1085,11 @@ class ImageGeneratorPlugin(Star):
                 dispatch_result=True,
                 options=options,
             )
+            if result:
+                # Strings go back to the LLM; media is delivered separately.
+                yield "\n".join(part.text for part in result if isinstance(part, Plain))
         finally:
             self._video_generation_tasks.discard(task)
-        if result:
-            # AstrBot sends MessageEventResult directly to the chat. A string
-            # is returned to the LLM instead, including failures and URL fallbacks.
-            yield "\n".join(part.text for part in result if isinstance(part, Plain))
 
     @filter.command("生视频", aliases={"生成视频"}, prefix_optional=False)
     async def video_command(self, event: AstrMessageEvent):

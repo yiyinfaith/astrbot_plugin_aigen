@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import aiohttp
+from astrbot.api import logger
 from PIL import Image
 
 from .api_manager import ApiManager
@@ -966,6 +967,37 @@ class VideoApiManager(ApiManager):
             (options.duration if options else duration),
         )
 
+    async def _save_job_record(self, job: Path, info: dict) -> bool:
+        """Persist task metadata without abandoning an already paid task.
+
+        Args:
+            job: Metadata file for this task.
+            info: Public task ID and progress, without credentials or inputs.
+
+        Returns:
+            Whether this update was saved successfully.
+        """
+        content = json.dumps(info, ensure_ascii=False)
+
+        def save():
+            temporary = job.with_suffix(".tmp")
+            try:
+                temporary.write_text(content, "utf-8")
+                temporary.replace(job)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+        try:
+            await asyncio.to_thread(save)
+        except OSError as exc:
+            logger.warning(
+                "Could not save video task %s; continuing with its in-memory ID: %s",
+                info.get("task_id", ""),
+                exc,
+            )
+            return False
+        return True
+
     async def _generate(self, prompt, images, audios, videos, duration) -> VideoResult:
         create, query, body, headers = self.build_request(
             prompt,
@@ -1005,9 +1037,7 @@ class VideoApiManager(ApiManager):
             "created_at": time.time(),
             "status": status,
         }
-        await asyncio.to_thread(
-            job.write_text, json.dumps(info, ensure_ascii=False), "utf-8"
-        )
+        record_saved = await self._save_job_record(job, info)
         deadline = time.monotonic() + max(1, int(self.config.get("poll_timeout", 900)))
         interval = max(1.0, float(self.config.get("poll_interval", 5)))
         success = {"completed", "succeeded", "success"}
@@ -1036,17 +1066,20 @@ class VideoApiManager(ApiManager):
             normalized = status.strip().lower()
             if normalized in failure:
                 info.update(status=status)
-                await asyncio.to_thread(
-                    job.write_text, json.dumps(info, ensure_ascii=False), "utf-8"
-                )
+                await self._save_job_record(job, info)
                 raise VideoError(f"视频任务失败（ID：{task_id}）：{error or status}")
             if normalized in success or (url and not status):
                 if not url:
                     raise VideoError(f"任务 {task_id} 已完成，但接口未返回视频地址。")
                 break
             if time.monotonic() >= deadline:
+                record_note = (
+                    "任务记录已保留"
+                    if record_saved
+                    else "本地任务记录写入失败，请保存此任务 ID"
+                )
                 raise VideoError(
-                    f"视频等待超时；任务 ID：{task_id}。任务记录已保留，请查询上游结果，勿重复提交。"
+                    f"视频等待超时；任务 ID：{task_id}。{record_note}，请查询上游结果，勿重复提交。"
                 )
             await asyncio.sleep(min(interval, max(0.0, deadline - time.monotonic())))
             try:
@@ -1077,9 +1110,7 @@ class VideoApiManager(ApiManager):
         info.update(status="completed", url=url)
         if url_expires_at:
             info["url_expires_at"] = url_expires_at
-        await asyncio.to_thread(
-            job.write_text, json.dumps(info, ensure_ascii=False), "utf-8"
-        )
+        await self._save_job_record(job, info)
         try:
             path = await self.download_video(url, key, base)
         except (VideoError, OSError) as exc:
@@ -1089,9 +1120,7 @@ class VideoApiManager(ApiManager):
                 url_expires_at,
             ) from exc
         info.update(status="completed", path=str(path))
-        await asyncio.to_thread(
-            job.write_text, json.dumps(info, ensure_ascii=False), "utf-8"
-        )
+        await self._save_job_record(job, info)
         return VideoResult(
             path,
             task_id,

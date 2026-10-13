@@ -168,6 +168,75 @@ class ImageInputOrderTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, ["https://qq.test/photo.png"])
 
+    async def test_strict_collection_rejects_one_bad_image_among_good_images(self):
+        for chain in (
+            [Image("https://good.test/a.png"), Image("")],
+            [Reply([Image("https://good.test/a.png"), Image("")])],
+        ):
+            with (
+                self.subTest(quoted=isinstance(chain[0], Reply)),
+                self.assertRaisesRegex(ValueError, "有参考图片无法解析"),
+            ):
+                await self.manager.extract_image_sources_from_event(
+                    FakeEvent(chain), strict=True
+                )
+        self.assertEqual(
+            await self.manager.extract_image_sources_from_event(
+                FakeEvent([Image("https://good.test/a.png"), Image("")])
+            ),
+            ["https://good.test/a.png"],
+        )
+
+    async def test_strict_quoted_resolver_rejects_a_partially_resolved_batch(self):
+        resolver_module = types.ModuleType(
+            "astrbot.core.utils.quoted_message.image_resolver"
+        )
+        resolver_module.ImageResolver = lambda event: types.SimpleNamespace(
+            resolve_for_llm=AsyncMock(side_effect=[["https://good.test/a.png"], []])
+        )
+        parser_module = types.ModuleType("astrbot.core.utils.quoted_message_parser")
+        parser_module.extract_quoted_message_images = AsyncMock(
+            return_value=["valid-token", "missing-token"]
+        )
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    resolver_module.__name__: resolver_module,
+                    parser_module.__name__: parser_module,
+                },
+            ),
+            self.assertRaisesRegex(ValueError, "有引用图片无法解析"),
+        ):
+            await self.manager.extract_image_sources_from_event(
+                FakeEvent([Reply([])]), strict=True
+            )
+
+    async def test_strict_quoted_sources_keep_distinct_refs_with_the_same_url(self):
+        resolver_module = types.ModuleType(
+            "astrbot.core.utils.quoted_message.image_resolver"
+        )
+        resolve = AsyncMock(return_value=["https://good.test/a.png"])
+        resolver_module.ImageResolver = lambda event: types.SimpleNamespace(
+            resolve_for_llm=resolve
+        )
+        parser_module = types.ModuleType("astrbot.core.utils.quoted_message_parser")
+        parser_module.extract_quoted_message_images = AsyncMock(
+            return_value=["first-token", "second-token"]
+        )
+        with patch.dict(
+            sys.modules,
+            {
+                resolver_module.__name__: resolver_module,
+                parser_module.__name__: parser_module,
+            },
+        ):
+            result = await self.manager.extract_image_sources_from_event(
+                FakeEvent([Reply([])]), strict=True, preserve_duplicates=True
+            )
+        self.assertEqual(result, ["https://good.test/a.png", "https://good.test/a.png"])
+        self.assertEqual(resolve.await_count, 2)
+
     async def test_image_identifiers_are_resolved_for_current_and_quoted_media(self):
         async def resolve_source(event, source):
             return f"https://qq.test/{source}"

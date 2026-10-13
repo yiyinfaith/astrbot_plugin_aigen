@@ -389,6 +389,44 @@ class VideoLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(info["status"], "completed")
         self.assertNotIn("do-not-send-to-media", json.dumps(info))
 
+    async def test_record_storage_failure_does_not_abandon_or_resubmit_paid_task(self):
+        with patch.object(Path, "write_text", side_effect=OSError(28, "disk full")):
+            result = await self.manager.generate("hello", [])
+        self.assertEqual(result.task_id, "task")
+        self.assertEqual(result.path.read_bytes(), MP4)
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.polls, 2)
+        self.assertEqual(list(self.manager.data_dir.glob("*.json")), [])
+        self.assertEqual(list(self.manager.data_dir.glob("*.tmp")), [])
+
+    async def test_failed_record_update_keeps_previous_task_id_intact(self):
+        self.manager.data_dir.mkdir(parents=True, exist_ok=True)
+        job = self.manager.data_dir / "task.json"
+        original = {"task_id": "task", "status": "queued"}
+        job.write_text(json.dumps(original), "utf-8")
+        with patch.object(Path, "replace", side_effect=OSError(28, "disk full")):
+            saved = await self.manager._save_job_record(
+                job, {"task_id": "task", "status": "completed"}
+            )
+        self.assertFalse(saved)
+        self.assertEqual(json.loads(job.read_text("utf-8")), original)
+        self.assertFalse(job.with_suffix(".tmp").exists())
+
+    async def test_timeout_without_saved_record_still_returns_paid_task_id(self):
+        self.manager.config["poll_timeout"] = 1
+        request = AsyncMock(return_value={"id": "task-paid", "status": "queued"})
+        with (
+            patch.object(VideoApiManager, "_json_request", new=request),
+            patch.object(Path, "write_text", side_effect=OSError(28, "disk full")),
+            self.assertRaises(VideoError) as raised,
+        ):
+            await self.manager.generate("hello", [])
+        self.assertIn("task-paid", str(raised.exception))
+        self.assertNotIn("任务记录已保留", str(raised.exception))
+        self.assertEqual(
+            sum(args.args[0] == "POST" for args in request.await_args_list), 1
+        )
+
     async def test_download_retries_use_configured_total_attempts(self):
         self.manager.config["video_delivery_retries"] = 2
         self.download_failures = 1

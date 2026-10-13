@@ -183,6 +183,73 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.plugin.terminate()
 
+    async def test_concurrent_llm_calls_reserve_cooldown_before_media_reads(self):
+        self.plugin.video_conf["llm_cooldown_seconds"] = 60
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_images(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return []
+
+        self.plugin.img_mgr.extract_image_sources_from_event = slow_images
+
+        async def call():
+            return [x async for x in self.plugin.generate_video(Event([]), prompt="猫")]
+
+        first = asyncio.create_task(call())
+        await entered.wait()
+        second = await asyncio.wait_for(call(), 1)
+        self.assertIn("冷却中", second[0])
+        self.plugin.video_mgr.generate.assert_not_awaited()
+        release.set()
+        await first
+        self.plugin.video_mgr.generate.assert_awaited_once()
+
+    async def test_hot_reload_cancels_llm_call_while_it_is_reading_media(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_images(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return []
+
+        self.plugin.img_mgr.extract_image_sources_from_event = slow_images
+
+        async def call():
+            return [x async for x in self.plugin.generate_video(Event([]), prompt="猫")]
+
+        task = asyncio.create_task(call())
+        await entered.wait()
+        self.assertIn(task, self.plugin._video_generation_tasks)
+        await self.plugin.terminate()
+        self.assertTrue(task.cancelled())
+        self.assertFalse(self.plugin._video_generation_tasks)
+        self.plugin.video_mgr.generate.assert_not_awaited()
+        result = await call()
+        self.assertIn("正在重载", result[0])
+        self.plugin.video_mgr.generate.assert_not_awaited()
+
+    async def test_invalid_llm_options_release_cooldown_reservation(self):
+        self.plugin.video_conf["llm_cooldown_seconds"] = 60
+        result = [
+            x
+            async for x in self.plugin.generate_video(
+                Event([]), prompt="猫", duration=1.2
+            )
+        ]
+        self.assertIn("整数", result[0])
+        self.assertFalse(self.plugin._llm_last_call)
+        self.assertFalse(self.plugin._video_generation_tasks)
+        result = [
+            x
+            async for x in self.plugin.generate_video(
+                Event([]), prompt="猫", duration=1
+            )
+        ]
+        self.assertEqual(result, [])
+        self.plugin.video_mgr.generate.assert_awaited_once()
+
     async def test_llm_tool_success_sends_video_only_and_reads_quoted_media(self):
         event = Event(
             [Reply([Image("https://i.test/ref.png"), Record("https://m.test/ref.wav")])]
@@ -475,7 +542,7 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("整数", result[0][0].text)
         self.plugin.video_mgr.generate.assert_not_awaited()
         self.assertEqual(
-            event.sent[0][0].text, "请发送材料，最后发送“/生成”开始生成视频"
+            event.sent[0][0].text, "请发送材料，最后发送“/生成”开始生成视频，60秒超时"
         )
 
     async def test_multimedia_order_and_mention_avatar_are_preserved(self):
