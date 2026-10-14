@@ -550,6 +550,7 @@ class AudioApiManager(VideoApiManager):
                         ".flac": "audio/flac",
                         ".ogg": "audio/ogg",
                         ".m4a": "audio/mp4",
+                        ".aac": "audio/aac",
                         ".amr": "audio/amr",
                         ".silk": "audio/silk",
                     }.get(path.suffix.lower(), "application/octet-stream")
@@ -557,7 +558,12 @@ class AudioApiManager(VideoApiManager):
                     if not (
                         (raw[:4] == b"RIFF" and raw[8:12] == b"WAVE")
                         or raw[:3] == b"ID3"
-                        or (len(raw) > 1 and raw[0] == 255 and raw[1] & 224 == 224)
+                        or (
+                            len(raw) > 1
+                            and raw[0] == 255
+                            and raw[1] & 224 == 224
+                            and raw[1] & 0xF6 != 0xF0
+                        )
                     ):
                         raise VideoError(
                             "OpenAI Chat 参考音频需 WAV 或 MP3，请使用对应音频文件。"
@@ -669,6 +675,7 @@ class AudioApiManager(VideoApiManager):
                 except (ValueError, TypeError) as exc:
                     raise VideoError("自定义接口返回了无效的 Base64 音频。") from exc
         task_id, status, artifact_url, error = self.parse_task(data)
+        error = error.replace(key, "[redacted]")
         failure = {
             "failed",
             "failure",
@@ -733,6 +740,7 @@ class AudioApiManager(VideoApiManager):
                     max(0.01, deadline - time.monotonic()),
                 )
                 _, status, artifact_url, error = self.parse_task(data)
+                error = error.replace(key, "[redacted]")
                 errors = 0
             except (aiohttp.ClientError, asyncio.TimeoutError, VideoError) as exc:
                 errors += 1
@@ -790,7 +798,25 @@ class AudioApiManager(VideoApiManager):
                     "接口未返回可识别的音频数据，请核对原任务，勿重复提交。"
                 )
             path = self.data_dir / (
-                uuid.uuid4().hex + "." + ("wav" if raw[:4] == b"RIFF" else fmt)
+                uuid.uuid4().hex
+                + "."
+                + (
+                    "wav"
+                    if head[:4] == b"RIFF"
+                    else "flac"
+                    if head.startswith(b"fLaC")
+                    else "ogg"
+                    if head.startswith(b"OggS")
+                    else "amr"
+                    if head.startswith(b"#!AMR")
+                    else "silk"
+                    if head.startswith((b"#!SILK", b"\x02#!SILK"))
+                    else "m4a"
+                    if head[4:8] == b"ftyp"
+                    else "aac"
+                    if len(head) > 1 and head[0] == 255 and head[1] & 0xF6 == 0xF0
+                    else "mp3"
+                )
             )
             if (
                 not raw
@@ -875,6 +901,8 @@ class AudioApiManager(VideoApiManager):
                 suffix = ".flac"
             elif head.startswith(b"OggS"):
                 suffix = ".ogg"
+            elif len(head) > 1 and head[0] == 255 and head[1] & 0xF6 == 0xF0:
+                suffix = ".aac"
             elif head.startswith(b"ID3") or (
                 len(head) > 1 and head[0] == 255 and head[1] & 224 == 224
             ):

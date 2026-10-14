@@ -55,6 +55,24 @@ class ImageHttpAuditTest(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(close)
         return manager
 
+    async def test_image_failure_diagnostics_never_echo_configured_api_keys(self):
+        async def handler(request):
+            return web.json_response(
+                {"error": {"message": "invalid credential offline-key"}}, status=401
+            )
+
+        base = await self.server(handler)
+        for mode in (
+            "openai_image",
+            "openai_chat",
+            "openai_response",
+            "gemini_official",
+        ):
+            reply = await self.manager(base, mode).call_api([], "cat", "gpt-image-1")
+            self.assertIsInstance(reply, str)
+            self.assertNotIn("offline-key", reply)
+            self.assertIn("[redacted]", reply)
+
     async def test_compatibility_fallback_preserves_cancellation_and_download_errors(
         self,
     ):
@@ -81,8 +99,17 @@ class ImageHttpAuditTest(unittest.IsolatedAsyncioTestCase):
         self,
     ):
         status = 200
+        failed_task = False
 
         async def handler(request):
+            if failed_task:
+                return web.json_response(
+                    {
+                        "id": "task-failed",
+                        "status": "failed",
+                        "error": {"message": "invalid credential secret"},
+                    }
+                )
             if status == 200:
                 return web.json_response(
                     {"id": "secret-task", "url": "https://media.test/secret-result.mp4"}
@@ -103,6 +130,19 @@ class ImageHttpAuditTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(behavior.api.VideoHttpError) as error:
             await manager._json_request("GET", base, "secret", {})
         self.assertNotIn("secret", str(error.exception))
+        status, failed_task = 200, True
+        with tempfile.TemporaryDirectory() as directory:
+            manager.config.update(
+                base_url=base,
+                model="minimax_h3_lightx2v_no_pic",
+                api_keys="secret",
+                auto_route=False,
+            )
+            manager.data_dir = Path(directory)
+            with self.assertRaises(behavior.router.VideoError) as error:
+                await manager.generate("cat", [])
+            self.assertNotIn("secret", str(error.exception))
+            self.assertIn("[redacted]", str(error.exception))
 
     async def test_ambiguous_rejections_never_submit_another_image_job(self):
         calls = []
@@ -417,6 +457,46 @@ class PluginAuditTest(unittest.IsolatedAsyncioTestCase):
 
 
 class AudioAuditTest(unittest.IsolatedAsyncioTestCase):
+    async def test_inline_audio_suffix_matches_bytes_when_provider_ignores_format(self):
+        for prefix, expected in (
+            (b"ID3", ".mp3"),
+            (b"OggS", ".ogg"),
+            (b"fLaC", ".flac"),
+            (b"\xff\xf1", ".aac"),
+        ):
+            with (
+                self.subTest(expected=expected),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+
+                async def handler(request):
+                    return web.Response(
+                        body=prefix + b"x" * 64, content_type="application/octet-stream"
+                    )
+
+                base = await ImageHttpAuditTest.server(self, handler)
+                manager = behavior.audio_api.AudioApiManager(
+                    {
+                        "model": "tts",
+                        "auto_route": False,
+                        "interface_mode": "openai_speech",
+                        "base_url": base,
+                        "api_keys": "offline-key",
+                        "response_format": "wav",
+                    },
+                    Path(directory),
+                )
+                try:
+                    result = await manager.generate(
+                        behavior.audio_router.AudioOptions(mode="朗读", prompt="hello"),
+                        [],
+                    )
+                    self.assertEqual(result.path.suffix, expected)
+                    self.assertEqual(result.path.read_bytes(), prefix + b"x" * 64)
+                finally:
+                    if manager._session:
+                        await manager._session.close()
+
     async def test_minimax_pcm_preserves_configured_rate_channels_and_duration(self):
         with tempfile.TemporaryDirectory() as directory:
             config = {
@@ -447,6 +527,7 @@ class AudioAuditTest(unittest.IsolatedAsyncioTestCase):
             (".flac", "audio/flac", b"fLaCexample"),
             (".ogg", "audio/ogg", b"OggSexample"),
             (".m4a", "audio/mp4", b"\0\0\0\0ftypaudio"),
+            (".aac", "audio/aac", b"\xff\xf1audio"),
         ):
             with (
                 self.subTest(suffix=suffix),

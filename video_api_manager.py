@@ -1129,6 +1129,7 @@ class VideoApiManager(ApiManager):
                 "视频提交连接中断，任务可能已创建；请先核对上游任务记录，勿立即重复提交。"
             ) from exc
         task_id, status, url, error = self.parse_task(data)
+        error = error.replace(key, "[redacted]")
         url_expires_at = _url_expiry(data, url)
         if not task_id and not url:
             if error:
@@ -1197,6 +1198,7 @@ class VideoApiManager(ApiManager):
                     self._json_request("GET", poll_url, key, headers), remaining
                 )
                 _, status, url, error = self.parse_task(data)
+                error = error.replace(key, "[redacted]")
                 url_expires_at = _url_expiry(data, url) or url_expires_at
                 transient_errors = 0
             except (aiohttp.ClientError, asyncio.TimeoutError, VideoError) as exc:

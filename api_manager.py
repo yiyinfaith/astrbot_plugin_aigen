@@ -1763,6 +1763,9 @@ class ApiManager:
             resolution=resolution,
             image_options=image_options,
         )
+        if isinstance(result, str):
+            for key in self._normalize_keys(self.config.get("api_keys")):
+                result = result.replace(key, "[redacted]")
         if isinstance(result, bytes):
             def verify():
                 try:
