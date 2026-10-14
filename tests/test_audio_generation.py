@@ -318,7 +318,7 @@ class AudioCollectionTest(unittest.IsolatedAsyncioTestCase):
         start, _ = await self.receive("/生音频 朗读")
         self.assertEqual(
             start.sent[0][0].text,
-            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成音频，120秒超时（整个过程共用）",
+            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成音频，120秒超时",
         )
         for text in ["第一句话。", "第二句话！"]:
             event, result = await self.receive(text)

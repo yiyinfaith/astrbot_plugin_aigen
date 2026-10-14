@@ -591,7 +591,7 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.video_mgr.generate.assert_not_awaited()
         self.assertEqual(
             event.sent[0][0].text,
-            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成视频，120秒超时（整个过程共用）",
+            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成视频，120秒超时",
         )
 
     async def test_multimedia_order_and_mention_avatar_are_preserved(self):

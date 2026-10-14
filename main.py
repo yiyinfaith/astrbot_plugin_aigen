@@ -1053,7 +1053,7 @@ class ImageGeneratorPlugin(Star):
                             event.chain_result(
                                 [
                                     Plain(
-                                        f"请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成{label}，{collection['timeout']}秒超时（整个过程共用）"
+                                        f"请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成{label}，{collection['timeout']}秒超时"
                                     )
                                 ]
                             )

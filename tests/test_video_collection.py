@@ -70,7 +70,7 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, [])
         self.assertEqual(
             start.sent[0][0].text,
-            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成视频，120秒超时（整个过程共用）",
+            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成视频，120秒超时",
         )
         for text in ("一只猫在雪地中跑", "镜头平稳跟随", "最后看向镜头"):
             event, result = await self.receive(text)
@@ -343,7 +343,7 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         start, _ = await self.receive("/做视频")
         self.assertEqual(
             start.sent[0][0].text,
-            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成视频，1秒超时（整个过程共用）",
+            "请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成视频，1秒超时",
         )
         collection = next(iter(self.plugin._video_collections.values()))
         deadline = collection["deadline"]
