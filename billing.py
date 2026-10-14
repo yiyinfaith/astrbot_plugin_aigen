@@ -249,6 +249,8 @@ class Expression:
     """
 
     def __init__(self, source: str, *, token_mode=False):
+        self.source = source
+        self.auto_units = token_mode is None
         self.token_mode = token_mode
         self.legacy = False
         try:
@@ -260,6 +262,8 @@ class Expression:
             except BillingError:
                 raise original from None
         self.names = self.parser.names
+        if self.auto_units:
+            self.token_mode = bool(self.names & (TOKENS - {"image_count"}))
         self.usage_keys = getattr(self.parser, "usage_keys", set())
         self.dynamic = bool(
             self.names & USAGE_NAMES
@@ -322,10 +326,13 @@ class Expression:
                 - sum(optional[key] for key in ("img_o", "ao") if key in self.names),
             )
         context["_trace"] = {}
+        if self.auto_units:
+            context["_fixed_scale"] = 1_000_000 if self.token_mode else 1
         value, _tier = self.parser.evaluate_raw(context)
         return units(
             value / 1_000_000
-            if self.token_mode or context["_trace"].get("fixed")
+            if self.token_mode
+            or (not self.auto_units and context["_trace"].get("fixed"))
             else value
         )
 
@@ -385,7 +392,8 @@ class BillingStore:
             db.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS orders_one_running_owner ON orders(owner) WHERE status='running'"
             )
-            db.execute("PRAGMA user_version=2")
+            if db.execute("PRAGMA user_version").fetchone()[0] < 2:
+                db.execute("PRAGMA user_version=2")
         self.path.chmod(0o600)
 
     @contextmanager
@@ -706,7 +714,11 @@ class BillingService:
         model = str(config.get("model", ""))
         matches = [
             rule
-            for rule in self.config.get("billing_prices", [])
+            for rule in (
+                self.finance.rules()
+                if hasattr(self, "finance")
+                else self.config.get("billing_prices", [])
+            )
             if isinstance(rule, dict)
             and str(rule.get("model", "")).strip() == model
             and rule.get("media", "all") in {"all", media}
@@ -747,41 +759,14 @@ class BillingService:
             weekday=now.weekday(),
             **counts,
         )
-        mode = rule.get("mode", "request")
-        if mode in {"expression", "token_expression"}:
-            expression = Expression(
-                str(rule.get("expression", "0")), token_mode=mode == "token_expression"
-            )
-        elif mode == "tokens":
-            input_price, output_price = (
-                units(rule.get("input_price", "0")),
-                units(rule.get("output_price", "0")),
-            )
-            pieces = []
-            if input_price:
-                pieces.append(f"input_tokens * {money(input_price)} / 1000000")
-            if output_price:
-                pieces.append(f"output_tokens * {money(output_price)} / 1000000")
-            expression = Expression(" + ".join(pieces) or "0")
-        elif mode == "autodl_seconds":
-            price = units(rule.get("price", "0"))
-            expression = Expression(
-                f'tier("base", u("seconds") * {money(price)})' if price else "0"
-            )
-        elif mode in {"request", "seconds", "characters"}:
-            price = units(rule.get("price", "0"))
-            expression = Expression(
-                "0"
-                if not price
-                else f"{money(price)}"
-                + {
-                    "request": "",
-                    "seconds": " * seconds",
-                    "characters": " * characters / 1000",
-                }[mode]
-            )
-        else:
-            raise BillingError("不支持的计费方式。")
+        from .model_prices import compile_price
+
+        try:
+            expression = compile_price(rule)
+        except BillingError as exc:
+            raise BillingError("价格设置不合法，请联系管理员配置模型价格。") from exc
+        if getattr(expression, "free", False):
+            return None
         request = {
             key: value
             for key, value in config.items()
@@ -827,7 +812,10 @@ class BillingService:
         if orientation:
             facts["orientation"] = orientation
         values["_usage"] = facts
-        expected = None if expression.dynamic else expression.evaluate(values)
+        try:
+            expected = None if expression.dynamic else expression.evaluate(values)
+        except BillingError as exc:
+            raise BillingError("价格设置不合法，请联系管理员配置模型价格。") from exc
         if expected == 0:
             return None
         return expression, values, expected, dict(rule)
@@ -992,7 +980,16 @@ def track(*, state: str = "", payload=None, raw: str = "", status: int = 0):
                 usage.saved = snapshot
 
 
-async def billed_call(service, event, media: str, config: dict, counts: dict, callback):
+async def billed_call(
+    service,
+    event,
+    media: str,
+    config: dict,
+    counts: dict,
+    callback,
+    *,
+    before_submit=None,
+):
     """Reserve, invoke once and settle independently of artifact delivery.
 
     Args:
@@ -1002,6 +999,7 @@ async def billed_call(service, event, media: str, config: dict, counts: dict, ca
         config: Effective route/model and parameters.
         counts: Input character and material counts.
         callback: Coroutine factory issuing the single generation operation.
+        before_submit: Optional progress sender, invoked only after price checks.
 
     Returns:
         The original adapter result.
@@ -1010,6 +1008,8 @@ async def billed_call(service, event, media: str, config: dict, counts: dict, ca
         raise BillingError("插件正在重载，请稍后重试；未提交生成任务。")
     quote = service.quote(media, config, counts) if service else None
     if quote is None:
+        if before_submit:
+            await before_submit()
         return await callback()
     service.recover_unsettled()
     expression, values, expected, rule = quote
@@ -1026,6 +1026,8 @@ async def billed_call(service, event, media: str, config: dict, counts: dict, ca
     token = CURRENT.set(usage)
     result, error = None, None
     try:
+        if before_submit:
+            await before_submit()
         result = await callback()
         if isinstance(result, bytes) or getattr(result, "path", None):
             usage.state = "completed"

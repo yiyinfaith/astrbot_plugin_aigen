@@ -30,3 +30,5 @@ audio/
 *.mp4
 *.webm
 artifacts/
+output/
+.playwright-cli/

@@ -61,87 +61,11 @@
                 "hint": "条件表达式 hour、weekday 的时区。提交时固定，排队跨时段不改变价格。"
             },
             "billing_prices": {
-                "description": "【计费】模型价格",
-                "type": "template_list",
-                "hint": "始终启用；未配置价格的模型免费。按最终路由模型 ID 精确匹配；同一模型和媒体不能重复。余额单位自定，金额最多六位小数。详见 README 的计费示例。",
+                "description": "旧模型价格迁移数据",
+                "type": "list",
                 "default": [],
-                "templates": {
-                    "model_price": {
-                        "name": "模型价格",
-                        "items": {
-                            "model": {
-                                "description": "模型 ID",
-                                "type": "string",
-                                "default": "",
-                                "hint": "精确匹配实际模型名，包括长视频自动切换后的模型。"
-                            },
-                            "media": {
-                                "description": "适用媒体",
-                                "type": "string",
-                                "default": "all",
-                                "options": [
-                                    "all",
-                                    "image",
-                                    "video",
-                                    "audio"
-                                ],
-                                "labels": [
-                                    "全部",
-                                    "图片",
-                                    "视频",
-                                    "音频"
-                                ]
-                            },
-                            "mode": {
-                                "description": "计费方式",
-                                "type": "string",
-                                "default": "request",
-                                "options": [
-                                    "request",
-                                    "tokens",
-                                    "seconds",
-                                    "autodl_seconds",
-                                    "characters",
-                                    "expression",
-                                    "token_expression"
-                                ],
-                                "labels": [
-                                    "按次",
-                                    "按 Token",
-                                    "按实际成品秒数",
-                                    "AutoDL 工作流按秒（同 NewAPI 用量规则）",
-                                    "按千字符",
-                                    "NewAPI 任务价格表达式",
-                                    "NewAPI Token 价格表达式"
-                                ]
-                            },
-                            "price": {
-                                "description": "单价",
-                                "type": "string",
-                                "default": "0",
-                                "hint": "每次/每实际成品秒/每千字符的价格。AutoDL 按秒使用同插件 usage 规则，IndexTTS-2 最低计费10秒；填0免费。"
-                            },
-                            "input_price": {
-                                "description": "每百万输入 Token 价格",
-                                "type": "string",
-                                "default": "0"
-                            },
-                            "output_price": {
-                                "description": "每百万输出 Token 价格",
-                                "type": "string",
-                                "default": "0"
-                            },
-                            "expression": {
-                                "description": "价格表达式",
-                                "type": "text",
-                                "editor_mode": true,
-                                "editor_language": "javascript",
-                                "default": "0",
-                                "hint": "与 NewAPI 常用计费表达式相同：tier(\"base\", u(\"seconds\") * 0.1)，按画质可用 u(\"resolution\") == \"768p\" ? ... : ...；支持 param/u/hour/weekday/fixed 等。任务表达式直接返回单次金额；Token表达式按百万token单位，结算除以1000000。详见 README。"
-                            }
-                        }
-                    }
-                }
+                "invisible": true,
+                "hint": "仅用于将已有价格一次性迁移到插件 WebUI；运行中的价格在插件页面管理。"
             }
         }
     },

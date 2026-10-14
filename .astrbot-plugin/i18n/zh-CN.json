@@ -1,0 +1,8 @@
+{
+  "pages": {
+    "admin": {
+      "title": "AIGen 管理中心",
+      "description": "管理模型定价、充值卡密、用户余额与兑换记录。"
+    }
+  }
+}

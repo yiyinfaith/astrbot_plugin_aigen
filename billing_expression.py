@@ -327,7 +327,7 @@ class PricingExpression:
             if function == "fixed":
                 if isinstance(values.get("_trace"), dict):
                     values["_trace"]["fixed"] = True
-                return number(args[0]) * 1_000_000
+                return number(args[0]) * values.get("_fixed_scale", 1_000_000)
             if function == "u":
                 if "_usage" not in values:
                     raise BillingExpressionError("缺少实际任务用量。")

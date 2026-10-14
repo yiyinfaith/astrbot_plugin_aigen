@@ -35,6 +35,8 @@ from .billing_commands import COMMANDS as BILLING_COMMANDS
 from .billing_commands import handle_command
 from .config_manager import media_config, migrate_config
 from .data_manager import DataManager
+from .finance_store import FinanceStore
+from .finance_web import FinanceWebUI
 from .generation_capabilities import (
     AUDIO,
     IMAGE,
@@ -61,7 +63,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.2",
+    "1.4.3",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -87,6 +89,12 @@ class ImageGeneratorPlugin(Star):
         self.billing = BillingService(
             data_dir / "billing.sqlite3", config.get("global_settings", {})
         )
+        self.finance = FinanceStore(
+            self.billing.store,
+            config.get("global_settings", {}).get("billing_prices", []),
+        )
+        self.billing.finance = self.finance
+        self._finance_api = FinanceWebUI(context, self.finance)
         self.conf = media_config(config, "image")
         self.video_conf = media_config(config, "video")
         self.audio_conf = media_config(config, "audio")
@@ -122,6 +130,8 @@ class ImageGeneratorPlugin(Star):
     async def terminate(self):
         """Close the reusable HTTP session during hot reload."""
         self._terminating = True
+        if getattr(self, "_finance_api", None):
+            await self._finance_api.close()
         if getattr(self, "billing", None):
             self.billing.closed = True
         self._video_collections.clear()
@@ -169,6 +179,7 @@ class ImageGeneratorPlugin(Star):
                     datetime.now(timezone.utc).timestamp()
                     - max(1, int(self.audio_conf.get("cache_hours", 24))) * 3600
                 )
+
                 def cleanup_audio(cutoff=audio_cutoff, manager=audio_mgr):
                     for path in manager.data_dir.glob("*"):
                         if path.is_file() and path.stat().st_mtime < cutoff:
@@ -411,8 +422,6 @@ class ImageGeneratorPlugin(Star):
         feedback = template.replace("{preset}", display_name)
         if not display_name:
             feedback = feedback.replace(" [{preset}]", "").replace("[{preset}]", "")
-        if show_progress:
-            await event.send(event.chain_result([Plain(feedback)]))
 
         source_url = ""
         source_expiry = ""
@@ -452,6 +461,11 @@ class ImageGeneratorPlugin(Star):
                     proxy=self.img_mgr.proxy,
                     image_options=image_options,
                 ),
+                before_submit=(
+                    lambda: event.send(event.chain_result([Plain(feedback)]))
+                )
+                if show_progress
+                else None,
             )
         except BillingError as exc:
             return [Plain(str(exc))]
@@ -972,7 +986,8 @@ class ImageGeneratorPlugin(Star):
                 same_chat = (
                     owner[1] == key[1]
                     and owner[0].split(":", 1)[0] == key[0].split(":", 1)[0]
-                    if key[1] else owner == key
+                    if key[1]
+                    else owner == key
                 )
                 if same_chat and owner != key:
                     remaining = max(0, int(active["deadline"] - monotonic()))
@@ -1308,17 +1323,8 @@ class ImageGeneratorPlugin(Star):
         """
         try:
             prepared = self.audio_mgr.prepare(options, audios)
-            if not tool_call:
-                label = "文字" if options.mode == "朗读" else "提示词"
-                await event.send(
-                    event.chain_result(
-                        [
-                            Plain(
-                                f"共收到0图片，{len(audios)}音频，0视频，{options.prompt_segments}段{label}，生成中"
-                            )
-                        ]
-                    )
-                )
+            label = "文字" if options.mode == "朗读" else "提示词"
+            feedback = f"共收到0图片，{len(audios)}音频，0视频，{options.prompt_segments}段{label}，生成中"
             effective = prepared[1].config if prepared else {}
             result = await billed_call(
                 getattr(self, "billing", None),
@@ -1332,6 +1338,11 @@ class ImageGeneratorPlugin(Star):
                     "videos": 0,
                 },
                 lambda: self.audio_mgr.generate(options, audios),
+                before_submit=(
+                    lambda: event.send(event.chain_result([Plain(feedback)]))
+                )
+                if not tool_call
+                else None,
             )
         except AudioDownloadError as exc:
             return [
@@ -1436,7 +1447,6 @@ class ImageGeneratorPlugin(Star):
                 f"共收到{len(images)}图片，{len(audios or [])}音频，"
                 f"{len(videos or [])}视频，{prompt_segments}段提示词，生成中"
             )
-            await event.send(event.chain_result([Plain(feedback)]))
         try:
             effective = prepared[1].config if prepared else {}
             if prepared:
@@ -1462,6 +1472,11 @@ class ImageGeneratorPlugin(Star):
                 lambda: self.video_mgr.generate(
                     prompt, images, audios, videos, duration, options
                 ),
+                before_submit=(
+                    lambda: event.send(event.chain_result([Plain(feedback)]))
+                )
+                if not tool_call
+                else None,
             )
         except VideoDownloadError as exc:
             logger.warning("视频本地下载失败，准备使用公网链接回退：%s", exc)

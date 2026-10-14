@@ -431,9 +431,9 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
         finally:
             b.CURRENT.reset(token)
         self.service.store = b.BillingStore(self.service.store.path)
-        reply = commands.handle_command(self.service, Identity(admin=True), "计费订单")
-        self.assertIn("upstream-123", reply)
-        self.assertIn("input_tokens", reply)
+        _, rows = self.service.store.listing("orders", self.owner)
+        self.assertIn("upstream-123", rows[0]["details"])
+        self.assertIn("input_tokens", rows[0]["details"])
         self.assertEqual(self.balance(), (10000000, 0))
 
     async def test_database_settlement_failure_does_not_discard_paid_media(self):
@@ -512,15 +512,21 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(orders[0]["status"], "settled")
         self.assertIn("task-123", orders[0]["details"])
 
-    async def test_admin_commands_guard_secrets_and_cross_user_history(self):
-        response = commands.handle_command(self.service, self.event, "生成卡密 3 1")
-        self.assertIn("管理员", response)
-        admin = Identity(admin=True, group="group")
-        self.assertIn("私聊", commands.handle_command(self.service, admin, "剩余卡密"))
-        admin.group = ""
-        reply = commands.handle_command(self.service, admin, "生成卡密 2 1")
-        card = reply.splitlines()[-1]
-        self.assertIn(card, commands.handle_command(self.service, admin, "剩余卡密"))
+    async def test_removed_admin_commands_cannot_change_or_expose_finances(self):
+        for command in (
+            "生成卡密 3 1",
+            "剩余卡密",
+            "作废卡密 x",
+            "计费订单",
+            "结算订单 x 0",
+            "模型价格",
+        ):
+            self.assertIn(
+                "不支持",
+                commands.handle_command(self.service, Identity(admin=True), command),
+            )
+        self.assertEqual(self.balance(), (10000000, 0))
+        card = self.service.store.create_cards(self.owner, "2", 1)[0]
         self.assertIn(
             "成功",
             commands.handle_command(self.service, self.event, "兑换卡密 " + card),
@@ -534,25 +540,6 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
             "共 0 条",
             commands.handle_command(self.service, Identity(uid="other"), "我的账单"),
         )
-
-    async def test_card_revocation_and_manual_refund_commands(self):
-        admin = Identity(admin=True)
-        reply = commands.handle_command(self.service, admin, "生成卡密 2")
-        card = reply.splitlines()[-1]
-        self.assertIn(
-            "已作废", commands.handle_command(self.service, admin, "作废卡密 " + card)
-        )
-        self.assertIn(
-            "无效",
-            commands.handle_command(self.service, self.event, "兑换卡密 " + card),
-        )
-        order = self.service.store.begin(self.owner, "video", "m", 1000000, {})
-        self.service.store.finish(order, None, "unknown")
-        self.assertIn(
-            "已结算",
-            commands.handle_command(self.service, admin, f"结算订单 {order} 0"),
-        )
-        self.assertEqual(self.balance(), (10000000, 0))
 
 
 class UsageTest(unittest.TestCase):

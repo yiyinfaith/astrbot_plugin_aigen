@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="data:," />
+    <title>AIGen 管理中心</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script defer src="./vendor/vue.global.prod.js"></script>
+    <script defer src="./vendor/liquid-glass.js"></script>
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <div id="app" v-cloak>
+      <div class="wallpaper" aria-hidden="true"></div>
+      <main class="workspace">
+        <header class="masthead">
+          <div class="brand"><glass-orb ></glass-orb><div><p class="eyebrow">AIGEN · ADMIN</p><h1>管理中心</h1></div></div>
+          <div class="header-actions"><span class="connection" :class="{online: loaded}">{{ loaded ? '账本已连接' : '正在连接' }}</span><button class="icon-button" aria-label="刷新全部数据" :disabled="busy || loading" @click="refreshAll()">↻</button></div>
+        </header>
+        <section class="metrics" aria-label="账本概览">
+          <div class="metric"><span>模型定价</span><strong>{{ overview.models }}</strong><small>已配置模型</small></div>
+          <div class="metric"><span>有效卡密</span><strong>{{ activeCards }}</strong><small>{{ overview.categories.length }} 种面额</small></div>
+          <div class="metric"><span>用户与扣费</span><strong>{{ overview.users }} <em>位</em></strong><small>累计扣费 {{ overview.charged }} · {{ overview.running }} 个生成中</small></div>
+        </section>
+        <div v-if="error" class="notice error" role="alert">{{ error }}<button v-if="loaded" @click="error=''" aria-label="关闭错误提示">×</button></div>
+        <div v-if="notice" class="notice success" role="status">{{ notice }}</div>
+        <div v-if="loading && !loaded" class="initial-loading"><span class="spinner"></span><h2>正在连接管理中心</h2><p>读取模型定价、卡密与账本记录。</p></div>
+        <template v-if="loaded">
+          <section v-if="tab===0" class="page-section">
+            <div class="section-heading"><div><p class="eyebrow">MODEL PRICING</p><h2>模型定价</h2><p>填写表达式，费用和档位会自动解析。</p></div><button class="quiet-button" :disabled="busy" @click="newPrice()">＋ 添加模型</button></div>
+            <div class="pricing-layout">
+              <aside class="panel model-list"><label class="search-field"><span>⌕</span><input v-model="priceSearch" placeholder="搜索模型 ID" aria-label="搜索模型 ID" /></label><p class="list-label">{{ filteredPrices.length }} 个模型</p><button v-for="row in filteredPrices" :key="row.id" class="model-row" :class="{selected: draft.id===row.id}" :disabled="busy" @click="selectPrice(row)"><span>{{ row.model }}</span><i :class="row.valid ? 'valid-dot' : 'invalid-dot'"></i></button><p v-if="!filteredPrices.length" class="empty">尚无模型价格。未定价模型免费。</p></aside>
+              <section class="panel editor-panel"><div class="panel-title"><h3>{{ draft.id ? '编辑模型' : '添加模型' }}</h3><span class="badge">{{ dirty ? '未保存' : '已同步' }}</span></div><label class="field">模型 ID<input v-model="draft.model" :disabled="busy" placeholder="例如 IndexTTS-2" @input="schedulePreview" /></label><label class="field">价格表达式<textarea v-model="draft.expression" :disabled="busy" spellcheck="false" rows="9" placeholder='tier("base", u("seconds") * 0.1)' @input="schedulePreview"></textarea></label><div class="expression-note">留空或填 0 免费。使用 p、c 等 Token 变量时，单价按百万 Token 结算。</div><div class="example-chips"><button v-for="example in examples" :key="example.name" :disabled="busy" @click="useExample(example)">{{ example.name }}</button></div><div class="editor-footer"><button v-if="draft.id" class="text-danger" :disabled="busy" @click="requestDeletePrice">删除此模型</button><span v-else>按最终路由模型 ID 匹配。</span><glass-button label="保存模型价格" :disabled="busy || !draft.model.trim()" @activate="savePrice" ></glass-button></div></section>
+              <aside class="panel preview-panel"><div class="panel-title"><h3>费用预览</h3><span class="badge" :class="preview.valid ? 'green' : 'red'">{{ validating ? '解析中' : preview.valid ? '解析成功' : '表达式不合法' }}</span></div><p class="preview-model">{{ draft.model || '填写模型 ID' }}</p><p v-if="!preview.valid" class="validation-error">{{ preview.detail || '表达式不合法' }}</p><p v-else class="muted">价格使用余额单位，成功后按实际用量结算。</p><glass-preview v-if="preview.valid && preview.tiers.length" :tiers="preview.tiers" ></glass-preview><div v-if="!preview.valid" class="preview-invalid">此规则保存后，该模型的生成请求会被拦截，并提示用户联系管理员配置价格。</div></aside>
+            </div>
+          </section>
+          <section v-if="tab===1" class="page-section">
+            <div class="section-heading"><div><p class="eyebrow">RECHARGE CARDS</p><h2>卡密管理</h2><p>按面额分类，查看有效卡密与兑换历史。</p></div><glass-button label="生成卡密" :disabled="busy" @activate="openCreateCards" ></glass-button></div>
+            <div class="cards-summary"><aside class="panel redemption-panel"><div class="ring-heading"><h3>卡密兑换率</h3><small>{{ redeemedCards }} 张已兑换</small></div><glass-ring :value="redemptionPercent"></glass-ring></aside><div class="denominations"><button class="denomination" :class="{selected: cardFilter.denomination===''}" @click="chooseDenomination('')"><span>全部面额</span><strong>{{ activeCards }}</strong><small>有效卡密</small></button><button v-for="group in overview.categories" :key="group.amount" class="denomination" :class="{selected: cardFilter.denomination===group.amount}" @click="chooseDenomination(group.amount)"><span>面额 {{ group.amount }}</span><strong>{{ group.active }}</strong><small>有效 · {{ group.redeemed }} 已兑换</small></button></div></div>
+            <section class="panel table-panel"><div class="table-toolbar"><div class="segmented"><button v-for="state in cardStates" :key="state.value" :disabled="busy" :class="{active:cardFilter.status===state.value}" @click="cardFilter.status=state.value;cardFilter.page=1;loadCards()">{{ state.label }}</button></div><label class="search-field"><span>⌕</span><input v-model="cardFilter.search" placeholder="卡密或用户 ID" @keyup.enter="cardFilter.page=1;loadCards()" /></label></div><div class="selection-bar"><label><input type="checkbox" :checked="allCardsSelected" @change="toggleAllCards" /> 本页有效卡密</label><span>已选 {{ selectedCodes.length }} 张</span><button :disabled="!selectedCodes.length" @click="exportCodes">导出选中卡密</button><button class="text-danger" :disabled="busy || !selectedCodes.length" @click="requestDeleteCards">删除选中</button></div><div class="table-scroll"><table><thead><tr><th></th><th>卡密</th><th>面额</th><th>状态</th><th>兑换用户</th><th>创建 / 兑换时间</th></tr></thead><tbody><tr v-for="row in cards.rows" :key="row.code"><td><input v-if="!row.redeemed_by" type="checkbox" :value="row.code" v-model="selectedCodes" aria-label="选择卡密" /></td><td><code>{{ row.code }}</code></td><td>{{ row.amount }}</td><td><span class="badge" :class="cardState(row).class">{{ cardState(row).label }}</span></td><td>{{ row.user_id && !row.user_id.startsWith('[') ? row.platform+' · '+row.user_id : '—' }}</td><td>{{ row.created }}<small class="block">{{ row.redeemed_at || '尚未兑换' }}</small></td></tr></tbody></table></div><p v-if="!cards.rows.length" class="empty">此分类下没有卡密。</p><div class="pagination"><span>共 {{ cards.total }} 张</span><button :disabled="cardFilter.page<=1 || busy" @click="cardFilter.page--;loadCards()">上一页</button><span>{{ cardFilter.page }} / {{ pages(cards.total) }}</span><button :disabled="cardFilter.page>=pages(cards.total) || busy" @click="cardFilter.page++;loadCards()">下一页</button></div></section>
+          </section>
+          <section v-if="tab===2" class="page-section">
+            <div class="section-heading"><div><p class="eyebrow">USERS & HISTORY</p><h2>用户与记录</h2><p>管理余额，查询兑换、生成扣费及管理员操作。</p></div><button class="quiet-button" :disabled="busy" @click="openBalance()">＋ 设置用户余额</button></div>
+            <section class="panel table-panel"><div class="table-toolbar"><div class="segmented wrap"><button v-for="item in recordKinds" :key="item.value" :disabled="busy" :class="{active:recordKind===item.value}" @click="changeRecordKind(item.value)">{{ item.label }}</button></div><label class="search-field"><span>⌕</span><input v-model="recordFilter.search" placeholder="搜索用户、模型或记录" @keyup.enter="recordFilter.page=1;loadRecords()" /></label></div>
+              <div v-if="recordKind==='users'" class="balance-filter"><div><strong>仅显示负余额</strong><small>快速找到需要补足余额的用户</small></div><glass-toggle :value="negativeOnly" :disabled="busy" @select="toggleNegative" ></glass-toggle></div>
+              <div class="table-scroll"><table v-if="recordKind==='users'"><thead><tr><th>平台</th><th>用户 ID</th><th>当前余额</th><th>操作</th></tr></thead><tbody><tr v-for="row in records.rows" :key="row.owner"><td>{{ row.platform }}</td><td><code>{{ row.user_id }}</code></td><td class="amount" :class="{'negative':Number(row.amount)<0}">{{ row.amount }}</td><td><button class="row-action" :disabled="busy" @click="openBalance(row)">修改余额</button></td></tr></tbody></table>
+                <table v-else-if="recordKind==='redemptions'"><thead><tr><th>用户</th><th>充值金额</th><th>卡密</th><th>兑换时间</th></tr></thead><tbody><tr v-for="row in records.rows" :key="row.code"><td>{{ row.platform }} · {{ row.user_id }}</td><td class="amount">＋{{ row.amount }}</td><td><code>{{ row.code }}</code></td><td>{{ row.redeemed_at }}</td></tr></tbody></table>
+                <table v-else-if="recordKind==='orders'"><thead><tr><th>用户 / 模型</th><th>扣费</th><th>状态</th><th>订单详情</th></tr></thead><tbody><tr v-for="row in records.rows" :key="row.id"><td>{{ row.platform }} · {{ row.user_id }}<small class="block">{{ row.model }}</small></td><td class="amount">{{ row.charged ?? '待结算' }}</td><td><span class="badge">{{ orderState(row.status) }}</span></td><td><code>{{ row.id }}</code><small class="block note">{{ row.note }}</small></td></tr></tbody></table>
+                <table v-else><thead><tr><th>管理员</th><th>操作</th><th>详情</th><th>时间</th></tr></thead><tbody><tr v-for="row in records.rows" :key="row.id"><td>{{ row.actor }}</td><td>{{ auditKind(row.kind) }}</td><td class="note">{{ auditDetail(row) }}</td><td>{{ row.created }}</td></tr></tbody></table></div>
+              <p v-if="!records.rows.length" class="empty">没有匹配的记录。</p><div class="pagination"><span>共 {{ records.total }} 条</span><button :disabled="recordFilter.page<=1 || busy" @click="recordFilter.page--;loadRecords()">上一页</button><span>{{ recordFilter.page }} / {{ pages(records.total) }}</span><button :disabled="recordFilter.page>=pages(records.total) || busy" @click="recordFilter.page++;loadRecords()">下一页</button></div></section>
+          </section>
+        </template>
+      </main>
+      <glass-nav v-if="loaded" :selected="tab" @select="changeTab" ></glass-nav>
+      <div v-if="modal" class="modal-backdrop" @click.self="closeModal">
+        <section class="modal-panel panel" role="dialog" aria-modal="true" :aria-label="modal.title" @keydown.esc="closeModal">
+          <div class="panel-title"><h3>{{ modal.title }}</h3><button class="icon-button" :disabled="busy" @click="closeModal" aria-label="关闭弹窗">×</button></div>
+          <template v-if="modal.kind==='create'"><label class="field">每张面额<input v-model="cardDraft.amount" inputmode="decimal" placeholder="例如 10" :disabled="busy" /></label><label class="field">生成数量<input v-model.number="cardDraft.count" type="number" min="1" max="100" :disabled="busy" /></label><glass-slider :value="cardDraft.count" @select="cardDraft.count=$event" ></glass-slider><p class="muted">每批最多 100 张。生成后会放入对应面额分类。</p><glass-button label="确认生成卡密" :disabled="busy" @activate="createCards" ></glass-button></template>
+          <template v-else-if="modal.kind==='balance'"><div class="field-grid"><label class="field">平台类型<input v-model="balanceDraft.platform" :disabled="busy || balanceDraft.existing" placeholder="aiocqhttp" /></label><label class="field">用户 ID<input v-model="balanceDraft.user_id" :disabled="busy || balanceDraft.existing" /></label></div><p class="balance-current">当前余额 <strong>{{ balanceDraft.expected }}</strong></p><label class="field">修改后余额<input v-model="balanceDraft.amount" inputmode="decimal" :disabled="busy" /></label><label class="field">修改原因<input v-model="balanceDraft.reason" :disabled="busy" placeholder="例如人工充值、更正余额" /></label><glass-button label="确认修改余额" :disabled="busy" @activate="setBalance" ></glass-button></template>
+          <template v-else-if="modal.kind==='generated'"><p>已生成 {{ generated.codes.length }} 张，每张 {{ generated.amount }}。</p><textarea class="generated-codes" readonly :value="generated.codes.join('\n')" aria-label="已生成卡密"></textarea><glass-button label="导出本批卡密" @activate="downloadCodes(generated.codes, 'aigen-cards-'+generated.amount+'.txt')" ></glass-button></template>
+          <glass-dialog v-else :title="modal.title" :body="modal.body" :disabled="busy" @confirm="confirmModal" @cancel="closeModal" ></glass-dialog>
+        </section>
+      </div>
+    </div>
+    <noscript><p>AIGen 管理中心需要启用 JavaScript。</p></noscript>
+  </body>
+</html>
