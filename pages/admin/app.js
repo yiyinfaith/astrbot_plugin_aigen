@@ -13,7 +13,7 @@ const app = createApp({
       priceRows: [], priceRevision: 0, priceSearch: '', draft: { id: null, model: '', expression: '0' },
       originalDraft: JSON.stringify(['', '0']), preview: { valid: true, tiers: [] }, validating: false, previewSequence: 0, previewTimer: null,
       cards: { rows: [], total: 0 }, selectedCodes: [], cardFilter: { page: 1, status: 'active', denomination: '', search: '' },
-      cardSequence: 0, recordSequence: 0,
+      cardSequence: 0, recordSequence: 0, cardsLoading: false, recordsLoading: false,
       records: { rows: [], total: 0 }, recordKind: 'users', recordFilter: { page: 1, search: '' }, negativeOnly: false,
       cardDraft: { amount: '10', count: 10 }, generated: { amount: '', codes: [] },
       balanceDraft: { platform: 'aiocqhttp', user_id: '', expected: '0', amount: '0', reason: '', existing: false },
@@ -132,8 +132,10 @@ const app = createApp({
     },
     async loadCards() {
       const sequence = ++this.cardSequence;
+      this.cardsLoading = true; this.selectedCodes = []; this.cards = { rows: [], total: 0 };
       try { const result = await this.get('cards', { ...this.cardFilter }); if (sequence === this.cardSequence) { this.cards = result; this.selectedCodes = []; } }
       catch (error) { if (sequence === this.cardSequence) this.error = error.message || String(error); }
+      finally { if (sequence === this.cardSequence) this.cardsLoading = false; }
     },
     chooseDenomination(amount) { if (this.busy) return; this.cardFilter.denomination = amount; this.cardFilter.page = 1; this.run(() => this.loadCards()); },
     toggleAllCards(event) { this.selectedCodes = event.target.checked ? this.cards.rows.filter(row => !row.redeemed_by).map(row => row.code) : []; },
@@ -149,12 +151,13 @@ const app = createApp({
       });
     },
     requestDeleteCards() {
+      if (this.busy || this.cardsLoading || !this.selectedCodes.length) return;
       const codes = [...this.selectedCodes];
       this.confirm('删除有效卡密', '将删除选中的 ' + codes.length + ' 张有效卡密，使其无法再兑换。已兑换记录会保留。', () => this.run(async () => {
         await this.mutate('delete-cards', { codes }); this.overview = await this.get('overview'); await this.loadCards(); this.showNotice('选中的卡密已删除。');
       }));
     },
-    exportCodes() { this.downloadCodes(this.selectedCodes, 'aigen-active-cards.txt'); },
+    exportCodes() { if (!this.cardsLoading) this.downloadCodes(this.selectedCodes, 'aigen-active-cards.txt'); },
     downloadCodes(codes, filename) {
       const url = URL.createObjectURL(new Blob([codes.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' }));
       const link = document.createElement('a'); link.href = url; link.download = filename; link.click();
@@ -162,8 +165,10 @@ const app = createApp({
     },
     async loadRecords() {
       const sequence = ++this.recordSequence;
+      this.recordsLoading = true; this.records = { rows: [], total: 0 };
       try { const result = await this.get(this.recordKind, { ...this.recordFilter, status: this.recordKind === 'users' && this.negativeOnly ? 'negative' : 'all' }); if (sequence === this.recordSequence) this.records = result; }
       catch (error) { if (sequence === this.recordSequence) this.error = error.message || String(error); }
+      finally { if (sequence === this.recordSequence) this.recordsLoading = false; }
     },
     changeRecordKind(value) { if (this.busy) return; this.recordKind = value; this.recordFilter.page = 1; this.records = { rows: [], total: 0 }; return this.loadRecords(); },
     toggleNegative(value) { this.negativeOnly = value; this.recordFilter.page = 1; return this.run(() => this.loadRecords()); },

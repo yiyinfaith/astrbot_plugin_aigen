@@ -171,6 +171,25 @@ class FinanceStoreTest(unittest.TestCase):
         with self.assertRaises(storage.FinanceConflict):
             self.finance.save_prices("admin", self.operation(), 0, [])
 
+    def test_normalizing_an_imported_model_does_not_change_price_units(self):
+        path = Path(self.directory.name) / "legacy.sqlite3"
+        old = {"model": " m ", "mode": "expression", "expression": "p * 2"}
+        manager = storage.FinanceStore(b.BillingStore(path), [old])
+        row = manager.prices()["rows"][0]
+        manager.save_prices(
+            "admin",
+            self.operation(),
+            0,
+            [{"id": row["id"], "model": "m", "expression": old["expression"]}],
+        )
+        current = manager.rules()[0]
+        self.assertEqual(current["model"], "m")
+        self.assertEqual(current["mode"], "expression")
+        self.assertEqual(
+            pricing.compile_price(current).evaluate({"input_tokens": 1000}),
+            pricing.compile_price(old).evaluate({"input_tokens": 1000}),
+        )
+
 
 class FinancePriceTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -270,6 +289,127 @@ class FinancePriceTest(unittest.IsolatedAsyncioTestCase):
             700000,
         )
         self.assertTrue(pricing.compile_price({"expression": "p * 0 + c * 0"}).free)
+
+    async def test_fixed_and_token_units_do_not_make_a_paid_formula_free(self):
+        source = "p * 0 + fixed(1) - 1"
+        rule = {"model": "m", "expression": source}
+        expression = pricing.compile_price(rule)
+        self.assertFalse(expression.free)
+        self.assertEqual(expression.evaluate({"input_tokens": 123}), 999999)
+        self.finance.save_prices("admin", uuid.uuid4().hex, 0, [rule])
+
+        async def generate():
+            b.track(payload={"usage": {"input_tokens": 123}})
+            return b"image"
+
+        await b.billed_call(
+            self.service, self.event, "image", {"model": "m"}, {}, generate
+        )
+        self.assertEqual(self.service.store.balance(self.fixture.owner)[0], 9000001)
+        rule = {"model": "m", "mode": "token_expression", "expression": "fixed(1) - 2"}
+        self.assertEqual(pricing.compile_price(rule).evaluate({}), 999998)
+        self.assertTrue(web.FinanceWebUI.preview(rule)["valid"])
+
+    def test_legacy_conditional_preview_preserves_each_branches_units(self):
+        preview = web.FinanceWebUI.preview(
+            {
+                "model": "m",
+                "mode": "expression",
+                "expression": 'u("quality") == "high" ? fixed(0.2) : 0.1',
+            }
+        )
+        self.assertEqual(preview["tiers"][0]["fees"], ["每次：0.2"])
+        self.assertEqual(preview["tiers"][1]["fees"], ["每次：0.1"])
+
+    def test_extreme_numeric_literals_have_bounded_previews_and_clear_errors(self):
+        self.assertEqual(pricing._number(b.Decimal("1e-1000000000")), "1E-1000000000")
+        self.assertEqual(pricing._number(b.Decimal("0e-1000000000")), "0")
+        preview = web.FinanceWebUI.preview(
+            {"model": "m", "expression": 'u("seconds") * 1e-9999999999999999999999'}
+        )
+        self.assertFalse(preview["valid"])
+        self.assertFalse(
+            web.FinanceWebUI.preview(
+                {"model": "m", "expression": 'u("seconds") % 0.5'}
+            )["valid"]
+        )
+        for source in (
+            'u("seconds") ? 1 : 2',
+            'u("resolution") * u("seconds")',
+            'hour("Local") < 8 ? 1 : 2',
+        ):
+            self.assertFalse(
+                web.FinanceWebUI.preview({"model": "m", "expression": source})["valid"]
+            )
+
+    async def test_bad_usage_type_is_rejected_before_a_paid_submission(self):
+        self.finance.save_prices(
+            "admin",
+            uuid.uuid4().hex,
+            0,
+            [{"model": "m", "expression": 'u("seconds") ? 1 : 2'}],
+        )
+        submit = AsyncMock(return_value=b"media")
+        with self.assertRaisesRegex(b.BillingError, "价格设置不合法"):
+            await b.billed_call(
+                self.service, self.event, "video", {"model": "m"}, {}, submit
+            )
+        submit.assert_not_awaited()
+
+    async def test_missing_header_context_is_rejected_before_dynamic_generation(self):
+        self.finance.save_prices(
+            "admin",
+            uuid.uuid4().hex,
+            0,
+            [
+                {
+                    "model": "m",
+                    "expression": 'header("x-plan") == "vip" ? u("seconds") * 0.1 : u("seconds") * 0.2',
+                }
+            ],
+        )
+        submit = AsyncMock(return_value=b"media")
+        with self.assertRaisesRegex(b.BillingError, "价格设置不合法"):
+            await b.billed_call(
+                self.service, self.event, "video", {"model": "m"}, {}, submit
+            )
+        submit.assert_not_awaited()
+
+    async def test_reload_cancels_free_image_before_it_can_submit(self):
+        from test_video_plugin import plugin_class
+
+        plugin = plugin_class().__new__(plugin_class())
+        plugin.billing = self.service
+        plugin.api_mgr = plugin.video_mgr = None
+        plugin._cleanup_task = None
+        plugin._video_collections = {}
+        plugin._video_generation_tasks = set()
+        plugin._video_collection_tasks = set()
+        entered = asyncio.Event()
+
+        async def progress():
+            entered.set()
+            await asyncio.Event().wait()
+
+        submit = AsyncMock(return_value=b"image")
+        task = asyncio.create_task(
+            b.billed_call(
+                self.service,
+                self.event,
+                "image",
+                {"model": "unpriced"},
+                {},
+                submit,
+                before_submit=progress,
+            )
+        )
+        await entered.wait()
+        await plugin.terminate()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        submit.assert_not_awaited()
+        self.assertFalse(self.service.tasks)
+        self.assertEqual(self.service.store.balance(self.fixture.owner)[0], 10000000)
 
     def test_preview_formats_token_seconds_tiers_and_reports_invalid_rules(self):
         preview = web.FinanceWebUI.preview(

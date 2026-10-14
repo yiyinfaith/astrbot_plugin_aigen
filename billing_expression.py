@@ -165,7 +165,10 @@ class PricingExpression:
         elif token in {"true", "false", "nil"}:
             left = ("literal", {"true": True, "false": False, "nil": None}[token])
         elif token[0].isdigit() or token.startswith("."):
-            value = Decimal(token)
+            try:
+                value = Decimal(token)
+            except InvalidOperation as exc:
+                raise BillingExpressionError("价格表达式数值格式越界。") from exc
             if not value.is_finite() or abs(value) > Decimal("1e18"):
                 raise BillingExpressionError("价格表达式数值越界。")
             left = ("literal", value)

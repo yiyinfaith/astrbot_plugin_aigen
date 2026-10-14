@@ -182,13 +182,16 @@ class FinanceStore:
             saved = []
             for row in validated:
                 original = originals.get(row["id"])
-                if isinstance(original, dict) and original.get("model") == row["model"]:
+                if (
+                    isinstance(original, dict)
+                    and str(original.get("model", "")).strip() == row["model"]
+                ):
                     try:
                         source = compile_price(original).source
                     except BillingError:
                         source = original.get("expression", "")
                     if source == row["expression"]:
-                        saved.append(original)
+                        saved.append({**original, "model": row["model"]})
                         continue
                 saved.append({"model": row["model"], "expression": row["expression"]})
             db.execute("DELETE FROM model_prices")

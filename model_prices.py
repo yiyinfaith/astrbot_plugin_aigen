@@ -40,11 +40,12 @@ LABELS = {
 }
 
 
-def _validate(node):
+def _validate(node, fixed_scale=Decimal(1)):
     """Type-check known values without supplying invented request or usage facts.
 
     Args:
         node: A private pricing syntax tuple.
+        fixed_scale: Raw units used by fixed() in this expression.
 
     Returns:
         The inferred type and an optional constant value.
@@ -87,13 +88,13 @@ def _validate(node):
             raise BillingError("表达式参数类型不合法。")
 
     if kind == "conditional":
-        require(_validate(node[1]), "boolean")
-        yes, no = _validate(node[2]), _validate(node[3])
+        require(_validate(node[1], fixed_scale), "boolean")
+        yes, no = _validate(node[2], fixed_scale), _validate(node[3], fixed_scale)
         if yes[0] != no[0] and "any" not in {yes[0], no[0]}:
             raise BillingError("价格分支的结果类型不一致。")
         return (yes[0] if yes[0] == no[0] else "any", UNKNOWN)
     if kind == "unary":
-        value = _validate(node[2])
+        value = _validate(node[2], fixed_scale)
         expected = "boolean" if node[1] == "!" else "number"
         require(value, expected)
         constant = value[1]
@@ -108,7 +109,7 @@ def _validate(node):
         return expected, constant
     if kind == "binary":
         op = node[1]
-        left, right = _validate(node[2]), _validate(node[3])
+        left, right = _validate(node[2], fixed_scale), _validate(node[3], fixed_scale)
         if op in {"&&", "||"}:
             require(left, "boolean")
             require(right, "boolean")
@@ -121,6 +122,11 @@ def _validate(node):
         require(right, "number")
         if op in {"/", "%"} and right[1] is not UNKNOWN and right[1] == 0:
             raise BillingError("价格表达式不能除以零。")
+        if op == "%" and any(
+            value[1] is not UNKNOWN and value[1] != value[1].to_integral_value()
+            for value in (left, right)
+        ):
+            raise BillingError("取模仅支持整数。")
         result = UNKNOWN
         if left[1] is not UNKNOWN and right[1] is not UNKNOWN:
             try:
@@ -137,7 +143,7 @@ def _validate(node):
                 raise BillingError("价格常量计算越界。")
         return "number", result
     function, arguments = node[1], node[2]
-    values = [_validate(arg) for arg in arguments]
+    values = [_validate(arg, fixed_scale) for arg in arguments]
     if function in {
         "u",
         "param",
@@ -149,6 +155,27 @@ def _validate(node):
         "day",
     }:
         require(values[0], "string")
+        if function == "u":
+            key = arguments[0][1].strip()
+            if key in {"resolution", "quality", "orientation"}:
+                return "string", UNKNOWN
+            if key in {
+                "seconds",
+                "actual_seconds",
+                "requests",
+                "characters",
+                "image_count",
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+                "tokens",
+            }:
+                return "number", UNKNOWN
+        if (
+            function in {"hour", "minute", "weekday", "month", "day"}
+            and values[0][1] == "Local"
+        ):
+            raise BillingError("请使用明确的 IANA 时区，不支持依赖服务器环境的 Local。")
         return (
             "any"
             if function in {"u", "param"}
@@ -184,9 +211,44 @@ def _validate(node):
             if function == "ceil"
             else numbers[0].to_integral_value(rounding=ROUND_FLOOR)
             if function == "floor"
-            else numbers[0]
+            else numbers[0] * fixed_scale
         )
+        if not constant.is_finite() or abs(constant) > Decimal("1e18"):
+            raise BillingError("价格常量计算越界。")
     return "number", constant
+
+
+def _scales(expression, node):
+    """Share fixed and settlement units across validation and fee descriptions.
+
+    Args:
+        expression: Compiled rule with its preserved currency convention.
+        node: Current price branch, including only its own fixed() calls.
+
+    Returns:
+        Raw fixed multiplier and final currency divisor.
+    """
+    fixed = False
+    pending = [node]
+    while pending:
+        current = pending.pop()
+        if current[0] == "call":
+            if current[1] == "fixed":
+                fixed = True
+                break
+            pending.extend(current[2])
+        elif current[0] == "conditional":
+            pending.extend(current[1:])
+        elif current[0] in {"unary", "binary"}:
+            pending.extend(current[2:])
+    return (
+        Decimal(1_000_000 if expression.token_mode or not expression.auto_units else 1),
+        Decimal(
+            1_000_000
+            if expression.token_mode or (not expression.auto_units and fixed)
+            else 1
+        ),
+    )
 
 
 def compile_price(rule: dict) -> Expression:
@@ -202,6 +264,8 @@ def compile_price(rule: dict) -> Expression:
         BillingError: If the rule is not a valid numeric price expression.
     """
     mode = rule.get("mode")
+    if mode is not None and not isinstance(mode, str):
+        raise BillingError("不支持的价格格式。")
     if mode is None and "expression" not in rule:
         if "input_price" in rule or "output_price" in rule:
             mode = "tokens"
@@ -243,17 +307,23 @@ def compile_price(rule: dict) -> Expression:
         if not mode and expression.legacy:
             raise BillingError("请使用 NewAPI 价格表达式语法。")
     if not expression.legacy:
-        inferred, value = _validate(expression.parser.tree)
+        fixed_scale, divisor = _scales(expression, expression.parser.tree)
+        inferred, value = _validate(expression.parser.tree, fixed_scale)
         if inferred not in {"number", "any"} or (value is not UNKNOWN and value < 0):
             raise BillingError("价格表达式必须返回非负数字。")
+        if value is not UNKNOWN:
+            units(value / divisor)
         try:
             branches = _branches(expression.parser.tree)
             for _, node in branches:
-                _, constant = _validate(node)
+                _, constant = _validate(node, fixed_scale)
                 if constant is not UNKNOWN and constant < 0:
                     raise BillingError("价格分支不能返回负数。")
+                if constant is not UNKNOWN:
+                    units(constant / _scales(expression, node)[1])
             expression.free = all(
-                not any(_linear(node, Decimal(1)).values()) for _, node in branches
+                not any(_linear(node, _scales(expression, node)[0]).values())
+                for _, node in branches
             )
         except BillingError:
             raise
@@ -263,7 +333,13 @@ def compile_price(rule: dict) -> Expression:
 
 
 def _number(value):
-    text = format(Decimal(value), "f")
+    value = Decimal(value)
+    if not value:
+        return "0"
+    # A short exponent must not expand into megabytes of zeros in a preview.
+    if value and value.adjusted() < -18:
+        return str(value)
+    text = format(value, "f")
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
@@ -411,22 +487,17 @@ def price_sections(rules) -> list[str]:
                 heading = "；".join(conditions) or "默认"
                 if tier:
                     heading += f" · {tier}"
-                fixed_scale = Decimal(
-                    1_000_000
-                    if expression.token_mode or not expression.auto_units
-                    else 1
-                )
+                fixed_scale, divisor = _scales(expression, node)
                 try:
-                    rates = _linear(node, fixed_scale)
-                    divisor = Decimal(
-                        1_000_000
-                        if expression.token_mode
-                        or (
-                            not expression.auto_units
-                            and "fixed" in expression.parser.functions
+                    if (
+                        not expression.auto_units
+                        and not expression.token_mode
+                        and any("按次(" in condition for condition in conditions)
+                    ):
+                        raise ValueError(
+                            "Legacy fixed() in a condition changes settlement units"
                         )
-                        else 1
-                    )
+                    rates = _linear(node, fixed_scale)
                     details = []
                     for key, value in rates.items():
                         value /= divisor

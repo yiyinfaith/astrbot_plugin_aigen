@@ -17,8 +17,8 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import aiohttp
 
-from .billing import track
 from .audio_router import AUDIO_MODES, AudioOptions, select_audio_route
+from .billing import track
 from .generation_capabilities import AUDIO, prune_template_parameters, validate_options
 from .video_api_manager import (
     VideoApiManager,
@@ -28,7 +28,7 @@ from .video_api_manager import (
     media_sources,
     render_template,
 )
-from .video_router import VideoError
+from .video_router import InvalidMediaError, VideoError
 
 
 @dataclass
@@ -555,7 +555,7 @@ class AudioApiManager(VideoApiManager):
                     }.get(path.suffix.lower(), "application/octet-stream")
                 if mode == "openai_chat":
                     if not (
-                        raw[:4] == b"RIFF"
+                        (raw[:4] == b"RIFF" and raw[8:12] == b"WAVE")
                         or raw[:3] == b"ID3"
                         or (len(raw) > 1 and raw[0] == 255 and raw[1] & 224 == 224)
                     ):
@@ -771,9 +771,9 @@ class AudioApiManager(VideoApiManager):
                 raw = output.getvalue()
             head = raw[:32]
             if not (
-                head.startswith(
+                (head[:4] == b"RIFF" and head[8:12] == b"WAVE")
+                or head.startswith(
                     (
-                        b"RIFF",
                         b"ID3",
                         b"fLaC",
                         b"OggS",
@@ -785,7 +785,8 @@ class AudioApiManager(VideoApiManager):
                 or (len(head) > 1 and head[0] == 255 and head[1] & 224 == 224)
                 or (len(head) > 8 and head[4:8] == b"ftyp")
             ):
-                raise VideoError(
+                track(state="failed")
+                raise InvalidMediaError(
                     "接口未返回可识别的音频数据，请核对原任务，勿重复提交。"
                 )
             path = self.data_dir / (
@@ -803,6 +804,8 @@ class AudioApiManager(VideoApiManager):
             track(state="completed")
             try:
                 path = await self.download_audio(artifact_url)
+            except InvalidMediaError:
+                raise
             except (
                 VideoError,
                 OSError,
@@ -881,7 +884,10 @@ class AudioApiManager(VideoApiManager):
             elif head.startswith((b"#!AMR", b"#!SILK", b"\x02#!SILK")):
                 suffix = ".amr" if head.startswith(b"#!AMR") else ".silk"
             else:
-                raise VideoError("下载结果不是可识别的音频文件，可能是接口错误页面。")
+                track(state="failed")
+                raise InvalidMediaError(
+                    "下载结果不是可识别的音频文件，可能是接口错误页面。"
+                )
             completed = path.with_suffix(suffix)
             path.replace(completed)
             return completed

@@ -11,6 +11,10 @@ class VideoError(RuntimeError):
     pass
 
 
+class InvalidMediaError(VideoError):
+    """The returned artifact is an error page or the wrong media type."""
+
+
 ROUTES = {
     "text_to_video": ("文生视频", "minimax_h3_lightx2v_no_pic", ""),
     "image_to_video": (

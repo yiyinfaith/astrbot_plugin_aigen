@@ -2065,7 +2065,7 @@ class ApiManager:
                                     )
 
                                 return f"API Error {resp.status}: {err_msg} | URL: {active_url}"
-                        except:
+                        except (ValueError, TypeError, KeyError, AttributeError):
                             pass
 
                         if "<html" in resp_text.lower():

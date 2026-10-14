@@ -18,10 +18,16 @@ import aiohttp
 from astrbot.api import logger
 from PIL import Image
 
-from .billing import track
 from .api_manager import ApiManager
+from .billing import track
 from .generation_capabilities import prune_template_parameters, validate_options
-from .video_router import VideoError, VideoOptions, integer, select_route
+from .video_router import (
+    InvalidMediaError,
+    VideoError,
+    VideoOptions,
+    integer,
+    select_route,
+)
 
 VIDEO_MODES = (
     "openai_video",
@@ -184,7 +190,12 @@ def endpoint(base: str, path: str) -> str:
     if not base.strip():
         raise VideoError("请先配置生视频接口地址。")
     parsed = urlsplit(base.strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+    ):
         raise VideoError("生视频接口地址必须是完整 HTTP(S) 地址。")
     if urlsplit(path).scheme or urlsplit(path).netloc:
         raise VideoError("接口路径请填写相对路径；域名统一在接口地址中配置。")
@@ -809,16 +820,30 @@ class VideoApiManager(ApiManager):
                 raise VideoError(
                     "自定义请求模板和请求头必须是合法 JSON 对象。"
                 ) from exc
-            if not isinstance(template, dict) or not template or not isinstance(extra_headers, dict):
+            if (
+                not isinstance(template, dict)
+                or not template
+                or not isinstance(extra_headers, dict)
+            ):
                 raise VideoError("自定义请求模板和请求头必须是 JSON 对象。")
             serialized = json.dumps(template)
             if prompt and "{prompt}" not in serialized:
                 raise VideoError("自定义视频模板必须包含 {prompt}，不能丢弃提示词。")
-            for kind, sources in (("images", images), ("audios", audios), ("videos", videos)):
+            for kind, sources in (
+                ("images", images),
+                ("audios", audios),
+                ("videos", videos),
+            ):
                 if sources and "{" + kind + "}" not in serialized:
-                    if kind == "images" and len(images) == 1 and "{image}" in serialized:
+                    if (
+                        kind == "images"
+                        and len(images) == 1
+                        and "{image}" in serialized
+                    ):
                         continue
-                    raise VideoError(f"自定义视频模板必须用 {{{kind}}} 传递全部参考材料。")
+                    raise VideoError(
+                        f"自定义视频模板必须用 {{{kind}}} 传递全部参考材料。"
+                    )
             template_values = {
                 "{model}": model,
                 "{prompt}": prompt,
@@ -957,11 +982,8 @@ class VideoApiManager(ApiManager):
                 self.config.get("proxy_url") if self.config.get("use_proxy") else None,
             ),
         ) as resp:
-            text = (
-                (await resp.text()).replace(key, "[redacted]")
-                if key
-                else await resp.text()
-            )
+            # Redact diagnostics, never task IDs or signed artifact URLs.
+            text = await resp.text()
             track(raw=text, status=resp.status if method == "POST" else 0)
             if resp.status >= 400:
                 detail = text.replace(key, "[redacted]")
@@ -1198,6 +1220,8 @@ class VideoApiManager(ApiManager):
         await self._save_job_record(job, info)
         try:
             path = await self.download_video(url, key, base)
+        except InvalidMediaError:
+            raise
         except (VideoError, OSError) as exc:
             raise VideoDownloadError(
                 f"视频已完成但下载失败（ID：{task_id}）：{exc}。",
@@ -1272,9 +1296,15 @@ class VideoApiManager(ApiManager):
                             output.write(chunk)
                 with path.open("rb") as check:
                     head = check.read(64)
-                if total < 12 or b"ftyp" not in head:
-                    raise VideoError("下载结果不是有效 MP4 视频。")
+                if total < 12 or head[4:8] != b"ftyp":
+                    track(state="failed")
+                    raise InvalidMediaError(
+                        "接口返回的结果不是有效 MP4 视频，本次生成失败。"
+                    )
                 return path
+            except InvalidMediaError:
+                path.unlink(missing_ok=True)
+                raise
             except (aiohttp.ClientError, asyncio.TimeoutError, VideoError) as exc:
                 path.unlink(missing_ok=True)
                 if attempt + 1 >= attempts:

@@ -55,6 +55,55 @@ class ImageHttpAuditTest(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(close)
         return manager
 
+    async def test_compatibility_fallback_preserves_cancellation_and_download_errors(
+        self,
+    ):
+        async def handler(request):
+            return web.json_response(
+                {"error": {"message": "use images api"}}, status=400
+            )
+
+        base = await self.server(handler)
+        manager = self.manager(base, "openai_chat")
+        manager._should_fallback_to_images_api = lambda *args: True
+        for error in (
+            asyncio.CancelledError(),
+            image_api.ImageDownloadError(
+                "download unavailable", "https://media.test/result.png"
+            ),
+        ):
+            manager.call_images_api = AsyncMock(side_effect=error)
+            with self.assertRaises(type(error)):
+                await manager.call_api([], "cat", "gpt-image-1")
+            self.assertEqual(manager.call_images_api.await_count, 1)
+
+    async def test_success_json_preserves_identifiers_and_error_messages_redact_keys(
+        self,
+    ):
+        status = 200
+
+        async def handler(request):
+            if status == 200:
+                return web.json_response(
+                    {"id": "secret-task", "url": "https://media.test/secret-result.mp4"}
+                )
+            return web.json_response(
+                {"error": {"message": "invalid credential secret"}}, status=status
+            )
+
+        base = await self.server(handler)
+        manager = behavior.api.VideoApiManager(
+            {"interface_mode": "minimax", "timeout": 5}, Path("unused")
+        )
+        manager._get_session = self.manager(base)._get_session
+        result = await manager._json_request("GET", base, "secret", {})
+        self.assertEqual(result["id"], "secret-task")
+        self.assertEqual(result["url"], "https://media.test/secret-result.mp4")
+        status = 401
+        with self.assertRaises(behavior.api.VideoHttpError) as error:
+            await manager._json_request("GET", base, "secret", {})
+        self.assertNotIn("secret", str(error.exception))
+
     async def test_ambiguous_rejections_never_submit_another_image_job(self):
         calls = []
         status = 500
@@ -482,3 +531,93 @@ class StatisticsAuditTest(unittest.IsolatedAsyncioTestCase):
             await manager.initialize()
             await manager.record_usage("99", None, "audio")
             self.assertEqual(json.loads(path.read_text())["users"], {"99": 1})
+
+
+class ArtifactBillingAuditTest(unittest.IsolatedAsyncioTestCase):
+    async def test_wrong_video_or_audio_artifact_is_not_charged_or_retried(self):
+        import test_billing as financial
+
+        billing = financial.b
+        cases = (
+            ("video", b"<html>error ftyp not a video</html>"),
+            ("audio", b"<html>no audio</html>"),
+            ("inline", b"RIFFxxxxWEBP" + b"x" * 40),
+        )
+        for kind, body in cases:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                calls = []
+
+                async def handler(request):
+                    calls.append(request.method)
+                    if request.method == "POST" and kind != "inline":
+                        return web.json_response(
+                            {
+                                "id": "task",
+                                "status": "completed",
+                                "url": "http://" + request.host + "/artifact",
+                            }
+                        )
+                    return web.Response(
+                        body=body, content_type="application/octet-stream"
+                    )
+
+                base = await ImageHttpAuditTest.server(self, handler)
+                config = {
+                    "base_url": base,
+                    "api_keys": "offline-key",
+                    "auto_route": False,
+                    "timeout": 5,
+                }
+                if kind == "video":
+                    config.update(
+                        model="minimax_h3_lightx2v_no_pic", interface_mode="minimax"
+                    )
+                    manager = behavior.api.VideoApiManager(config, Path(directory))
+                    submit = lambda: manager.generate("cat", [])
+                    media = "video"
+                else:
+                    config.update(
+                        model="test-speech",
+                        interface_mode="openai_speech"
+                        if kind == "inline"
+                        else "custom_endpoint",
+                        response_format="wav",
+                        custom_create_path="/audio/create",
+                        custom_query_path="/audio/tasks/{task_id}",
+                        custom_body_template='{"model":"{model}","prompt":"{prompt}"}',
+                    )
+                    manager = behavior.audio_api.AudioApiManager(
+                        config, Path(directory)
+                    )
+                    submit = lambda: manager.generate(
+                        behavior.audio_router.AudioOptions(mode="朗读", prompt="hello"),
+                        [],
+                    )
+                    media = "audio"
+                service = billing.BillingService(
+                    Path(directory) / "billing.sqlite3",
+                    {
+                        "billing_prices": [
+                            {"model": config["model"], "expression": "fixed(1)"}
+                        ]
+                    },
+                )
+                event = financial.Identity()
+                owner = service.owner(event)
+                service.store.redeem(
+                    owner, service.store.create_cards("admin", "10", 1)[0]
+                )
+                try:
+                    with self.assertRaises(behavior.router.InvalidMediaError):
+                        await billing.billed_call(
+                            service, event, media, config, {}, submit
+                        )
+                    self.assertEqual(service.store.balance(owner)[0], 10000000)
+                    self.assertEqual(calls.count("POST"), 1)
+                    self.assertEqual(calls.count("GET"), 0 if kind == "inline" else 1)
+                    _, rows = service.store.listing("orders", owner)
+                    self.assertEqual(rows[0]["status"], "refunded")
+                    self.assertEqual(rows[0]["charged"], 0)
+                finally:
+                    if manager._session:
+                        await manager._session.close()

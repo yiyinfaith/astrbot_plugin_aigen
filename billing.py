@@ -812,6 +812,12 @@ class BillingService:
         if orientation:
             facts["orientation"] = orientation
         values["_usage"] = facts
+        if (
+            not expression.legacy
+            and "header" in expression.parser.functions
+            and "_headers" not in values
+        ):
+            raise BillingError("价格设置不合法，请联系管理员配置模型价格。")
         try:
             expected = None if expression.dynamic else expression.evaluate(values)
         except BillingError as exc:
@@ -1008,9 +1014,16 @@ async def billed_call(
         raise BillingError("插件正在重载，请稍后重试；未提交生成任务。")
     quote = service.quote(media, config, counts) if service else None
     if quote is None:
-        if before_submit:
-            await before_submit()
-        return await callback()
+        task = asyncio.current_task()
+        if service:
+            service.tasks.add(task)
+        try:
+            if before_submit:
+                await before_submit()
+            return await callback()
+        finally:
+            if service:
+                service.tasks.discard(task)
     service.recover_unsettled()
     expression, values, expected, rule = quote
     order = service.store.begin(
