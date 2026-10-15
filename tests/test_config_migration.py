@@ -89,7 +89,11 @@ class ConfigMigrationTest(unittest.TestCase):
             self.assertTrue(migrate_config(conf, Path(tmp) / "backups"))
             image = media_config(conf)
             for key, value in old.items():
-                if key != "llm_show_progress":
+                if key not in {
+                    "llm_show_progress",
+                    "result_image_download_retries",
+                    "download_retries",
+                }:
                     self.assertEqual(
                         image[key],
                         [value]

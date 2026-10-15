@@ -150,7 +150,7 @@ def supplied(values: dict) -> dict:
     }
 
 
-def parameter_defaults(config: dict) -> dict:
+def parameter_defaults(config: dict, *, include_adapter: bool = False) -> dict:
     """Read optional administrator defaults while retaining zero and false."""
     raw = config.get("parameter_defaults", "")
     if not raw:
@@ -161,10 +161,33 @@ def parameter_defaults(config: dict) -> dict:
         raise VideoError("生成参数默认值必须是合法 JSON 对象。") from exc
     if not isinstance(values, dict):
         raise VideoError("生成参数默认值必须是 JSON 对象。")
+    values = dict(values)
+    adapter = values.pop("adapter", {})
+    from .config_manager import AUDIO_ADAPTER_DEFAULTS
+
+    if not isinstance(adapter, dict) or any(
+        "custom_" + key not in AUDIO_ADAPTER_DEFAULTS for key in adapter
+    ):
+        raise VideoError(
+            "生成参数默认值的 adapter 必须是对象，且只能包含文档列出的接口字段。"
+        )
+    transport = {}
+    for key, value in adapter.items():
+        if key in {"body_template", "headers"}:
+            try:
+                value = json.loads(value) if isinstance(value, str) else value
+            except ValueError as exc:
+                raise VideoError(f"adapter.{key} 必须是合法 JSON 对象。") from exc
+            if not isinstance(value, dict):
+                raise VideoError(f"adapter.{key} 必须是 JSON 对象。")
+            value = json.dumps(value, ensure_ascii=False)
+        elif not isinstance(value, str):
+            raise VideoError(f"adapter.{key} 必须是字符串。")
+        transport["custom_" + key] = value
     allowed = IMAGE.keys() | VIDEO.keys() | AUDIO.keys()
     if any(key not in allowed for key in values):
         raise VideoError("生成参数默认值包含未知字段，请先查询能力工具支持的字段。")
-    return supplied(values)
+    return {**supplied(values), **(transport if include_adapter else {})}
 
 
 def prune_template_parameters(template, kind: str, values: dict):
@@ -589,7 +612,7 @@ def apply_menu_selection(text: str, mapping: dict, current: dict) -> dict | None
 
 def configured_capabilities(kind: str, config: dict) -> str:
     """Describe configured short/long routes without copying private fields."""
-    config = {**config, **parameter_defaults(config)}
+    config = {**config, **parameter_defaults(config, include_adapter=kind == "audio")}
     voice_field = {
         "minimax_speech": "minimax_voice",
         "gemini_official": "gemini_voice",
@@ -607,7 +630,7 @@ def configured_capabilities(kind: str, config: dict) -> str:
             for key, value in rule.items():
                 if value is not None and value != "" and value != "inherit":
                     effective[key] = value
-            effective.update(parameter_defaults(rule))
+            effective.update(parameter_defaults(rule, include_adapter=kind == "audio"))
             if kind == "audio" and (
                 rule.get("voice") or "voice" in parameter_defaults(rule)
             ):

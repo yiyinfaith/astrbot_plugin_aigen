@@ -11,12 +11,13 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import At, Image, Reply
 from astrbot.api import logger
 from .utils import MAX_IMAGE_BYTES, read_image_response
+from .config_manager import media_attempts
 
 
 class ImageManager:
     def __init__(self, config: dict):
         self.proxy = config.get("proxy_url") if config.get("use_proxy") else None
-        self.max_retries = config.get("download_retries", 3)
+        self.max_retries = media_attempts(config, "image") - 1
         self.timeout = config.get("timeout", 60)
 
     async def _download_image(

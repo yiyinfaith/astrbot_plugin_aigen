@@ -659,7 +659,13 @@ class VideoConfigUpgradeTest(unittest.TestCase):
                 self.assertEqual(json.loads(snapshot.read_text("utf-8")), before)
                 self.assertFalse(migrate_config(config, Path(tmp)))
             expected = copy.deepcopy(before)
-            expected["_config_layout_version"] = 5
+            expected["_config_layout_version"] = 6
+            for key in ("result_image_download_retries", "download_retries"):
+                expected["image_settings"].pop(key, None)
+            expected["video_settings"].pop("result_video_download_retries", None)
+            for key in list(expected["audio_settings"]):
+                if key.startswith("custom_") and key != "custom_prompt_need_prefix":
+                    expected["audio_settings"].pop(key)
             if help_text == LEGACY_COLLECTION_HELP_TEXT:
                 expected["global_settings"]["help_text"] = schema_defaults(schema)[
                     "global_settings"

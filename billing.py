@@ -14,7 +14,6 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .billing_expression import TOKENS, PricingExpression
 from .billing_expression import BillingExpressionError as BillingError
@@ -728,12 +727,7 @@ class BillingService:
         if len(matches) != 1:
             raise BillingError(f"模型 {model} 有重复计费规则，请管理员修正。")
         rule = matches[0]
-        try:
-            now = datetime.now(
-                ZoneInfo(str(self.config.get("billing_timezone", "Asia/Shanghai")))
-            )
-        except ZoneInfoNotFoundError as exc:
-            raise BillingError("计费时区无效，请管理员修正。") from exc
+        now = datetime.now(timezone.utc)
         values = {
             name: config.get(name, "")
             for name in ("resolution", "quality", "size", "aspect_ratio", "voice")

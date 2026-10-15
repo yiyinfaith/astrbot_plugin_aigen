@@ -121,9 +121,14 @@ def select_audio_route(
             raise VideoError("音频编辑和语音编辑需要恰好一段原始音频。")
         if count > 3:
             raise VideoError(f"此类生音频最多接收 3 段参考音频，当前 {count} 段。")
+    from .config_manager import AUDIO_ADAPTER_DEFAULTS
     from .generation_capabilities import AUDIO, parameter_defaults, supplied
 
-    effective = {**config, **parameter_defaults(config)}
+    effective = {
+        **AUDIO_ADAPTER_DEFAULTS,
+        **{key: value for key, value in config.items() if value is not None},
+        **parameter_defaults(config, include_adapter=True),
+    }
     if config.get("auto_route", True):
         rules = config.get("routes", [])
         matches = [
@@ -142,7 +147,7 @@ def select_audio_route(
             if rule.get(key) and rule[key] != "inherit":
                 effective[key] = rule[key]
         effective.update(supplied({key: rule[key] for key in AUDIO if key in rule}))
-        effective.update(parameter_defaults(rule))
+        effective.update(parameter_defaults(rule, include_adapter=True))
     from .generation_capabilities import validate_options
 
     defaults = {

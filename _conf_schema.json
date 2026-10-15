@@ -54,12 +54,6 @@
                 "hint": "每个用户的函数工具冷却时间，图片和视频分别计时；设为0关闭冷却。普通命令不设次数限制。",
                 "default": 60
             },
-            "billing_timezone": {
-                "description": "【计费】价格时区",
-                "type": "string",
-                "default": "Asia/Shanghai",
-                "hint": "条件表达式 hour、weekday 的时区。提交时固定，排队跨时段不改变价格。"
-            },
             "billing_prices": {
                 "description": "旧模型价格迁移数据",
                 "type": "list",
@@ -143,16 +137,17 @@
                 "default": 0
             },
             "result_image_download_retries": {
-                "description": "【网络】结果图下载重试次数",
+                "description": "旧下载配置迁移数据",
                 "type": "int",
-                "hint": "下载模型返回的结果图片失败时的自动重试次数。若启用了代理，针对部分 Google 外链还会额外尝试一次直连回退。",
-                "default": 4
+                "hint": "仅升级时读取，使用统一的下载与发送尝试次数。",
+                "default": null,
+                "invisible": true
             },
             "image_delivery_retries": {
                 "description": "图片下载与发送尝试次数",
                 "type": "int",
                 "default": 2,
-                "hint": "生成结果图片最多下载和发送几次；全部失败后回退到公网链接。配置值是总尝试次数。"
+                "hint": "总尝试次数（含首次），范围 1–5，默认 2。下载与发送各自最多尝试该次数，不嵌套、不重新生成；失败后返回上游公网链接。图片材料下载也使用此值。"
             },
             "generating_msg_template": {
                 "description": "【显示】生成过程提示文案",
@@ -218,10 +213,11 @@
                 ]
             },
             "download_retries": {
-                "description": "【网络】图片下载重试次数",
+                "description": "旧下载配置迁移数据",
                 "type": "int",
-                "hint": "当生成的图片下载失败时，自动重试的次数。",
-                "default": 3
+                "hint": "仅升级时读取，使用统一的下载与发送尝试次数。",
+                "default": null,
+                "invisible": true
             },
             "auto_route": {
                 "description": "启用自动路由",
@@ -1694,23 +1690,6 @@
                 "default": -1,
                 "hint": "-1 不发送，其他值按模型允许范围提交；没有种子参数的工作流不会传入。"
             },
-            "reference_mode": {
-                "description": "默认图片用途",
-                "type": "string",
-                "default": "reference",
-                "hint": "仅用于直接请求的参考用途。收集命令无论几张图都默认参考图；首尾帧、首帧、尾帧必须明确关键词。",
-                "options": [
-                    "reference",
-                    "first_frame",
-                    "last_frame",
-                    "first_last_frame"
-                ],
-                "labels": [
-                    "多媒体参考",
-                    "首帧",
-                    "首尾帧"
-                ]
-            },
             "generate_audio": {
                 "description": "Seedance 同时生成音频",
                 "type": "bool",
@@ -1786,16 +1765,17 @@
                 "hint": "0 跟随全局单次请求超时。"
             },
             "result_video_download_retries": {
-                "description": "结果视频下载重试次数",
+                "description": "旧下载配置迁移数据",
                 "type": "int",
-                "default": 2,
-                "hint": "仅重试下载，不重新生成视频。"
+                "default": null,
+                "hint": "仅升级时读取，使用统一的下载与发送尝试次数。",
+                "invisible": true
             },
             "video_delivery_retries": {
                 "description": "视频下载与发送尝试次数",
                 "type": "int",
                 "default": 2,
-                "hint": "生成结果视频最多下载和发送几次；全部失败后回退到公网链接。配置值是总尝试次数。"
+                "hint": "总尝试次数（含首次），范围 1–5，默认 2。下载与发送各自最多尝试该次数，不嵌套、不重新生成；失败后返回上游公网链接。"
             },
             "max_video_size_mb": {
                 "description": "最大视频下载大小（MB）",
@@ -2231,10 +2211,10 @@
                 "default": 300
             },
             "audio_delivery_retries": {
-                "description": "音频发送尝试次数",
+                "description": "音频下载与发送尝试次数",
                 "type": "int",
                 "default": 2,
-                "hint": "仅重试发送已生成的产物，不重新提交生成请求。"
+                "hint": "总尝试次数（含首次），范围 1–5，默认 2。成品下载与语音发送各自最多尝试该次数；发送失败再尝试原音频文件，仍失败则返回上游公网链接，不重新生成。"
             },
             "max_audio_size_mb": {
                 "description": "音频下载大小上限（MB）",
@@ -2763,76 +2743,87 @@
                 ]
             },
             "custom_create_path": {
-                "description": "自定义提交路径",
+                "description": "旧音频接口配置迁移数据",
                 "type": "string",
-                "default": "/v2/video_generation",
-                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+                "default": null,
+                "hint": "仅升级时搬入生成参数默认值的 adapter 对象。",
+                "invisible": true
             },
             "custom_query_path": {
-                "description": "自定义查询路径（可选）",
+                "description": "旧音频接口配置迁移数据",
                 "type": "string",
-                "default": "/v2/query/video_generation/{task_id}",
-                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+                "default": null,
+                "hint": "仅升级时搬入生成参数默认值的 adapter 对象。",
+                "invisible": true
             },
             "custom_body_template": {
-                "description": "自定义请求体 JSON",
+                "description": "旧音频接口配置迁移数据",
                 "type": "text",
-                "default": "{\"model\":\"{model}\",\"prompt\":\"{prompt}\",\"audios\":\"{audios}\"}",
-                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+                "default": null,
+                "hint": "仅升级时搬入生成参数默认值的 adapter 对象。",
+                "invisible": true
             },
             "custom_headers": {
-                "description": "自定义请求头 JSON",
+                "description": "旧音频接口配置迁移数据",
                 "type": "text",
-                "default": "{}",
-                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+                "default": null,
+                "hint": "仅升级时搬入生成参数默认值的 adapter 对象。",
+                "invisible": true
             },
             "custom_id_path": {
-                "description": "响应任务 ID 路径",
+                "description": "旧音频接口配置迁移数据",
                 "type": "string",
-                "default": "id",
-                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+                "default": null,
+                "hint": "仅升级时搬入生成参数默认值的 adapter 对象。",
+                "invisible": true
             },
             "custom_status_path": {
-                "description": "响应状态路径",
+                "description": "旧音频接口配置迁移数据",
                 "type": "string",
-                "default": "status",
-                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+                "default": null,
+                "hint": "仅升级时搬入生成参数默认值的 adapter 对象。",
+                "invisible": true
             },
             "custom_url_path": {
-                "description": "响应音频 URL 路径",
+                "description": "旧音频接口配置迁移数据",
                 "type": "string",
-                "default": "url",
-                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+                "default": null,
+                "hint": "仅升级时搬入生成参数默认值的 adapter 对象。",
+                "invisible": true
             },
             "custom_error_path": {
-                "description": "响应错误路径",
+                "description": "旧音频接口配置迁移数据",
                 "type": "string",
-                "default": "error.message",
-                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+                "default": null,
+                "hint": "仅升级时搬入生成参数默认值的 adapter 对象。",
+                "invisible": true
             },
             "custom_base64_path": {
-                "description": "响应 Base64 音频路径",
+                "description": "旧音频接口配置迁移数据",
                 "type": "string",
-                "default": "audio_base64",
-                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+                "default": null,
+                "hint": "仅升级时搬入生成参数默认值的 adapter 对象。",
+                "invisible": true
             },
             "custom_success_status": {
-                "description": "额外成功状态（逗号分隔）",
+                "description": "旧音频接口配置迁移数据",
                 "type": "string",
-                "default": "",
-                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+                "default": null,
+                "hint": "仅升级时搬入生成参数默认值的 adapter 对象。",
+                "invisible": true
             },
             "custom_failure_status": {
-                "description": "额外失败状态（逗号分隔）",
+                "description": "旧音频接口配置迁移数据",
                 "type": "string",
-                "default": "",
-                "hint": "模板支持 {model}、{text}/{prompt}、{audios}、{audio}、{source_audio}、{target_audio}、{route}、{voice}、{format}、{speed}；完整占位符保留 JSON 类型。"
+                "default": null,
+                "hint": "仅升级时搬入生成参数默认值的 adapter 对象。",
+                "invisible": true
             },
             "parameter_defaults": {
                 "description": "生成参数默认值（可选 JSON）",
                 "type": "text",
                 "default": "",
-                "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
+                "hint": "可留空。生成参数直接填写，例如 {\"speed\":1.2}。自定义接口配置放入 adapter 对象，例如 {\"adapter\":{\"create_path\":\"/v1/audio/speech\",\"query_path\":\"\",\"body_template\":{\"model\":\"{model}\",\"input\":\"{text}\"},\"url_path\":\"data.url\"}}。adapter 支持 create_path、query_path、body_template、headers、id_path、status_path、url_path、error_path、base64_path、success_status、failure_status；仅 custom_endpoint 使用，不发送给模型。详细占位符见 README。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
             }
         }
     }

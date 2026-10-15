@@ -49,7 +49,15 @@ class AudioApiManager(VideoApiManager):
     """Share HTTP/key handling while keeping audio payloads and artifacts separate."""
 
     def __init__(self, config: dict, data_dir: Path):
-        super().__init__(config, data_dir)
+        from .config_manager import AUDIO_ADAPTER_DEFAULTS
+
+        super().__init__(
+            {
+                **AUDIO_ADAPTER_DEFAULTS,
+                **{k: v for k, v in config.items() if v is not None},
+            },
+            data_dir,
+        )
         self.data_dir = Path(data_dir) / "audio"
         self._route_managers = {}
 
@@ -829,7 +837,19 @@ class AudioApiManager(VideoApiManager):
         else:
             track(state="completed")
             try:
-                path = await self.download_audio(artifact_url)
+                from .config_manager import media_attempts
+
+                attempts = media_attempts(self.config, "audio")
+                for attempt in range(attempts):
+                    try:
+                        path = await self.download_audio(artifact_url)
+                        break
+                    except InvalidMediaError:
+                        raise
+                    except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+                        if attempt + 1 >= attempts:
+                            raise
+                        await asyncio.sleep(min(attempt + 1, 3))
             except InvalidMediaError:
                 raise
             except (

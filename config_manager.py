@@ -25,6 +25,25 @@ GLOBAL_KEYS = {
     "llm_cooldown_seconds",
 }
 
+AUDIO_ADAPTER_DEFAULTS = {
+    "custom_create_path": "/v2/video_generation",
+    "custom_query_path": "/v2/query/video_generation/{task_id}",
+    "custom_body_template": '{"model":"{model}","prompt":"{prompt}","audios":"{audios}"}',
+    "custom_headers": "{}",
+    "custom_id_path": "id",
+    "custom_status_path": "status",
+    "custom_url_path": "url",
+    "custom_error_path": "error.message",
+    "custom_base64_path": "audio_base64",
+    "custom_success_status": "",
+    "custom_failure_status": "",
+}
+
+
+def media_attempts(config: dict, kind: str) -> int:
+    """Return the shared total-attempt limit for download and delivery stages."""
+    return max(1, min(5, int(config.get(f"{kind}_delivery_retries", 2) or 2)))
+
 
 def schema_defaults(schema: dict) -> dict:
     return {
@@ -44,9 +63,12 @@ def migrate_config(config: Any, backup_dir: Path) -> bool:
     """
     if config.get("_config_layout_version", 0) >= 1:
         changed = migrate_video_settings(config, backup_dir)
-        return (
+        changed = (
             migrate_generation_settings(config, backup_dir, backup=not changed)
             or changed
+        )
+        return (
+            migrate_compact_settings(config, backup_dir, backup=not changed) or changed
         )
     schema = json.loads(
         Path(__file__).with_name("_conf_schema.json").read_text("utf-8")
@@ -106,6 +128,7 @@ def migrate_config(config: Any, backup_dir: Path) -> bool:
         raise
     migrate_video_settings(config, backup_dir, backup=False)
     migrate_generation_settings(config, backup_dir, backup=False)
+    migrate_compact_settings(config, backup_dir, backup=False)
     return bool(legacy)
 
 
@@ -257,6 +280,92 @@ def migrate_generation_settings(config: Any, backup_dir: Path, *, backup=True) -
             "help_text"
         ]
     upgraded["_config_layout_version"] = 5
+    config.clear()
+    config.update(upgraded)
+    try:
+        save = getattr(config, "save_config", None)
+        if callable(save):
+            save()
+    except Exception:
+        config.clear()
+        config.update(original)
+        raise
+    return True
+
+
+def migrate_compact_settings(config: Any, backup_dir: Path, *, backup=True) -> bool:
+    """Move audio adapter fields into JSON without changing saved custom values.
+
+    Args:
+        config: Configuration after the host's schema normalization.
+        backup_dir: Directory for a recoverable original snapshot.
+        backup: Whether no earlier migration backed up this load.
+
+    Returns:
+        Whether configuration was upgraded.
+
+    Raises:
+        ValueError: If a populated JSON field cannot be merged losslessly.
+        OSError: If the backup or configuration cannot be saved.
+    """
+    if config.get("_config_layout_version", 0) >= 6:
+        return False
+    original = copy.deepcopy(dict(config))
+    upgraded = copy.deepcopy(original)
+    audio = upgraded.setdefault("audio_settings", {})
+    legacy = {
+        key: audio[key]
+        for key, default in AUDIO_ADAPTER_DEFAULTS.items()
+        if audio.get(key) is not None and audio[key] != default
+    }
+    if legacy:
+        raw = audio.get("parameter_defaults") or "{}"
+        values = json.loads(raw) if isinstance(raw, str) else copy.deepcopy(raw)
+        if not isinstance(values, dict) or not isinstance(
+            values.get("adapter", {}), dict
+        ):
+            raise ValueError(
+                "音频生成参数默认值必须是 JSON 对象，adapter 必须是对象；旧配置未修改。"
+            )
+        adapter = values.setdefault("adapter", {})
+        for key, value in legacy.items():
+            name = key.removeprefix("custom_")
+            if name not in adapter:
+                # Keep malformed legacy JSON as text so submission validation
+                # still rejects it instead of silently substituting defaults.
+                if name in {"body_template", "headers"} and isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except ValueError:
+                        pass
+                adapter[name] = value
+        audio["parameter_defaults"] = json.dumps(values, ensure_ascii=False, indent=2)
+    for key in AUDIO_ADAPTER_DEFAULTS:
+        audio.pop(key, None)
+    image = upgraded.setdefault("image_settings", {})
+    if not image.get("image_delivery_retries"):
+        image["image_delivery_retries"] = (
+            image.get("result_image_download_retries") or 2
+        )
+    image.pop("result_image_download_retries", None)
+    image.pop("download_retries", None)
+    video = upgraded.setdefault("video_settings", {})
+    if not video.get("video_delivery_retries"):
+        video["video_delivery_retries"] = (
+            video.get("result_video_download_retries") or 2
+        )
+    video.pop("result_video_download_retries", None)
+    video.pop("reference_mode", None)
+    upgraded.setdefault("global_settings", {}).pop("billing_timezone", None)
+    upgraded["_config_layout_version"] = 6
+    if backup:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        snapshot = backup_dir / f"config_before_v1.4.5_{stamp}.json"
+        snapshot.write_text(
+            json.dumps(original, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        snapshot.chmod(0o600)
     config.clear()
     config.update(upgraded)
     try:

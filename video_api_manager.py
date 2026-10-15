@@ -20,6 +20,7 @@ from PIL import Image
 
 from .api_manager import ApiManager
 from .billing import track
+from .config_manager import media_attempts
 from .generation_capabilities import prune_template_parameters, validate_options
 from .video_router import (
     InvalidMediaError,
@@ -1249,19 +1250,7 @@ class VideoApiManager(ApiManager):
         timeout = int(self.config.get("result_video_download_timeout", 300)) or int(
             self.config.get("timeout", 120)
         )
-        attempts = max(
-            1,
-            min(
-                5,
-                int(
-                    self.config.get(
-                        "video_delivery_retries",
-                        self.config.get("result_video_download_retries", 2),
-                    )
-                    or 2
-                ),
-            ),
-        )
+        attempts = media_attempts(self.config, "video")
         max_size = max(1, int(self.config.get("max_video_size_mb", 100))) * 1024 * 1024
         # Public artifact URLs never receive the API key, even on the same host.
         # Authorization is reserved for the OpenAI ownership-checked /content URL.

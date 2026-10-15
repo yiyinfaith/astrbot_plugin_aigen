@@ -122,6 +122,9 @@ def plugin_class():
         "Path": Path,
         "datetime": datetime,
         "timezone": timezone,
+        "media_attempts": importlib.import_module(
+            PACKAGE + ".config_manager"
+        ).media_attempts,
         "monotonic": monotonic,
         "Plain": Plain,
         "Node": Node,

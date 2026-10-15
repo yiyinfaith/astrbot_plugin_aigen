@@ -33,7 +33,7 @@ from .audio_router import (
 from .billing import BillingError, BillingService, billed_call
 from .billing_commands import COMMANDS as BILLING_COMMANDS
 from .billing_commands import handle_command
-from .config_manager import media_config, migrate_config
+from .config_manager import media_attempts, media_config, migrate_config
 from .data_manager import DataManager
 from .finance_store import FinanceStore
 from .finance_web import FinanceWebUI
@@ -63,7 +63,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.4",
+    "1.4.5",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -565,19 +565,7 @@ class ImageGeneratorPlugin(Star):
         chain: list[Any] = [Image.fromBytes(result)]
         if include_result_text:
             chain.append(Plain(success_text or f"\n✅ 生成成功{suffix}"))
-        attempts = max(
-            1,
-            min(
-                5,
-                int(
-                    self.conf.get(
-                        "image_delivery_retries",
-                        self.conf.get("result_image_download_retries", 2),
-                    )
-                    or 2
-                ),
-            ),
-        )
+        attempts = media_attempts(self.conf, "image")
         for attempt in range(attempts):
             try:
                 await event.send(event.chain_result(chain))
@@ -1345,9 +1333,7 @@ class ImageGeneratorPlugin(Star):
                 else None,
             )
         except AudioDownloadError as exc:
-            return [
-                Plain(f"{exc}\n已生成的音频地址：{exc.url}\n请下载原结果，勿重复提交。")
-            ]
+            return self._audio_fallback(exc.url)
         except (VideoError, aiohttp.ClientError, OSError, ValueError) as exc:
             logger.warning("Audio generation failed: %s", exc)
             return [Plain(str(exc))]
@@ -1385,15 +1371,8 @@ class ImageGeneratorPlugin(Star):
                     )
                     return []
                 except Exception:  # noqa: BLE001
-                    return [
-                        Plain(
-                            "音频已生成，但语音转换及文件发送失败；请联系管理员获取原产物，勿重复生成。"
-                            + (f"\n{result.url}" if result.url else "")
-                        )
-                    ]
-        attempts = max(
-            1, min(5, int(self.audio_conf.get("audio_delivery_retries", 2) or 2))
-        )
+                    return self._audio_fallback(result.url)
+        attempts = media_attempts(self.audio_conf, "audio")
         for attempt in range(attempts):
             try:
                 await event.send(
@@ -1410,12 +1389,22 @@ class ImageGeneratorPlugin(Star):
             )
             return []
         except Exception:  # noqa: BLE001
+            return self._audio_fallback(result.url)
+
+    @staticmethod
+    def _audio_fallback(url: str) -> list[Any]:
+        """Return the original artifact link after download or delivery fails."""
+        if not url:
             return [
                 Plain(
-                    "音频已生成，但平台发送失败；请获取原产物，勿重复生成。"
-                    + (f"\n{result.url}" if result.url else "")
+                    "音频已生成，但下载或发送失败，接口未提供公网链接；请联系管理员获取原产物，勿重复生成。"
                 )
             ]
+        return [
+            Plain(
+                f"音频下载或发送失败，使用公网链接：\n{url}\n链接有效期以上游为准，请下载原结果，勿重复生成。"
+            )
+        ]
 
     async def _generate_video(
         self,
@@ -1564,19 +1553,7 @@ class ImageGeneratorPlugin(Star):
         send_fallback_message: bool = True,
     ) -> list[Any]:
         """Retry a real video delivery before falling back to its public URL."""
-        attempts = max(
-            1,
-            min(
-                5,
-                int(
-                    self.video_conf.get(
-                        "video_delivery_retries",
-                        self.video_conf.get("result_video_download_retries", 2),
-                    )
-                    or 2
-                ),
-            ),
-        )
+        attempts = media_attempts(self.video_conf, "video")
         for attempt in range(attempts):
             try:
                 # Keep the video send isolated: a later success-text failure

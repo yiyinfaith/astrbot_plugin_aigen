@@ -15,6 +15,7 @@ from PIL import Image as PILImage
 from typing import List, Dict
 from astrbot.api import logger
 from .billing import track
+from .config_manager import media_attempts
 from .generation_params import (
     detect_aspect_ratio_from_image,
     openai_size_for_generation,
@@ -1546,19 +1547,7 @@ class ApiManager:
             self.config.get("result_image_download_timeout", 0) or 0
         )
         timeout_val = max(30, configured_timeout or request_timeout, request_timeout)
-        attempts = max(
-            1,
-            min(
-                5,
-                int(
-                    self.config.get(
-                        "image_delivery_retries",
-                        self.config.get("result_image_download_retries", 2),
-                    )
-                    or 2
-                ),
-            ),
-        )
+        attempts = media_attempts(self.config, "image")
         timeout = aiohttp.ClientTimeout(
             total=timeout_val,
             sock_read=timeout_val,
@@ -1632,11 +1621,12 @@ class ApiManager:
         last_error = ""
         if should_try_dual_route:
             logger.info(f"结果图下载启用直连/代理并发抢跑: {img_url[:120]}")
-            for attempt in range(1, attempts + 1):
+            for attempt in range(1, attempts + 1, 2):
                 tasks = [
                     asyncio.create_task(_download_once(None, "direct")),
-                    asyncio.create_task(_download_once(proxy, "proxy")),
                 ]
+                if attempt < attempts:
+                    tasks.append(asyncio.create_task(_download_once(proxy, "proxy")))
                 route_errors = {}
                 try:
                     for completed in asyncio.as_completed(tasks):
@@ -1666,23 +1656,26 @@ class ApiManager:
                     or route_errors.get("proxy")
                     or "未知下载错误"
                 )
-                if attempt < attempts:
+                if attempt + 1 < attempts:
                     logger.warning(
                         f"结果图并发下载失败，准备重试: {img_url[:120]} | {route_errors}"
                     )
                     await asyncio.sleep(min(2 * attempt, 5))
         elif should_try_ipv4_race:
             logger.info(f"结果图下载启用默认直连/IPv4直连并发抢跑: {img_url[:120]}")
-            for attempt in range(1, attempts + 1):
+            for attempt in range(1, attempts + 1, 2):
                 ipv4_session = aiohttp.ClientSession(
                     connector=aiohttp.TCPConnector(family=socket.AF_INET)
                 )
                 tasks = [
                     asyncio.create_task(_download_once(None, "direct")),
-                    asyncio.create_task(
-                        _download_once(None, "direct-ipv4", ipv4_session)
-                    ),
                 ]
+                if attempt < attempts:
+                    tasks.append(
+                        asyncio.create_task(
+                            _download_once(None, "direct-ipv4", ipv4_session)
+                        )
+                    )
                 route_errors = {}
                 try:
                     for completed in asyncio.as_completed(tasks):
@@ -1713,7 +1706,7 @@ class ApiManager:
                     or route_errors.get("direct-ipv4")
                     or "未知下载错误"
                 )
-                if attempt < attempts:
+                if attempt + 1 < attempts:
                     logger.warning(
                         f"结果图直连/IPv4并发下载失败，准备重试: {img_url[:120]} | {route_errors}"
                     )
