@@ -62,45 +62,68 @@ AstrBot 在插件初始化前会清理 Schema 以外的配置字段，因此升�
 
 **表达式与 NewAPI 常用计费语法统一**，使用 `v1:`（可省略）、`tier()`、`fixed()`、`u()`、`param()`、`header()`、`has()`、时间函数、三元条件、`&&`/`||`/`!`、算术、比较和 `min/max/abs/ceil/floor`。NewAPI 实际使用 Go Expr，并非 CEL。插件以受限解释器执行这些计费规则，不执行 Python/JavaScript/Go 代码；不支持完整 Go Expr 对象、循环、任意函数或高级 GJSON 查询，不支持的语法明确报错。旧版已保存的 Python 条件表达式仍可读取，新规则建议使用以下写法。
 
-直接在 WebUI 填写表达式，可使用 AutoDL 的按秒规则：
+直接在 WebUI 填写表达式，可使用 AutoDL 的按秒规则。**以下每个代码块都是一条完整表达式，可单独复制到价格表达式输入框；不要把多条表达式合并粘贴。示例数字均为演示单价，请按自己的定价修改。**
+
+按秒计费：
 
 ```javascript
-// 按秒
- tier("base", u("seconds") * 0.1)
+tier("base", u("seconds") * 0.1)
+```
 
-// 画质阶梯
+画质阶梯：
+
+```javascript
 u("resolution") == "768p"
   ? tier("high", u("seconds") * 0.2)
   : tier("base", u("seconds") * 0.1)
+```
 
-// 与 AutoDL 模板相同的低峰/高峰写法；这里的数字是示例单价
+北京时间低峰/高峰：**00:00（含）至 08:00（不含）每秒 0.03，其余时间每秒 0.04**。时区直接写在 `hour("Asia/Shanghai")` 中，无须另设全局价格时区；按提交时刻选择档位，排队跨时段不会改变本单价格。管理中心的“时段价格”示例按钮使用同一条规则。
+
+```javascript
 hour("Asia/Shanghai") < 8
   ? tier("off_peak", u("seconds") * 0.03)
   : tier("peak", u("seconds") * 0.04)
+```
 
-// 按次数
- tier("request", u("requests") * 0.2)
+如需按其他时区定价，修改表达式中的时区名称，例如 `UTC`、`Asia/Tokyo` 或 `America/New_York`。请使用 IANA 时区名称，避免依赖 VPS 所在时区。
 
-// 每开始5秒计0.2
- tier("base", ceil(u("seconds") / 5) * 0.2)
+按次数计费：
 
-// 图片质量或尺寸条件，从生效请求参数读取
+```javascript
+tier("request", u("requests") * 0.2)
+```
+
+每开始 5 秒计 0.2：
+
+```javascript
+tier("base", ceil(u("seconds") / 5) * 0.2)
+```
+
+图片质量条件，从生效请求参数读取：
+
+```javascript
 param("quality") == "high" ? tier("high", 0.3) : tier("base", 0.15)
 ```
 
-引用 `p`、`c`、`len` 等 Token 变量时自动采用 NewAPI 每百万 Token 单位：
+引用 `p`、`c`、`len` 等 Token 变量时自动采用 NewAPI 每百万 Token 单位。输入每百万 2，输出每百万 8：
 
 ```javascript
-// 输入每百万2，输出每百万8
- tier("base", p * 2 + c * 8)
+tier("base", p * 2 + c * 8)
+```
 
-// 基于完整输入上下文长度的阶梯，缓存读取单独定价
+基于完整输入上下文长度的阶梯，缓存读取单独定价：
+
+```javascript
 len <= 32000
   ? tier("short", p * 2 + c * 8 + cr * 0.2)
   : tier("long", p * 4 + c * 12 + cr * 0.4)
+```
 
-// NewAPI fixed() 按次规则；不需要自行乘除百万
- tier("request", fixed(0.01))
+NewAPI `fixed()` 按次规则，不需要自行乘除百万：
+
+```javascript
+tier("request", fixed(0.01))
 ```
 
 AutoDL 使用的 `u("requests")`、`u("seconds")`、`u("resolution")`、`u("orientation")` 已接入，支持原工作流和 `wan2.2-animate-move` / `IndexTTS-2` 别名。输出方向为 `landscape`、`portrait` 或 `square`，由已验证的路由参数提供；`adaptive` 未能确认时不猜方向。视频和音频的秒数以成品为准；**不沿用 NewAPI 的提交预估秒数或测量失败回退值**，无法测量时本单不收费。
