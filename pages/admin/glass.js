@@ -1,4 +1,4 @@
-const { ref, watch, onMounted, onBeforeUnmount, nextTick } = window.Vue;
+const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } = window.Vue;
 
 // Goose's documented lifecycle is append -> set mode -> configure in a frame.
 // Keep at most eight live canvases, and release each one on unmount.
@@ -61,23 +61,80 @@ const icons = [
   'M12 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10M3 22v-3a7 7 0 0 1 7-5h4a7 7 0 0 1 7 5v3z',
 ];
 
-export const GlassNav = {
-  props: { selected: Number }, emits: ['select'],
+const GlassTabs = {
+  props: { items: Array, selected: Number, disabled: Boolean, label: String, navigation: Boolean }, emits: ['select'],
   setup(props, { emit }) {
     const host = ref(null);
-    const labels = ['模型定价', '充值卡密', '用户与记录'];
-    const { ready, sync } = useGlass(host, 'single-bottom-tabs', el => {
-      el.setTabs([labels.map(() => ({ label: '', icon: '' }))]);
-      el.setState({ selectedTab: props.selected });
+    const secondRow = props.items.length === 4;
+    const stateKey = secondRow ? 'selectedTab2' : 'selectedTab';
+    const config = el => {
+      const tabs = props.items.map(() => ({ label: '', icon: '' }));
+      el.setTabs(secondRow ? [[], tabs] : [tabs]);
+      el.setState({ [stateKey]: props.selected });
+    };
+    const { ready, sync } = useGlass(host, secondRow ? 'bottom-tabs-2' : 'single-bottom-tabs', el => {
+      config(el);
       el.addEventListener('lg-statechange', event => {
-        const value = event.detail.selectedTab;
-        if (Number.isInteger(value) && value >= 0 && value < 3 && value !== props.selected) emit('select', value);
+        const value = event.detail[stateKey];
+        if (!Number.isInteger(value) || value < 0 || value >= props.items.length || value === props.selected) return;
+        if (props.disabled) sync(); else emit('select', value);
       });
-    }, el => el.setState({ selectedTab: props.selected }));
+    }, el => el.setState({ [stateKey]: props.selected }));
     watch(() => props.selected, sync);
-    return { host, ready, labels, icons };
+    const choose = index => { if (!props.disabled && index !== props.selected) emit('select', index); };
+    let gesture = null, suppressClick = false, clickTimer;
+    const onPointerDown = event => {
+      if (ready.value || props.disabled || event.button !== 0 || !event.isPrimary || gesture) return;
+      gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, index: Number(event.target.closest('button')?.dataset.index), dragged: false };
+      event.currentTarget.setPointerCapture(event.pointerId);
+    };
+    const onPointerMove = event => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const dx = Math.abs(event.clientX - gesture.x), dy = Math.abs(event.clientY - gesture.y);
+      if (dx > 8 && dx > dy) gesture.dragged = true;
+      if (gesture.dragged) event.preventDefault();
+    };
+    const onPointerUp = event => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      if (gesture.dragged) {
+        const bounds = event.currentTarget.getBoundingClientRect();
+        choose(Math.max(0, Math.min(props.items.length - 1, Math.floor((event.clientX - bounds.left) / bounds.width * props.items.length))));
+      } else if (Number.isInteger(gesture.index)) choose(gesture.index);
+      // Pointer capture retargets clicks to the group; commit only once here.
+      suppressClick = true; clearTimeout(clickTimer);
+      clickTimer = setTimeout(() => { suppressClick = false; }, 0);
+      gesture = null;
+    };
+    const onClick = (event, index) => { if (!suppressClick || event.detail === 0) choose(index); };
+    const cancelGesture = () => { gesture = null; };
+    onBeforeUnmount(() => { clearTimeout(clickTimer); gesture = null; });
+    const onKey = event => {
+      if (props.disabled || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const index = Number(event.target.closest('button')?.dataset.index);
+      if (!Number.isInteger(index)) return;
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? props.items.length - 1 : Math.max(0, Math.min(props.items.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1)));
+      choose(next);
+      event.currentTarget.querySelectorAll('button')[next]?.focus();
+    };
+    return { host, ready, onClick, onKey, onPointerDown, onPointerMove, onPointerUp, cancelGesture };
   },
-  template: `<nav class="glass-shell glass-nav" :class="{fallback:!ready}" aria-label="管理页面"><div ref="host" class="glass-canvas" aria-hidden="true"></div><div class="nav-overlays"><button v-for="(label,index) in labels" :key="label" :class="{active:selected===index}" :aria-current="selected===index?'page':undefined" @click="$emit('select',index)"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="icons[index]"/></svg>{{ label }}</button></div></nav>`,
+  // Pointer input reaches Goose's canvas; DOM buttons retain keyboard access.
+  template: `<nav class="glass-shell glass-tabs" :class="{fallback:!ready,'is-disabled':disabled}" :aria-label="label"><div ref="host" class="glass-canvas" aria-hidden="true"></div><div class="nav-overlays" :style="{gridTemplateColumns:'repeat('+items.length+',1fr)'}" @keydown="onKey" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="cancelGesture" @lostpointercapture="cancelGesture"><button v-for="(item,index) in items" :key="item.value ?? item.label" :data-index="index" :class="{active:selected===index}" :disabled="disabled" :aria-current="navigation && selected===index?'page':undefined" :aria-pressed="navigation?undefined:selected===index" @click="onClick($event,index)"><svg v-if="item.icon" viewBox="0 0 24 24" aria-hidden="true"><path :d="item.icon"/></svg>{{ item.label }}</button></div></nav>`,
+};
+
+export const GlassNav = {
+  components: { GlassTabs }, props: { selected: Number, disabled: Boolean }, emits: ['select'],
+  setup() { return { items: ['模型定价', '充值卡密', '用户与记录'].map((label, index) => ({ label, icon: icons[index] })) }; },
+  template: `<glass-tabs class="glass-nav" :items="items" :selected="selected" :disabled="disabled" label="管理页面" navigation @select="$emit('select',$event)" ></glass-tabs>`,
+};
+
+export const GlassSegments = {
+  components: { GlassTabs }, props: { items: Array, selected: String, disabled: Boolean, label: String }, emits: ['select'],
+  setup(props) {
+    return { index: computed(() => Math.max(0, props.items.findIndex(item => item.value === props.selected))) };
+  },
+  template: `<glass-tabs class="glass-segments" :items="items" :selected="index" :disabled="disabled" :label="label" @select="$emit('select',items[$event].value)" ></glass-tabs>`,
 };
 
 export const GlassRing = {

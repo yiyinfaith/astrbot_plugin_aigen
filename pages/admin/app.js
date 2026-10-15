@@ -1,11 +1,11 @@
-import { GlassNav, GlassButton, GlassPreview, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js';
+import { GlassNav, GlassSegments, GlassButton, GlassPreview, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.6';
 
 const { createApp } = window.Vue;
 const payloadOf = result => result?.status === 'ok' && 'data' in result ? result.data : result;
 const snapshot = row => JSON.stringify([row.model.trim(), row.expression]);
 
 const app = createApp({
-  components: { GlassNav, GlassButton, GlassPreview, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb },
+  components: { GlassNav, GlassSegments, GlassButton, GlassPreview, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb },
   data() {
     return {
       bridge: null, loading: true, loaded: false, busy: false, error: '', notice: '', tab: 0,
@@ -137,6 +137,7 @@ const app = createApp({
       catch (error) { if (sequence === this.cardSequence) this.error = error.message || String(error); }
       finally { if (sequence === this.cardSequence) this.cardsLoading = false; }
     },
+    chooseCardState(value) { if (this.busy || value === this.cardFilter.status) return; this.cardFilter.status = value; this.cardFilter.page = 1; return this.loadCards(); },
     chooseDenomination(amount) { if (this.busy) return; this.cardFilter.denomination = amount; this.cardFilter.page = 1; this.run(() => this.loadCards()); },
     toggleAllCards(event) { this.selectedCodes = event.target.checked ? this.cards.rows.filter(row => !row.redeemed_by).map(row => row.code) : []; },
     cardState(row) { return !row.redeemed_by ? { label: '有效', class: 'green' } : ['[revoked]', '[deleted]'].includes(row.redeemed_by) ? { label: '已删除', class: '' } : { label: '已兑换', class: '' }; },
