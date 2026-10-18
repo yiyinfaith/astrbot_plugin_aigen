@@ -338,6 +338,12 @@ def select_route(
                 f"检测到{label}（图片 {len(images)}、音频 {len(audios)}、视频 {len(videos)}），请先在“生视频设置 → 自动路由模型 → {label}”配置模型和接口格式；未提交收费任务。"
             )
         effective["model"] = model
+        for key in ("base_url", "api_keys"):
+            value = rule.get(key)
+            if isinstance(value, str):
+                value = value.strip()
+            if value:
+                effective[key] = value
         mode_key = "long_interface_mode" if is_long_model else "interface_mode"
         mode = rule.get(mode_key, "inherit" if is_long_model else "minimax")
         if mode == "inherit" and is_long_model:

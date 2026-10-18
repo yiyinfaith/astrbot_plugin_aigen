@@ -659,7 +659,7 @@ class VideoConfigUpgradeTest(unittest.TestCase):
                 self.assertEqual(json.loads(snapshot.read_text("utf-8")), before)
                 self.assertFalse(migrate_config(config, Path(tmp)))
             expected = copy.deepcopy(before)
-            expected["_config_layout_version"] = 6
+            expected["_config_layout_version"] = 7
             for key in ("result_image_download_retries", "download_retries"):
                 expected["image_settings"].pop(key, None)
             expected["video_settings"].pop("result_video_download_retries", None)

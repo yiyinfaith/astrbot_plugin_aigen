@@ -74,9 +74,17 @@ class AudioApiManager(VideoApiManager):
         Raises:
             VideoError: If the model, protocol or materials are unsupported.
         """
+        from dataclasses import replace
+
+        from .audio_router import resolve_audio_preset
+
+        options = replace(
+            options, prompt=resolve_audio_preset(self.config, options, audios)
+        )
         for source in audios:
             media_sources(source, "audio")
         route, effective = select_audio_route(self.config, options, audios)
+        effective["_audio_prompt"] = options.prompt
         cache_key = (
             route,
             effective.get("model"),
@@ -519,7 +527,7 @@ class AudioApiManager(VideoApiManager):
             AudioDownloadError: If a completed artifact cannot be downloaded.
         """
         _, manager = self.prepare(options, audios)
-        return await manager._generate_audio(options.prompt, audios)
+        return await manager._generate_audio(manager.config["_audio_prompt"], audios)
 
     async def _generate_audio(self, text: str, audios: list[str]) -> AudioResult:
         """Submit, poll and materialize one audio result.

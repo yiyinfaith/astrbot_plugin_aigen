@@ -294,7 +294,7 @@ def migrate_generation_settings(config: Any, backup_dir: Path, *, backup=True) -
 
 
 def migrate_compact_settings(config: Any, backup_dir: Path, *, backup=True) -> bool:
-    """Move audio adapter fields into JSON without changing saved custom values.
+    """Compact legacy fields and fill optional per-route generation settings.
 
     Args:
         config: Configuration after the host's schema normalization.
@@ -308,7 +308,7 @@ def migrate_compact_settings(config: Any, backup_dir: Path, *, backup=True) -> b
         ValueError: If a populated JSON field cannot be merged losslessly.
         OSError: If the backup or configuration cannot be saved.
     """
-    if config.get("_config_layout_version", 0) >= 6:
+    if config.get("_config_layout_version", 0) >= 7:
         return False
     original = copy.deepcopy(dict(config))
     upgraded = copy.deepcopy(original)
@@ -356,12 +356,26 @@ def migrate_compact_settings(config: Any, backup_dir: Path, *, backup=True) -> b
         )
     video.pop("result_video_download_retries", None)
     video.pop("reference_mode", None)
+    rules = video.get("routes", [])
+    rules = (
+        rules.values()
+        if isinstance(rules, dict)
+        else rules
+        if isinstance(rules, list)
+        else []
+    )
+    for rule in rules:
+        if isinstance(rule, dict):
+            rule.setdefault("base_url", "")
+            rule.setdefault("api_keys", "")
+    audio.setdefault("prompt_list", [])
+    audio.setdefault("preset_need_prefix", True)
     upgraded.setdefault("global_settings", {}).pop("billing_timezone", None)
-    upgraded["_config_layout_version"] = 6
+    upgraded["_config_layout_version"] = 7
     if backup:
         backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        snapshot = backup_dir / f"config_before_v1.4.5_{stamp}.json"
+        snapshot = backup_dir / f"config_before_v1.4.7_{stamp}.json"
         snapshot.write_text(
             json.dumps(original, ensure_ascii=False, indent=2), encoding="utf-8"
         )

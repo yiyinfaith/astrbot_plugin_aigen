@@ -9,8 +9,8 @@ from .video_router import VideoError
 AUDIO_ROUTES = {
     "text_to_audio": "提示词生音频（TTA）",
     "text_to_speech": "文字生音频（TTS）",
-    "reference_to_speech": "文字＋参考音频生音频（音色克隆）",
-    "reference_to_audio": "提示词＋参考音频生音频（音频条件 TTA）",
+    "reference_to_speech": "文字＋参考音频音色生音频（音色克隆）",
+    "reference_to_audio": "提示词＋参考音频音色生音频（音频条件 TTA）",
     "audio_editing": "音频编辑",
     "voice_conversion": "音色转换",
     "speech_editing": "语音编辑",
@@ -65,6 +65,44 @@ def parse_audio_materials(fragments: list[str], mode: str) -> AudioOptions:
     options.prompt = " ".join(texts)
     options.prompt_segments = len(texts)
     return options
+
+
+def resolve_audio_preset(config: dict, options: AudioOptions, audios: list) -> str:
+    """Expand a keyword only for reference-conditioned TTA requests.
+
+    Args:
+        config: Audio settings containing the independent preset list.
+        options: User intent and unmodified collected text.
+        audios: Reference materials identifying the conditional TTA route.
+
+    Returns:
+        The expanded prompt, or the original text for every other operation.
+    """
+    if (
+        options.mode != "提示词"
+        or not audios
+        or options.route not in {"", "reference_to_audio"}
+    ):
+        return options.prompt
+    from .utils import match_keyword_in_text
+
+    presets = {}
+    entries = config.get("prompt_list", [])
+    for item in entries if isinstance(entries, list) else []:
+        if isinstance(item, str) and ":" in item:
+            keyword, prompt = item.split(":", 1)
+            if keyword.strip() and prompt.strip():
+                presets[keyword.strip()] = prompt.strip()
+    matched = match_keyword_in_text(options.prompt, presets)
+    if not matched:
+        return options.prompt
+    keyword, offset = matched
+    suffix = " ".join(
+        part.strip()
+        for part in (options.prompt[:offset], options.prompt[offset + len(keyword) :])
+        if part.strip()
+    )
+    return f"{presets[keyword]} {suffix}".strip()
 
 
 def select_audio_route(

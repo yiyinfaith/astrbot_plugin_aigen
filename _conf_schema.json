@@ -476,6 +476,19 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -560,6 +573,19 @@
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
                             },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
@@ -646,6 +672,19 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -730,6 +769,19 @@
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
                             },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
@@ -816,6 +868,19 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -900,6 +965,19 @@
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
                             },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
@@ -986,6 +1064,19 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -1070,6 +1161,19 @@
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
                             },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
@@ -1156,6 +1260,19 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -1240,6 +1357,19 @@
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
                             },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
@@ -1326,6 +1456,19 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -1410,6 +1553,19 @@
                                     "Seedance / 火山方舟",
                                     "用户自定义路径"
                                 ]
+                            },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
                             },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
@@ -1496,6 +1652,19 @@
                                     "用户自定义路径"
                                 ]
                             },
+                            "base_url": {
+                                "description": "本路线接口地址（可选）",
+                                "type": "string",
+                                "default": "",
+                                "hint": "留空跟随视频主接口地址；本路线的普通及长时模型共用此地址。按所选接口格式自动补全路径，自定义模式按自定义路径设置。"
+                            },
+                            "api_keys": {
+                                "description": "本路线 API Keys（可选）",
+                                "type": "string",
+                                "default": "",
+                                "secret": true,
+                                "hint": "留空跟随视频主 API Keys；支持逗号或换行分隔多个 Key，按本路线配置轮换。只用于本路线的提交和查询。"
+                            },
                             "resolution": {
                                 "description": "本路线分辨率（可选）",
                                 "type": "string",
@@ -1525,7 +1694,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "image_to_video",
@@ -1534,7 +1705,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "first_last_frame",
@@ -1543,7 +1716,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "first_frame",
@@ -1552,7 +1727,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "audio_to_video",
@@ -1561,7 +1738,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "image_audio_to_video",
@@ -1570,7 +1749,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "video_to_video",
@@ -1579,7 +1760,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "image_video_to_video",
@@ -1588,7 +1771,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "audio_video_to_video",
@@ -1597,7 +1782,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "image_audio_video_to_video",
@@ -1606,7 +1793,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "last_frame",
@@ -1615,7 +1804,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "motion_transfer",
@@ -1624,7 +1815,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "464p",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     },
                     {
                         "__template_key": "audio_sync",
@@ -1633,7 +1826,9 @@
                         "interface_mode": "minimax",
                         "long_interface_mode": "inherit",
                         "resolution": "",
-                        "aspect_ratio": ""
+                        "aspect_ratio": "",
+                        "base_url": "",
+                        "api_keys": ""
                     }
                 ]
             },
@@ -2144,6 +2339,18 @@
                 "type": "bool",
                 "default": true
             },
+            "preset_need_prefix": {
+                "description": "【触发】预设关键词需要 AstrBot 前缀",
+                "type": "bool",
+                "default": true,
+                "hint": "开启后使用 /关键词 或唤醒机器人触发音频预设；关闭后可直接发送关键词。仅启动音频条件 TTA，仍需收集参考音频并发送 /生成。"
+            },
+            "prompt_list": {
+                "description": "音频预设提示词",
+                "type": "list",
+                "default": [],
+                "hint": "格式：关键词:完整提示词。仅用于提示词＋参考音频音色生音频（音频条件 TTA）；/关键词 启动该路线的材料录入，也可先 /生音频 提示词，在材料中发送关键词及参考音频。朗读、无参考音频 TTA、音频编辑、语音编辑和音色转换不会替换正文。"
+            },
             "collection_timeout_seconds": {
                 "description": "材料收集超时时间（秒）",
                 "type": "int",
@@ -2363,8 +2570,8 @@
                         }
                     },
                     "reference_to_speech": {
-                        "name": "文字＋参考音频生音频（音色克隆）",
-                        "description": "文字＋参考音频生音频（音色克隆）",
+                        "name": "文字＋参考音频音色生音频（音色克隆）",
+                        "description": "文字＋参考音频音色生音频（音色克隆）",
                         "items": {
                             "model": {
                                 "description": "模型 ID",
@@ -2424,11 +2631,12 @@
                                 "default": "",
                                 "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
-                        }
+                        },
+                        "hint": "输入要朗读的新文字＋参考音色，生成新语音；不依赖参考音频原来讲了什么。默认 IndexTTS-2。"
                     },
                     "reference_to_audio": {
-                        "name": "提示词＋参考音频生音频（音频条件 TTA）",
-                        "description": "提示词＋参考音频生音频（音频条件 TTA）",
+                        "name": "提示词＋参考音频音色生音频（音频条件 TTA）",
+                        "description": "提示词＋参考音频音色生音频（音频条件 TTA）",
                         "items": {
                             "model": {
                                 "description": "模型 ID",
@@ -2488,7 +2696,8 @@
                                 "default": "",
                                 "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
-                        }
+                        },
+                        "hint": "输入声音描述或预设关键词＋参考音频，按提示词生成新音频；具体音色或风格参考能力由所选模型决定。"
                     },
                     "audio_editing": {
                         "name": "音频编辑",
@@ -2552,7 +2761,8 @@
                                 "default": "",
                                 "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
-                        }
+                        },
+                        "hint": "输入编辑提示词＋一段原音频，例如降噪、改变音效或背景音乐；使用 /生音频 提示词 音频编辑。需上游支持此任务。"
                     },
                     "voice_conversion": {
                         "name": "音色转换",
@@ -2616,7 +2826,8 @@
                                 "default": "",
                                 "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
-                        }
+                        },
+                        "hint": "输入两段音频：先原语音，再目标音色；不输入正文文字。保留原语音内容并转换音色，与输入文字的音色克隆不同。需上游支持此任务。"
                     },
                     "speech_editing": {
                         "name": "语音编辑",
@@ -2680,7 +2891,8 @@
                                 "default": "",
                                 "hint": "可留空。例如 {\"speed\":1.2}。只填写该模型支持的字段，可用能力查询工具查看。优先级：本次工具参数/设置 > 路线默认值 > 板块默认值 > 上游默认。"
                             }
-                        }
+                        },
+                        "hint": "输入修改后的目标文字＋一段原语音，编辑说话内容；使用 /生音频 朗读 语音编辑。需上游支持此任务。"
                     }
                 },
                 "default": [

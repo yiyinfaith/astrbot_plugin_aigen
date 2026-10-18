@@ -63,7 +63,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.6",
+    "1.4.7",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -101,7 +101,9 @@ class ImageGeneratorPlugin(Star):
         for name in ("base_url", "api_keys"):
             if not self.audio_conf.get(name):
                 self.audio_conf[name] = self.video_conf.get(name, "")
-        self.data_mgr = DataManager(data_dir, self.conf, self.video_conf)
+        self.data_mgr = DataManager(
+            data_dir, self.conf, self.video_conf, self.audio_conf
+        )
         self.img_mgr = ImageManager(self.conf)
         self.api_mgr = ApiManager(self.conf)
         self._image_route_managers = {}
@@ -265,14 +267,23 @@ class ImageGeneratorPlugin(Star):
         clean = self._clean_message(text)
         if not clean:
             return None
-        conf = self.video_conf if kind == "video" else self.conf
+        conf = (
+            self.audio_conf
+            if kind == "audio"
+            else self.video_conf
+            if kind == "video"
+            else self.conf
+        )
         prompt_map = (
-            self.data_mgr.video_prompt_map
+            getattr(self.data_mgr, "audio_prompt_map", {})
+            if kind == "audio"
+            else self.data_mgr.video_prompt_map
             if kind == "video"
             else self.data_mgr.prompt_map
         )
-        model = str(conf.get("model", "nano-banana") or "nano-banana")
-        default_prefix = "生视频" if kind == "video" else "生图"
+        default_model = "nano-banana" if kind == "image" else ""
+        model = str(conf.get("model", default_model) or default_model)
+        default_prefix = {"image": "生图", "video": "生视频", "audio": "生音频"}[kind]
         prefixes = conf.get("extra_prefix", [default_prefix])
         if isinstance(prefixes, str):
             prefixes = [prefixes]
@@ -695,7 +706,8 @@ class ImageGeneratorPlugin(Star):
             )
         else:
             candidates = [
-                (k, self._resolve_preset_prompt(text, k)) for k in ("image", "video")
+                (k, self._resolve_preset_prompt(text, k))
+                for k in ("image", "video", "audio")
             ]
             # Explicit custom prefixes beat keyword matches; for overlapping
             # keywords use the longest, preserving image precedence on ties.
@@ -714,13 +726,29 @@ class ImageGeneratorPlugin(Star):
             else "preset_need_prefix"
         )
         default_need_prefix = preset_name == "自定义"
-        conf = self.video_conf if kind == "video" else self.conf
+        conf = (
+            self.audio_conf
+            if kind == "audio"
+            else self.video_conf
+            if kind == "video"
+            else self.conf
+        )
         if conf.get(
             need_prefix_key, default_need_prefix
         ) and not self._has_astrbot_prefix(event, raw_text):
             return
         event.stop_event()
-        if kind == "video":
+        if kind == "audio":
+            result = await self._collect_video_request(
+                event,
+                text,
+                preset_name,
+                start=True,
+                kind="audio",
+                audio_mode="提示词",
+                audio_type="reference_to_audio",
+            )
+        elif kind == "video":
             result = await self._collect_video_request(
                 event, prompt, preset_name, start=True
             )
@@ -1320,7 +1348,7 @@ class ImageGeneratorPlugin(Star):
                 "audio",
                 effective,
                 {
-                    "characters": len(options.prompt),
+                    "characters": len(effective.get("_audio_prompt", options.prompt)),
                     "images": 0,
                     "audios": len(audios),
                     "videos": 0,

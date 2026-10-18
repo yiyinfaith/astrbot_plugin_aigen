@@ -10,10 +10,13 @@ from .utils import norm_id
 
 
 class DataManager:
-    def __init__(self, data_dir: Path, config: Any, video_config: Any = None):
+    def __init__(
+        self, data_dir: Path, config: Any, video_config: Any = None, audio_config: Any = None
+    ):
         self.data_dir = Path(data_dir)
         self.config = config
         self.video_config = video_config or {}
+        self.audio_config = audio_config or {}
         self._stats_lock = asyncio.Lock()
 
         self.daily_stats_file = self.data_dir / "daily_stats.json"
@@ -25,6 +28,7 @@ class DataManager:
         self.daily_stats: dict[str, Any] = {}
         self.prompt_map: dict[str, str] = {}
         self.video_prompt_map: dict[str, str] = {}
+        self.audio_prompt_map: dict[str, str] = {}
 
     async def initialize(self):
         if not self.daily_stats_file.exists():
@@ -60,6 +64,7 @@ class DataManager:
         for config, prompt_map in (
             (self.config, self.prompt_map),
             (self.video_config, self.video_prompt_map),
+            (self.audio_config, self.audio_prompt_map),
         ):
             prompt_map.clear()
             prompt_list = config.get("prompt_list", [])

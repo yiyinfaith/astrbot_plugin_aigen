@@ -397,6 +397,7 @@ class VideoApiManager(ApiManager):
     def __init__(self, config: dict, data_dir: Path):
         super().__init__(config)
         self.data_dir = Path(data_dir) / "video"
+        self._route_key_managers = {}
 
     def prepare(self, prompt, images, audios, videos, duration=0, options=None):
         for kind, sources in (("audio", audios), ("video", videos)):
@@ -438,7 +439,16 @@ class VideoApiManager(ApiManager):
         # Requests share the session and key pool while per-task configuration
         # remains independent under concurrent image/audio/video calls.
         manager._get_session = self._get_session
-        manager.get_key = self.get_key
+        keys = tuple(self._normalize_keys(effective.get("api_keys")))
+        if keys == tuple(self._normalize_keys(self.config.get("api_keys"))):
+            manager.get_key = self.get_key
+        else:
+            pool_key = (route, effective.get("model"), effective.get("base_url"), keys)
+            pool = self._route_key_managers.get(pool_key)
+            if pool is None:
+                pool = ApiManager(effective)
+                self._route_key_managers[pool_key] = pool
+            manager.get_key = pool.get_key
         manager.build_request(
             prompt,
             [image_source(i) for i in images],
