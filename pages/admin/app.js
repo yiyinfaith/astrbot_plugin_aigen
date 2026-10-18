@@ -1,17 +1,17 @@
-import { GlassNav, GlassSegments, GlassButton, GlassPreview, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.6';
+import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.8';
 
 const { createApp } = window.Vue;
 const payloadOf = result => result?.status === 'ok' && 'data' in result ? result.data : result;
 const snapshot = row => JSON.stringify([row.model.trim(), row.expression]);
 
 const app = createApp({
-  components: { GlassNav, GlassSegments, GlassButton, GlassPreview, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb },
+  components: { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb },
   data() {
     return {
       bridge: null, loading: true, loaded: false, busy: false, error: '', notice: '', tab: 0,
       overview: { models: 0, users: 0, categories: [], charged: '0', running: 0 },
       priceRows: [], priceRevision: 0, priceSearch: '', draft: { id: null, model: '', expression: '0' },
-      originalDraft: JSON.stringify(['', '0']), preview: { valid: true, tiers: [] }, validating: false, previewSequence: 0, previewTimer: null,
+      originalDraft: JSON.stringify(['', '0']), preview: { valid: true, tiers: [], table: null }, validating: false, previewSequence: 0, previewTimer: null,
       cards: { rows: [], total: 0 }, selectedCodes: [], cardFilter: { page: 1, status: 'active', denomination: '', search: '' },
       cardSequence: 0, recordSequence: 0, cardsLoading: false, recordsLoading: false,
       records: { rows: [], total: 0 }, recordKind: 'users', recordFilter: { page: 1, search: '' }, negativeOnly: false,

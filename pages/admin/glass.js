@@ -189,18 +189,6 @@ export const GlassButton = {
   template: `<div class="glass-shell glass-button" :class="{fallback:!ready,disabled}"><div ref="host" class="glass-canvas" aria-hidden="true"></div><button type="button" :disabled="disabled" @click="$emit('activate')"><span :class="{'sr-only':ready}">{{ label }}</span></button></div>`,
 };
 
-export const GlassPreview = {
-  props: { tiers: { type: Array, default: () => [] } },
-  setup(props) {
-    const host = ref(null);
-    const config = el => el.setScroll(props.tiers.map(tier => ({ title: tier.condition, subtitle: tier.fees.join(' · ') })));
-    const { ready, sync } = useGlass(host, 'scroll-container', config, config);
-    watch(() => props.tiers, sync, { deep: true });
-    return { host, ready };
-  },
-  template: `<div class="glass-preview" :class="{fallback:!ready}"><div ref="host" class="preview-artwork" :style="{height:'210px',visibility:ready?'visible':'hidden'}" aria-hidden="true"></div><div class="price-lines"><article class="price-tier" v-for="(tier,index) in tiers" :key="index"><h4>{{ tier.condition }}</h4><p v-for="(fee,n) in tier.fees" :key="n">{{ fee }}</p></article></div></div>`,
-};
-
 export const GlassSlider = {
   props: { value: Number }, emits: ['select'],
   setup(props, { emit }) {

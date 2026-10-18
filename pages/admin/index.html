@@ -6,10 +6,10 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="data:," />
     <title>AIGen 管理中心</title>
-    <link rel="stylesheet" href="./style.css?v=1.4.6" />
+    <link rel="stylesheet" href="./style.css?v=1.4.8" />
     <script defer src="./vendor/vue.global.prod.js"></script>
     <script defer src="./vendor/liquid-glass.js"></script>
-    <script type="module" src="./app.js?v=1.4.6"></script>
+    <script type="module" src="./app.js?v=1.4.8"></script>
   </head>
   <body>
     <div id="app" v-cloak>
@@ -33,7 +33,7 @@
             <div class="pricing-layout">
               <aside class="panel model-list"><label class="search-field"><span>⌕</span><input v-model="priceSearch" placeholder="搜索模型 ID" aria-label="搜索模型 ID" /></label><p class="list-label">{{ filteredPrices.length }} 个模型</p><button v-for="row in filteredPrices" :key="row.id" class="model-row" :class="{selected: draft.id===row.id}" :disabled="busy" @click="selectPrice(row)"><span>{{ row.model }}</span><i :class="row.valid ? 'valid-dot' : 'invalid-dot'"></i></button><p v-if="!filteredPrices.length" class="empty">尚无模型价格。未定价模型免费。</p></aside>
               <section class="panel editor-panel"><div class="panel-title"><h3>{{ draft.id ? '编辑模型' : '添加模型' }}</h3><span class="badge">{{ dirty ? '未保存' : '已同步' }}</span></div><label class="field">模型 ID<input v-model="draft.model" :disabled="busy" placeholder="例如 IndexTTS-2" @input="schedulePreview" /></label><label class="field">价格表达式<textarea v-model="draft.expression" :disabled="busy" spellcheck="false" rows="9" placeholder='tier("base", u("seconds") * 0.1)' @input="schedulePreview"></textarea></label><div class="expression-note">留空或填 0 免费。使用 p、c 等 Token 变量时，单价按百万 Token 结算。</div><div class="example-chips"><button v-for="example in examples" :key="example.name" :disabled="busy" @click="useExample(example)">{{ example.name }}</button></div><div class="editor-footer"><button v-if="draft.id" class="text-danger" :disabled="busy" @click="requestDeletePrice">删除此模型</button><span v-else>按最终路由模型 ID 匹配。</span><glass-button label="保存模型价格" :disabled="busy || !draft.model.trim()" @activate="savePrice" ></glass-button></div></section>
-              <aside class="panel preview-panel"><div class="panel-title"><h3>费用预览</h3><span class="badge" :class="preview.valid ? 'green' : 'red'">{{ validating ? '解析中' : preview.valid ? '解析成功' : '表达式不合法' }}</span></div><p class="preview-model">{{ draft.model || '填写模型 ID' }}</p><p v-if="!preview.valid" class="validation-error">{{ preview.detail || '表达式不合法' }}</p><p v-else class="muted">价格使用余额单位，成功后按实际用量结算。</p><glass-preview v-if="preview.valid && preview.tiers.length" :tiers="preview.tiers" ></glass-preview><div v-if="!preview.valid" class="preview-invalid">此规则保存后，该模型的生成请求会被拦截，并提示用户联系管理员配置价格。</div></aside>
+              <aside class="panel preview-panel"><div class="panel-title"><h3>费用预览</h3><span class="badge" :class="preview.valid ? 'green' : 'red'">{{ validating ? '解析中' : preview.valid ? '解析成功' : '表达式不合法' }}</span></div><p class="preview-model">{{ draft.model || '填写模型 ID' }}</p><p v-if="!preview.valid" class="validation-error">{{ preview.detail || '表达式不合法' }}</p><p v-else class="muted">价格使用余额单位，成功后按实际用量结算。</p><div v-if="preview.valid && preview.table" class="pricing-breakdown" :aria-busy="validating"><table class="price-table" aria-label="模型定价明细"><thead><tr><th scope="col">适用条件</th><th v-for="column in preview.table.columns" :key="column.key" scope="col">{{ column.label }}</th></tr></thead><tbody><tr v-for="(row,index) in preview.table.rows" :key="index"><td>{{ row.condition }}</td><td v-for="column in preview.table.columns" :key="column.key"><span>{{ row.fees[column.key] || '—' }}</span></td></tr></tbody></table><p v-for="note in preview.table.notes" :key="note" class="price-footnote">{{ note }}</p></div><div v-if="!preview.valid" class="preview-invalid">此规则保存后，该模型的生成请求会被拦截，并提示用户联系管理员配置价格。</div></aside>
             </div>
           </section>
           <section v-if="tab===1" class="page-section">

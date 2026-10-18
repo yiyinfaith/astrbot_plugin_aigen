@@ -12,6 +12,7 @@ from astrbot.api.web import error_response, json_response, request
 from .billing import BillingError
 from .finance_store import FinanceConflict
 from .model_prices import compile_price, price_sections
+from .price_display import price_table
 
 
 class FinanceWebUI:
@@ -84,6 +85,7 @@ class FinanceWebUI:
                 "valid": True,
                 "expression": expression.source,
                 "unit": "每百万 Token" if expression.token_mode else "余额单位",
+                "table": price_table(rule, expression),
                 "tiers": [
                     {"condition": lines[0], "fees": lines[1:] or [lines[0]]}
                     for part in body.split("\n\n")

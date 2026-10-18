@@ -375,19 +375,21 @@ def _text(node):
     return f"{label}({', '.join(_text(arg) for arg in arguments)})"
 
 
-def _branches(node, conditions=()):
+def _branches(node, conditions=(), *, structured=False):
     """Expand nested price tiers, bounded before any Cartesian allocation."""
     if node[0] == "conditional":
-        rows = _branches(node[2], conditions + (_text(node[1]),)) + _branches(
-            node[3], conditions + ("不满足 " + _text(node[1]),)
-        )
+        yes = (node[1], True) if structured else _text(node[1])
+        no = (node[1], False) if structured else "不满足 " + _text(node[1])
+        rows = _branches(
+            node[2], conditions + (yes,), structured=structured
+        ) + _branches(node[3], conditions + (no,), structured=structured)
         if len(rows) > 64:
             raise ValueError("Too many display branches")
         return rows
     if node[0] in {"literal", "variable"}:
         return [(conditions, node)]
     children = node[2] if node[0] == "call" else node[2:]
-    expanded = [_branches(child) for child in children]
+    expanded = [_branches(child, structured=structured) for child in children]
     count = 1
     for rows in expanded:
         count *= len(rows)
