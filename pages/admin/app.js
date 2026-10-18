@@ -1,4 +1,4 @@
-import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.8';
+import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.9';
 
 const { createApp } = window.Vue;
 const payloadOf = result => result?.status === 'ok' && 'data' in result ? result.data : result;

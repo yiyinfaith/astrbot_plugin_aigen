@@ -175,18 +175,20 @@ export const GlassOrb = {
 };
 
 export const GlassButton = {
-  props: { label: String, disabled: Boolean }, emits: ['activate'],
+  props: { label: String, disabled: Boolean, danger: Boolean }, emits: ['activate'],
   setup(props, { emit }) {
     const host = ref(null);
-    const config = el => el.setButtons([{ id: 'primary', label: props.label, style: 'blue' }]);
+    const config = el => el.setButtons([{ id: 'primary', label: props.label, style: props.danger ? {
+      tintColor: [0.84, 0.15, 0.24, 1], surfaceColor: [0, 0, 0, 0], labelColor: [1, 1, 1, 1],
+    } : 'blue' }]);
     const { ready, sync } = useGlass(host, 'buttons', el => {
       config(el);
       el.addEventListener('lg-buttontap', () => { if (!props.disabled) emit('activate'); });
     }, config);
-    watch(() => props.label, sync);
+    watch(() => [props.label, props.danger], sync);
     return { host, ready };
   },
-  template: `<div class="glass-shell glass-button" :class="{fallback:!ready,disabled}"><div ref="host" class="glass-canvas" aria-hidden="true"></div><button type="button" :disabled="disabled" @click="$emit('activate')"><span :class="{'sr-only':ready}">{{ label }}</span></button></div>`,
+  template: `<div class="glass-shell glass-button" :class="{fallback:!ready,disabled,danger}"><div ref="host" class="glass-canvas" aria-hidden="true"></div><button type="button" :disabled="disabled" @click="$emit('activate')"><span :class="{'sr-only':ready}">{{ label }}</span></button></div>`,
 };
 
 export const GlassSlider = {
