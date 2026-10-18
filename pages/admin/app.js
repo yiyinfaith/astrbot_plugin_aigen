@@ -1,4 +1,4 @@
-import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.13';
+import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.14';
 
 const { createApp } = window.Vue;
 const payloadOf = result => result?.status === 'ok' && 'data' in result ? result.data : result;
@@ -273,7 +273,7 @@ const app = createApp({
     async confirmModal() { const action = this.pendingConfirmation; this.modal = null; this.pendingConfirmation = null; await action?.(); },
     orderState(value) { return { running: '生成中', settled: '已扣费', refunded: '未扣费 / 已退款', review: '待核对', reserved: '旧订单' }[value] || value; },
     auditKind(value) { return { balance: '余额调整', create_cards: '生成卡密', delete_cards: '删除卡密', prices: '修改价格' }[value] || value; },
-    auditDetail(row) { const value = row.result || {}; return row.kind === 'balance' ? value.owner + '：' + ({ add: '增加额度', subtract: '减少额度', set: '覆盖余额' }[value.mode || 'set']) + '；' + value.before + ' → ' + value.after + '；' + value.reason : row.kind === 'create_cards' ? value.count + ' 张 · 面额 ' + value.amount : row.kind === 'delete_cards' ? '删除 ' + value.deleted + ' 张' : value.models + ' 个模型 · 版本 ' + value.revision; },
+    auditDetail(row) { const value = row.result || {}; return row.kind === 'balance' ? value.owner + '：' + ({ add: '增加额度', subtract: '减少额度', set: '覆盖余额' }[value.mode || 'set']) + '；' + value.before + ' → ' + value.after + (value.reason ? '；' + value.reason : '') : row.kind === 'create_cards' ? value.count + ' 张 · 面额 ' + value.amount : row.kind === 'delete_cards' ? '删除 ' + value.deleted + ' 张' : value.models + ' 个模型 · 版本 ' + value.revision; },
   },
   mounted() { this.bootstrap(); },
   beforeUnmount() { clearTimeout(this.previewTimer); clearTimeout(this.toastTimer); clearTimeout(this.userTimer); ++this.userSequence; this.offContext?.(); },

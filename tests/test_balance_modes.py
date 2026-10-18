@@ -27,6 +27,27 @@ class AdjustmentTest(unittest.TestCase):
             mode=mode,
         )
 
+    def test_reason_is_optional_without_relaxing_account_or_text_validation(self):
+        for mode in ("set", "add", "subtract"):
+            result = self.finance.set_balance(
+                "admin", self.operation(), "aiocqhttp", "123", "0", "1", mode=mode
+            )
+            self.assertEqual(result["reason"], "")
+        for reason in ([], 123, "x" * 501):
+            with self.assertRaises(fixture.b.BillingError):
+                self.finance.set_balance(
+                    "admin",
+                    self.operation(),
+                    "aiocqhttp",
+                    "123",
+                    "0",
+                    "1",
+                    reason,
+                    mode="add",
+                )
+        with self.assertRaisesRegex(fixture.b.BillingError, "请填写平台和用户 ID"):
+            self.finance.set_balance("admin", self.operation(), "", "123", "0", "1")
+
     def test_relative_adjustments_use_current_balance_and_keep_audit_and_ledger_exact(
         self,
     ):
@@ -112,6 +133,27 @@ class AdjustmentApiTest(unittest.IsolatedAsyncioTestCase):
     setUp = fixture.FinanceApiTest.setUp
     asyncTearDown = fixture.FinanceApiTest.asyncTearDown
     request = fixture.FinanceApiTest.request
+
+    async def test_api_accepts_missing_null_and_blank_reasons_for_all_modes(self):
+        for mode in ("set", "add", "subtract"):
+            for reason in ({}, {"reason": None}, {"reason": "   "}, {"reason": ""}):
+                before = fixture.b.money(
+                    self.fixture.billing.store.balance(self.fixture.owner)[0]
+                )
+                result, status = await self.request(
+                    "set-balance",
+                    {
+                        "platform": "aiocqhttp",
+                        "user_id": "123",
+                        "expected": before,
+                        "amount": "1",
+                        "mode": mode,
+                        "operation_id": self.fixture.operation(),
+                        **reason,
+                    },
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(result["reason"], "")
 
     async def test_api_applies_selected_mode_and_rejects_unknown_values(self):
         payload = {

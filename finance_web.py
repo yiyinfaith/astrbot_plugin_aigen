@@ -263,7 +263,7 @@ class FinanceWebUI:
                     payload.get("user_id"),
                     payload.get("expected"),
                     payload.get("amount"),
-                    payload.get("reason"),
+                    payload.get("reason", ""),
                     mode=payload.get("mode", "set"),
                 )
             return json_response(result)

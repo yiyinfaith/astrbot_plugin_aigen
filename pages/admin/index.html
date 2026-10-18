@@ -6,10 +6,10 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="data:," />
     <title>AIGen 管理中心</title>
-    <link rel="stylesheet" href="./style.css?v=1.4.13" />
+    <link rel="stylesheet" href="./style.css?v=1.4.14" />
     <script defer src="./vendor/vue.global.prod.js"></script>
     <script defer src="./vendor/liquid-glass.js"></script>
-    <script type="module" src="./app.js?v=1.4.13"></script>
+    <script type="module" src="./app.js?v=1.4.14"></script>
   </head>
   <body>
     <div id="app" v-cloak>
@@ -69,7 +69,7 @@
             <label class="field">{{ balanceAmountLabel }}<input v-model="balanceDraft.amount" inputmode="decimal" maxlength="40" :disabled="busy || !balanceDraft.user_id" /></label>
             <p class="balance-preview">预计调整后余额 <strong>{{ balancePreview }}</strong></p><p class="muted">{{ balanceDraft.mode==='set' ? '覆盖为填写的余额；保存时若余额已变化，会提示刷新重试。' : '填写要增加或减少的额度，必须大于 0；以保存时的实际余额计算，预览仅供参考。' }}</p>
             <p v-if="error" class="validation-error" role="alert">{{ error }}</p>
-            <label class="field">修改原因<input v-model="balanceDraft.reason" :disabled="busy" placeholder="例如人工充值、更正余额" /></label><glass-button label="确认修改余额" :disabled="busy || usersLoading || !balanceDraft.user_id || !balanceSelection" @activate="setBalance" ></glass-button>
+            <label class="field">修改原因（选填）<input v-model="balanceDraft.reason" :disabled="busy" placeholder="选填，例如人工充值、更正余额" /></label><glass-button label="确认修改余额" :disabled="busy || usersLoading || !balanceDraft.user_id || !balanceSelection" @activate="setBalance" ></glass-button>
           </template>
           <template v-else-if="modal.kind==='generated'"><p>已生成 {{ generated.codes.length }} 张，每张 {{ generated.amount }}。</p><textarea class="generated-codes" readonly :value="generated.codes.join('\n')" aria-label="已生成卡密"></textarea><glass-button label="导出本批卡密" @activate="downloadCodes(generated.codes, 'aigen-cards-'+generated.amount+'.txt')" ></glass-button></template>
           <glass-dialog v-else :title="modal.title" :body="modal.body" :disabled="busy" @confirm="confirmModal" @cancel="closeModal" ></glass-dialog>

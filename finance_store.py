@@ -289,7 +289,15 @@ class FinanceStore:
         return self._mutate(actor, operation, "delete_cards", {"codes": codes}, change)
 
     def set_balance(
-        self, actor, operation, platform, user_id, expected, amount, reason, mode="set"
+        self,
+        actor,
+        operation,
+        platform,
+        user_id,
+        expected,
+        amount,
+        reason="",
+        mode="set",
     ):
         """Adjust an account atomically, keeping overwrite conflicts and retries safe.
 
@@ -300,7 +308,7 @@ class FinanceStore:
             user_id: AstrBot sender ID.
             expected: The balance displayed when editing began.
             amount: New balance for set; positive adjustment for add/subtract.
-            reason: Administrator's explanation.
+            reason: Optional administrator explanation; blank or None means omitted.
             mode: Set, add or subtract; relative adjustments use the current balance.
 
         Returns:
@@ -316,11 +324,12 @@ class FinanceStore:
             or not user_id.strip()
             or len(platform) > 100
             or len(user_id) > 200
-            or not isinstance(reason, str)
-            or not reason.strip()
-            or len(reason) > 500
         ):
-            raise BillingError("请填写平台、用户 ID 和修改原因。")
+            raise BillingError("请填写平台和用户 ID。")
+        if reason is None:
+            reason = ""
+        if not isinstance(reason, str) or len(reason) > 500:
+            raise BillingError("修改原因须为不超过 500 字的文字，可留空。")
         if not isinstance(mode, str) or mode not in {"set", "add", "subtract"}:
             raise BillingError("额度调整方式只能为覆盖余额、增加额度或减少额度。")
         try:
