@@ -1,8 +1,19 @@
-import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.12';
+import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.13';
 
 const { createApp } = window.Vue;
 const payloadOf = result => result?.status === 'ok' && 'data' in result ? result.data : result;
 const snapshot = row => JSON.stringify([row.model.trim(), row.expression]);
+const balanceUnits = value => {
+  const text = String(value).trim();
+  if (text.length > 40 || !/^[+-]?(?:\d+(?:\.\d{0,6})?|\.\d{1,6})$/.test(text)) return null;
+  const [whole, fraction = ''] = text.replace(/^[+-]/, '').split('.');
+  return (text.startsWith('-') ? -1n : 1n) * (BigInt(whole || '0') * 1000000n + BigInt(fraction.padEnd(6, '0')));
+};
+const balanceMoney = value => {
+  const text = (value < 0n ? -value : value).toString().padStart(7, '0');
+  const fraction = text.slice(-6).replace(/0+$/, '');
+  return (value < 0n ? '-' : '') + text.slice(0, -6) + (fraction ? '.' + fraction : '');
+};
 
 const app = createApp({
   components: { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb },
@@ -16,7 +27,8 @@ const app = createApp({
       cardSequence: 0, recordSequence: 0, cardsLoading: false, recordsLoading: false,
       records: { rows: [], total: 0 }, recordKind: 'users', recordFilter: { page: 1, search: '' }, negativeOnly: false,
       cardDraft: { amount: '10', count: 10 }, generated: { amount: '', codes: [] },
-      balanceDraft: { platform: '', user_id: '', expected: '0', amount: '0', reason: '' },
+      balanceDraft: { platform: '', user_id: '', expected: '0', amount: '0', reason: '', mode: 'set' },
+      balanceModes: [{ value: 'add', label: '增加额度' }, { value: 'subtract', label: '减少额度' }, { value: 'set', label: '覆盖余额' }],
       platforms: [], userOptions: [], userSearch: '', userPage: 1, userTotal: 0,
       usersLoading: false, userSequence: 0, userTimer: null, balanceSelection: null,
       modal: null, pendingConfirmation: null, retryKeys: new Map(), toastTimer: null, offContext: null,
@@ -39,6 +51,12 @@ const app = createApp({
     filteredPrices() { return this.priceRows.filter(row => String(row.model).toLowerCase().includes(this.priceSearch.toLowerCase())); },
     dirty() { return snapshot(this.draft) !== this.originalDraft; },
     allCardsSelected() { const codes = this.cards.rows.filter(row => !row.redeemed_by).map(row => row.code); return codes.length > 0 && codes.every(code => this.selectedCodes.includes(code)); },
+    balanceAmountLabel() { return { add: '增加额度', subtract: '减少额度', set: '修改后余额' }[this.balanceDraft.mode]; },
+    balancePreview() {
+      const current = balanceUnits(this.balanceDraft.expected), amount = balanceUnits(this.balanceDraft.amount);
+      if (current === null || amount === null) return '—';
+      return balanceMoney(this.balanceDraft.mode === 'set' ? amount : current + (this.balanceDraft.mode === 'add' ? amount : -amount));
+    },
   },
   methods: {
     pages(total, size = 30) { return size === 'all' ? 1 : Math.max(1, Math.ceil(total / size)); },
@@ -195,7 +213,8 @@ const app = createApp({
     changeRecordKind(value) { if (this.busy) return; this.recordKind = value; this.recordFilter.page = 1; this.records = { rows: [], total: 0 }; return this.loadRecords(); },
     toggleNegative(value) { this.negativeOnly = value; this.recordFilter.page = 1; return this.run(() => this.loadRecords()); },
     async openBalance(row) {
-      this.balanceDraft = { platform: row?.platform || '', user_id: row?.user_id || '', expected: row?.amount || '0', amount: row?.amount || '0', reason: '' };
+      this.error = '';
+      this.balanceDraft = { platform: row?.platform || '', user_id: row?.user_id || '', expected: row?.amount || '0', amount: row?.amount || '0', reason: '', mode: 'set' };
       this.balanceSelection = row ? { ...row } : null;
       this.platforms = []; this.userOptions = []; this.userSearch = ''; this.userPage = 1; this.userTotal = 0;
       this.modal = { kind: 'balance', title: '修改用户余额' }; this.usersLoading = true;
@@ -236,13 +255,17 @@ const app = createApp({
     selectBalanceUser() {
       const row = this.userOptions.find(item => item.user_id === this.balanceDraft.user_id) || this.balanceSelection;
       if (!row || row.platform !== this.balanceDraft.platform || row.user_id !== this.balanceDraft.user_id) { this.balanceDraft.user_id = ''; this.balanceDraft.expected = '0'; this.balanceDraft.amount = '0'; this.balanceSelection = null; return; }
-      this.balanceSelection = { ...row }; this.balanceDraft.expected = row.amount; this.balanceDraft.amount = row.amount;
+      this.balanceSelection = { ...row }; this.balanceDraft.expected = row.amount; this.balanceDraft.amount = this.balanceDraft.mode === 'set' ? row.amount : '0';
+    },
+    chooseBalanceMode(value) {
+      if (this.busy || !this.balanceModes.some(item => item.value === value) || value === this.balanceDraft.mode) return;
+      this.balanceDraft.mode = value; this.balanceDraft.amount = value === 'set' ? this.balanceDraft.expected : '0';
     },
     setBalance() {
       if (!this.balanceDraft.platform || !this.balanceDraft.user_id || !this.balanceSelection) { this.error = '请选择平台和用户。'; return; }
       return this.run(async () => {
-        await this.mutate('set-balance', { ...this.balanceDraft }); this.closeModalAfterSave();
-        this.overview = await this.get('overview'); await this.loadRecords(); this.showNotice('用户余额已更新，操作记录已保存。');
+        const result = await this.mutate('set-balance', { ...this.balanceDraft }); this.closeModalAfterSave();
+        this.overview = await this.get('overview'); await this.loadRecords(); this.showNotice('用户余额已更新：' + result.before + ' → ' + result.after + '，操作记录已保存。');
       });
     },
     closeModalAfterSave() { this.modal = null; ++this.userSequence; clearTimeout(this.userTimer); },
@@ -250,7 +273,7 @@ const app = createApp({
     async confirmModal() { const action = this.pendingConfirmation; this.modal = null; this.pendingConfirmation = null; await action?.(); },
     orderState(value) { return { running: '生成中', settled: '已扣费', refunded: '未扣费 / 已退款', review: '待核对', reserved: '旧订单' }[value] || value; },
     auditKind(value) { return { balance: '余额调整', create_cards: '生成卡密', delete_cards: '删除卡密', prices: '修改价格' }[value] || value; },
-    auditDetail(row) { const value = row.result || {}; return row.kind === 'balance' ? value.owner + '：' + value.before + ' → ' + value.after + '；' + value.reason : row.kind === 'create_cards' ? value.count + ' 张 · 面额 ' + value.amount : row.kind === 'delete_cards' ? '删除 ' + value.deleted + ' 张' : value.models + ' 个模型 · 版本 ' + value.revision; },
+    auditDetail(row) { const value = row.result || {}; return row.kind === 'balance' ? value.owner + '：' + ({ add: '增加额度', subtract: '减少额度', set: '覆盖余额' }[value.mode || 'set']) + '；' + value.before + ' → ' + value.after + '；' + value.reason : row.kind === 'create_cards' ? value.count + ' 张 · 面额 ' + value.amount : row.kind === 'delete_cards' ? '删除 ' + value.deleted + ' 张' : value.models + ' 个模型 · 版本 ' + value.revision; },
   },
   mounted() { this.bootstrap(); },
   beforeUnmount() { clearTimeout(this.previewTimer); clearTimeout(this.toastTimer); clearTimeout(this.userTimer); ++this.userSequence; this.offContext?.(); },

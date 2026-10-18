@@ -518,7 +518,7 @@ class BillingStore:
             ).fetchone()[0]
             if balance <= 0 or (expected is not None and balance < expected):
                 raise BillingError(
-                    "余额不足；请 /AI余额 查询，或 /兑换AI卡密 <卡密> 充值。"
+                    "用户余额不足；请发送“/AI余额”查询，或发送“/兑换AI卡密 xxxxxx”进行充值（中间记得加空格，否则充值失败，需迅速撤回重试）。"
                 )
             db.execute(
                 "INSERT INTO orders(id,owner,model,media,reserved,status,details) VALUES(?,?,?,?,0,'running',?)",

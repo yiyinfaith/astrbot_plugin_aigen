@@ -289,9 +289,9 @@ class FinanceStore:
         return self._mutate(actor, operation, "delete_cards", {"codes": codes}, change)
 
     def set_balance(
-        self, actor, operation, platform, user_id, expected, amount, reason
+        self, actor, operation, platform, user_id, expected, amount, reason, mode="set"
     ):
-        """Set a balance atomically and reject edits based on stale amounts.
+        """Adjust an account atomically, keeping overwrite conflicts and retries safe.
 
         Args:
             actor: Trusted administrator.
@@ -299,8 +299,9 @@ class FinanceStore:
             platform: AstrBot platform type.
             user_id: AstrBot sender ID.
             expected: The balance displayed when editing began.
-            amount: Requested new balance, including an allowed debt.
+            amount: New balance for set; positive adjustment for add/subtract.
             reason: Administrator's explanation.
+            mode: Set, add or subtract; relative adjustments use the current balance.
 
         Returns:
             Before/after amounts and the balance owner.
@@ -320,6 +321,8 @@ class FinanceStore:
             or len(reason) > 500
         ):
             raise BillingError("请填写平台、用户 ID 和修改原因。")
+        if not isinstance(mode, str) or mode not in {"set", "add", "subtract"}:
+            raise BillingError("额度调整方式只能为覆盖余额、增加额度或减少额度。")
         try:
             numbers = [Decimal(str(value)) for value in (expected, amount)]
             if any(
@@ -329,9 +332,11 @@ class FinanceStore:
                 for n in numbers
             ):
                 raise ValueError
-            old, new = [int(n * SCALE) for n in numbers]
+            old, requested = [int(n * SCALE) for n in numbers]
         except (ValueError, InvalidOperation, TypeError) as exc:
             raise BillingError("余额须为有限数字，最多六位小数。") from exc
+        if mode != "set" and requested <= 0:
+            raise BillingError("增加或减少的额度必须大于 0。")
         owner = json.dumps(
             [platform.strip(), user_id.strip()],
             ensure_ascii=False,
@@ -343,23 +348,32 @@ class FinanceStore:
                 "SELECT amount FROM balances WHERE owner=?", (owner,)
             ).fetchone()
             current = row[0] if row else 0
-            if current != old:
+            if mode == "set" and current != old:
                 raise FinanceConflict(
                     "用户余额已变动，请刷新后再修改，避免覆盖充值或扣费。"
                 )
+            new = (
+                requested
+                if mode == "set"
+                else current + (requested if mode == "add" else -requested)
+            )
+            if abs(new) > LIMIT:
+                raise BillingError("调整后的余额超出允许范围。")
             db.execute(
                 "INSERT INTO balances(owner,amount) VALUES(?,?) ON CONFLICT(owner) DO UPDATE SET amount=excluded.amount",
                 (owner, new),
             )
             db.execute(
                 "INSERT INTO ledger(owner,delta,kind,ref) VALUES(?,?,'admin_adjust',?)",
-                (owner, new - old, operation),
+                (owner, new - current, operation),
             )
             return {
                 "owner": owner,
-                "before": money(old),
+                "before": money(current),
                 "after": money(new),
-                "delta": money(new - old),
+                "delta": money(new - current),
+                "mode": mode,
+                "amount": money(requested),
                 "reason": reason.strip(),
             }
 
@@ -367,7 +381,13 @@ class FinanceStore:
             actor,
             operation,
             "balance",
-            {"owner": owner, "expected": old, "amount": new, "reason": reason.strip()},
+            {
+                "owner": owner,
+                "expected": old,
+                "amount": requested,
+                "reason": reason.strip(),
+                **({"mode": mode} if mode != "set" else {}),
+            },
             change,
         )
 
@@ -590,6 +610,7 @@ class FinanceStore:
                         "delta",
                         "reason",
                         "amount",
+                        "mode",
                         "count",
                         "deleted",
                         "revision",

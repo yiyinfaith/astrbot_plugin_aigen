@@ -119,7 +119,9 @@ class CallerTest(unittest.IsolatedAsyncioTestCase):
             )
             await self.plugin.help_command(event)
             self.assertEqual(collection["text"], [])
-            self.assertEqual(event.sent[-1][0].content[0].text, "管理员自定义帮助")
+            self.assertEqual(
+                event.sent[-1][0].nodes[0].content[0].text, "管理员自定义帮助"
+            )
         self.assertEqual(self.finance.listing("users", search="helper")["total"], 1)
 
     async def test_generation_commands_register_even_before_materials_are_complete(
@@ -259,6 +261,8 @@ class AliasContractTest(unittest.TestCase):
             "AI余额": {"ai余额"},
             "AI账单": {"ai账单"},
             "兑换AI卡密": {"兑换ai卡密"},
+            "生视频": {"生成视频", "视频"},
+            "生音频": {"音频"},
         }.items():
             self.assertEqual(found[name], aliases)
         self.assertTrue(

@@ -562,7 +562,7 @@ def build_menu(
 ) -> tuple[list[str], dict]:
     """Assign unique IDs to a snapshot of the current route's finite choices."""
     sections = [
-        "详细参数设置：只回复要修改的编号，用空格分隔；未选项保持原值。\n例如 2 5 8。每个参数只能选一项；0 退出设置；/生成 使用当前已保存设置。\n/设置重置 可清除本次自定义参数。计时从启动起共用，不延长。"
+        "详细参数设置\n请查看本条合并转发里的全部选项，再在聊天中一次性发送要修改的选项编号，不加 /，多个编号之间用空格。\n例如：{example}。编号是各个选项前的数字，不是参数的顺序号；只发送需要修改的选项，未选参数保持原值。每个参数只能选一项，请勿选择同一参数的多个不同值。\n保存后可继续发送材料，最后发送 /生成；只需修改一项时，直接发送该选项编号即可。\n发送 0 退出设置并保留已保存的值；/设置重置 清除本次自定义参数；/生成 直接使用已保存设置开始生成。\n计时从启动起共用，不延长。"
     ]
     mapping = {}
     defaults = effective_defaults(kind, config)
@@ -591,6 +591,12 @@ def build_menu(
             label = "开" if value is True else "关" if value is False else str(value)
             lines.append(f"{index}：{label}")
         sections.append("\n".join(lines))
+    example, parameters = [], set()
+    for index, (key, _value) in mapping.items():
+        if key not in parameters and len(example) < 3:
+            example.append(index)
+            parameters.add(key)
+    sections[0] = sections[0].format(example=" ".join(example) or "0")
     return sections, mapping
 
 

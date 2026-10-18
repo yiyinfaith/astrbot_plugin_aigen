@@ -407,12 +407,16 @@ class CollectionSettingsTest(unittest.IsolatedAsyncioTestCase):
         event.get_platform_name = lambda: "aiocqhttp"
         await self.plugin._send_settings_menu(event, ["说明", "时长选项", "比例选项"])
         self.assertEqual(len(event.sent), 1)
-        self.assertEqual(len(event.sent[0]), 3)
-        self.assertTrue(all(isinstance(node, behavior.Node) for node in event.sent[0]))
+        self.assertEqual(len(event.sent[0]), 1)
+        self.assertIsInstance(event.sent[0][0], behavior.Nodes)
+        self.assertEqual(len(event.sent[0][0].nodes), 3)
+        self.assertTrue(
+            all(isinstance(node, behavior.Node) for node in event.sent[0][0].nodes)
+        )
         original = event.send
 
         async def reject_nodes(result):
-            if isinstance(result[0], behavior.Node):
+            if isinstance(result[0], behavior.Nodes):
                 raise TypeError("not supported")
             await original(result)
 

@@ -229,7 +229,7 @@ class ActualFeeAndProfileTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.balance(), (1982000, 0))
 
     async def test_removed_help_and_forward_configured_text(self):
-        from test_video_plugin import Event, Node, plugin_class
+        from test_video_plugin import Event, Nodes, plugin_class
 
         commands = importlib.import_module(PACKAGE + ".billing_commands")
         self.assertNotIn("计费帮助", commands.COMMANDS)
@@ -241,5 +241,7 @@ class ActualFeeAndProfileTest(unittest.IsolatedAsyncioTestCase):
         await plugin.help_command(event)
         self.assertTrue(event.stopped)
         self.assertEqual(len(event.sent), 1)
-        self.assertIsInstance(event.sent[0][0], Node)
-        self.assertEqual(event.sent[0][0].content[0].text, plugin.conf["help_text"])
+        self.assertIsInstance(event.sent[0][0], Nodes)
+        self.assertEqual(
+            event.sent[0][0].nodes[0].content[0].text, plugin.conf["help_text"]
+        )

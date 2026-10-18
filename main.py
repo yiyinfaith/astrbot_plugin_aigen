@@ -18,7 +18,15 @@ from typing import Any, ClassVar
 import aiohttp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.message_components import File, Image, Node, Plain, Record, Video
+from astrbot.api.message_components import (
+    File,
+    Image,
+    Node,
+    Nodes,
+    Plain,
+    Record,
+    Video,
+)
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core import AstrBotConfig
 
@@ -63,7 +71,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.12",
+    "1.4.13",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -76,7 +84,7 @@ class ImageGeneratorPlugin(Star):
         "ai菜单",
     }
     _DRAW_COMMANDS: ClassVar[set[str]] = {"画图", "生图"}
-    _VIDEO_COMMANDS: ClassVar[set[str]] = {"生视频", "生成视频"}
+    _VIDEO_COMMANDS: ClassVar[set[str]] = {"生视频", "生成视频", "视频"}
 
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -834,7 +842,7 @@ class ImageGeneratorPlugin(Star):
         if isinstance(prefixes, str):
             prefixes = [prefixes]
         for prefix in sorted(
-            {"生音频", *(str(p).strip().lstrip("/") for p in prefixes or [])},
+            {"生音频", "音频", *(str(p).strip().lstrip("/") for p in prefixes or [])},
             key=len,
             reverse=True,
         ):
@@ -999,7 +1007,7 @@ class ImageGeneratorPlugin(Star):
                     )
                     for section in sections
                 ]
-                await event.send(event.chain_result(nodes))
+                await event.send(event.chain_result([Nodes(nodes=nodes)]))
                 return
             except Exception:  # noqa: BLE001
                 logger.warning(
@@ -1825,7 +1833,7 @@ class ImageGeneratorPlugin(Star):
         finally:
             self._video_generation_tasks.discard(task)
 
-    @filter.command("生视频", alias={"生成视频"}, prefix_optional=False)
+    @filter.command("生视频", alias={"生成视频", "视频"}, prefix_optional=False)
     async def video_command(self, event: AstrMessageEvent):
         """根据文本、图片、音频和视频自动路由，支持引用、@头像和参数校验。"""
         prompt, preset_name, _ = self._resolve_video_prompt(
@@ -1838,7 +1846,7 @@ class ImageGeneratorPlugin(Star):
         if result:
             yield event.chain_result(result)
 
-    @filter.command("生音频", prefix_optional=False)
+    @filter.command("生音频", alias={"音频"}, prefix_optional=False)
     async def audio_command(self, event: AstrMessageEvent):
         """Collect audio materials after a required reading/prompting selector.
 

@@ -42,6 +42,11 @@ class Node:
         self.__dict__.update(kwargs)
 
 
+class Nodes:
+    def __init__(self, nodes):
+        self.nodes = nodes
+
+
 class MessageChain(list):
     def message(self, text):
         self.append(Plain(text))
@@ -135,6 +140,7 @@ def plugin_class():
         "monotonic": monotonic,
         "Plain": Plain,
         "Node": Node,
+        "Nodes": Nodes,
         "BILLING_COMMANDS": importlib.import_module(
             PACKAGE + ".billing_commands"
         ).COMMANDS,
