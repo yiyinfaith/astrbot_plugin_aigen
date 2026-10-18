@@ -209,16 +209,9 @@ export const GlassSlider = {
 };
 
 export const GlassDialog = {
+  components: { GlassButton },
   props: { title: String, body: String, disabled: Boolean }, emits: ['confirm', 'cancel'],
-  setup(props, { emit }) {
-    const host = ref(null);
-    const { ready } = useGlass(host, 'dialog', el => {
-      el.setDialog({ title: props.title, body: props.body, cancelText: '', okayText: '' });
-      el.addEventListener('lg-dialogtap', event => {
-        if (!props.disabled) emit(event.detail.action === 'okay' ? 'confirm' : 'cancel');
-      });
-    });
-    return { host, ready };
-  },
-  template: `<div class="glass-shell glass-dialog" :class="{fallback:!ready}"><div ref="host" class="glass-canvas" aria-hidden="true"></div><p :class="ready?'sr-only':''">{{ body }}</p><div class="dialog-buttons"><button type="button" :disabled="disabled" @click="$emit('cancel')">取消</button><button type="button" :disabled="disabled" @click="$emit('confirm')">确认</button></div></div>`,
+  // The catalog dialog has a fixed canvas card height and clips at narrow widths.
+  // Keep text in normal flow; only the two action buttons initialize WebGL.
+  template: `<div class="confirmation-content"><p class="confirmation-copy">{{ body }}</p><div class="confirmation-actions"><glass-button label="取消" :disabled="disabled" @activate="$emit('cancel')"></glass-button><glass-button label="确认" :disabled="disabled" @activate="$emit('confirm')"></glass-button></div></div>`,
 };

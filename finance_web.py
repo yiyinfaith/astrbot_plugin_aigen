@@ -166,6 +166,7 @@ class FinanceWebUI:
                         self.finance.listing,
                         action,
                         page=request.query.get("page", 1, type=int),
+                        page_size=request.query.get("page_size", 30),
                         search=request.query.get("search", ""),
                         status=request.query.get("status", "all"),
                         denomination=request.query.get("denomination", ""),

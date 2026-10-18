@@ -371,18 +371,21 @@ class FinanceStore:
             change,
         )
 
-    def listing(self, kind, *, page=1, search="", status="all", denomination=""):
+    def listing(
+        self, kind, *, page=1, page_size=30, search="", status="all", denomination=""
+    ):
         """Read paginated operational records with parameterized filters.
 
         Args:
             kind: Cards, users, redemptions, orders or administrator audit.
             page: One-based page number.
-            search: User/model/code search text.
+            page_size: Ten, thirty, fifty, one hundred, two hundred, or all rows.
+            search: User/model/code search text, or an exact card denomination.
             status: Card state or an order state.
             denomination: Optional card denomination.
 
         Returns:
-            Total count and at most thirty safe rows.
+            Total count and the requested page, or every matching row for all.
         """
         if (
             type(page) is not int
@@ -391,7 +394,16 @@ class FinanceStore:
             or len(search) > 200
         ):
             raise BillingError("查询参数不合法。")
+        if isinstance(page_size, str) and page_size.isascii() and page_size.isdecimal():
+            page_size = int(page_size) if len(page_size) <= 3 else None
+        if page_size != "all" and (
+            type(page_size) is not int or page_size not in {10, 30, 50, 100, 200}
+        ):
+            raise BillingError("每页数量须为 10、30、50、100、200 或全部。")
+        if page_size == "all":
+            page = 1
         args, filters = [], []
+        search_amount = None
         if kind in {"cards", "redemptions"}:
             table = "cards"
             if kind == "redemptions":
@@ -412,8 +424,14 @@ class FinanceStore:
                 filters.append("amount=?")
                 args.append(units(denomination))
             if search:
+                try:
+                    search_amount = units(search.strip())
+                except BillingError:
+                    pass
                 filters.append(
-                    "(code LIKE ? ESCAPE '\\' OR redeemed_by LIKE ? ESCAPE '\\')"
+                    "(code LIKE ? ESCAPE '\\' OR redeemed_by LIKE ? ESCAPE '\\'"
+                    + (" OR amount=?" if search_amount is not None else "")
+                    + ")"
                 )
         elif kind == "users":
             table = "balances"
@@ -455,6 +473,8 @@ class FinanceStore:
                 + "%"
             )
             args.extend([escaped] * filters[-1].count("LIKE"))
+            if search_amount is not None:
+                args.append(search_amount)
         clause = " AND ".join(filters) or "1=1"
         with closing(sqlite3.connect(self.store.path, timeout=10)) as db:
             db.row_factory = sqlite3.Row
@@ -462,13 +482,12 @@ class FinanceStore:
             total = db.execute(
                 f"SELECT COUNT(*) FROM {table} WHERE {clause}", args
             ).fetchone()[0]
-            rows = [
-                dict(row)
-                for row in db.execute(
-                    f"SELECT * FROM {table} WHERE {clause} ORDER BY rowid DESC LIMIT 30 OFFSET ?",
-                    (*args, (page - 1) * 30),
-                )
-            ]
+            query = f"SELECT * FROM {table} WHERE {clause} ORDER BY rowid DESC"
+            row_args = tuple(args)
+            if page_size != "all":
+                query += " LIMIT ? OFFSET ?"
+                row_args += (page_size, (page - 1) * page_size)
+            rows = [dict(row) for row in db.execute(query, row_args)]
         for row in rows:
             for key in ("amount", "charged", "reserved", "delta"):
                 if row.get(key) is not None:
@@ -500,7 +519,7 @@ class FinanceStore:
                     if key in result
                 }
                 row.pop("request_hash", None)
-        return {"total": total, "page": page, "page_size": 30, "rows": rows}
+        return {"total": total, "page": page, "page_size": page_size, "rows": rows}
 
     def overview(self):
         """Read denominations and operational totals from one snapshot.

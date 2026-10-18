@@ -162,6 +162,92 @@ class FinanceStoreTest(unittest.TestCase):
         self.assertEqual(self.finance.listing("cards", search=code[-6:])["total"], 1)
         self.assertNotIn(code, json.dumps(self.finance.listing("audit")))
 
+    def test_card_search_matches_exact_amount_code_and_user_with_combined_filters(self):
+        with patch.object(
+            storage.secrets, "token_hex", side_effect=[letter * 24 for letter in "abcd"]
+        ):
+            ten = self.finance.create_cards("admin", self.operation(), "10", 2)["codes"]
+            fractional = self.finance.create_cards(
+                "admin", self.operation(), "10.5", 1
+            )["codes"][0]
+            self.finance.create_cards("admin", self.operation(), "100", 1)
+        self.billing.store.redeem(self.owner, ten[0])
+        for query in ("10", "10.0", "10.000000", " 10 "):
+            self.assertEqual(self.finance.listing("cards", search=query)["total"], 2)
+        self.assertEqual(
+            self.finance.listing("cards", search="10", status="active")["total"], 1
+        )
+        self.assertEqual(
+            self.finance.listing("cards", search="10", status="redeemed")["total"], 1
+        )
+        self.assertEqual(
+            self.finance.listing("cards", search="10", denomination="100")["total"], 0
+        )
+        self.assertEqual(
+            self.finance.listing("cards", search="10.50")["rows"][0]["code"], fractional
+        )
+        self.assertEqual(
+            self.finance.listing("cards", search=ten[1])["rows"][0]["code"], ten[1]
+        )
+        self.assertEqual(
+            self.finance.listing("cards", search="123")["rows"][0]["code"], ten[0]
+        )
+        self.assertEqual(self.finance.listing("redemptions", search="10")["total"], 1)
+        self.assertEqual(self.finance.listing("redemptions", search="100")["total"], 0)
+
+    def test_card_search_keeps_numeric_user_ids_and_special_characters_literal(self):
+        code = self.finance.create_cards("admin", self.operation(), "10", 1)["codes"][0]
+        owner = self.billing.owner(financial.Identity(uid="123456789012345678"))
+        self.billing.store.redeem(owner, code)
+        self.assertEqual(
+            self.finance.listing("cards", search="123456789012345678")["total"], 1
+        )
+        for query in ("%", "_", "' OR 1=1 --", "NaN", "Infinity"):
+            self.assertEqual(self.finance.listing("cards", search=query)["total"], 0)
+
+    def test_card_page_sizes_and_all_preserve_filters_and_pagination(self):
+        self.finance.create_cards("admin", self.operation(), "10", 65)
+        self.finance.create_cards("admin", self.operation(), "20", 2)
+        self.assertEqual(len(self.finance.listing("cards")["rows"]), 30)
+        first = self.finance.listing("cards", page_size="10", search="10.00")
+        second = self.finance.listing("cards", page=2, page_size=10, search="10.00")
+        self.assertEqual(first["total"], 65)
+        self.assertEqual(len(first["rows"]), 10)
+        self.assertFalse(
+            {r["code"] for r in first["rows"]} & {r["code"] for r in second["rows"]}
+        )
+        for size in (30, 50, 100, 200):
+            self.assertEqual(
+                len(self.finance.listing("cards", page_size=size)["rows"]),
+                min(size, 67),
+            )
+        all_rows = self.finance.listing(
+            "cards", page=4, page_size="all", denomination="10"
+        )
+        self.assertEqual(
+            (all_rows["page"], all_rows["page_size"], all_rows["total"]), (1, "all", 65)
+        )
+        self.assertEqual(len(all_rows["rows"]), 65)
+        self.assertEqual(
+            self.finance.listing("cards", page_size="all", search="no-such-card")[
+                "rows"
+            ],
+            [],
+        )
+        for size in (
+            True,
+            30.0,
+            None,
+            0,
+            -1,
+            "-1",
+            9999,
+            "1000",
+            "all; DROP TABLE cards",
+        ):
+            with self.assertRaises(b.BillingError):
+                self.finance.listing("cards", page_size=size)
+
     def test_price_save_uses_revision_and_allows_an_invalid_expression(self):
         operation = self.operation()
         rows = [{"model": "bad", "expression": "not_a_function(1)"}]

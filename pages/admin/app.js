@@ -1,4 +1,4 @@
-import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.9';
+import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.10';
 
 const { createApp } = window.Vue;
 const payloadOf = result => result?.status === 'ok' && 'data' in result ? result.data : result;
@@ -12,7 +12,7 @@ const app = createApp({
       overview: { models: 0, users: 0, categories: [], charged: '0', running: 0 },
       priceRows: [], priceRevision: 0, priceSearch: '', draft: { id: null, model: '', expression: '0' },
       originalDraft: JSON.stringify(['', '0']), preview: { valid: true, tiers: [], table: null }, validating: false, previewSequence: 0, previewTimer: null,
-      cards: { rows: [], total: 0 }, selectedCodes: [], cardFilter: { page: 1, status: 'active', denomination: '', search: '' },
+      cards: { rows: [], total: 0 }, selectedCodes: [], cardFilter: { page: 1, page_size: 30, status: 'active', denomination: '', search: '' },
       cardSequence: 0, recordSequence: 0, cardsLoading: false, recordsLoading: false,
       records: { rows: [], total: 0 }, recordKind: 'users', recordFilter: { page: 1, search: '' }, negativeOnly: false,
       cardDraft: { amount: '10', count: 10 }, generated: { amount: '', codes: [] },
@@ -39,7 +39,7 @@ const app = createApp({
     allCardsSelected() { const codes = this.cards.rows.filter(row => !row.redeemed_by).map(row => row.code); return codes.length > 0 && codes.every(code => this.selectedCodes.includes(code)); },
   },
   methods: {
-    pages(total) { return Math.max(1, Math.ceil(total / 30)); },
+    pages(total, size = 30) { return size === 'all' ? 1 : Math.max(1, Math.ceil(total / size)); },
     async get(action, params = {}) { return payloadOf(await this.bridge.apiGet('finance/' + action, params)); },
     async post(action, body) { return payloadOf(await this.bridge.apiPost('finance/' + action, body)); },
     async mutate(action, body) {
@@ -133,11 +133,19 @@ const app = createApp({
     async loadCards() {
       const sequence = ++this.cardSequence;
       this.cardsLoading = true; this.selectedCodes = []; this.cards = { rows: [], total: 0 };
-      try { const result = await this.get('cards', { ...this.cardFilter }); if (sequence === this.cardSequence) { this.cards = result; this.selectedCodes = []; } }
+      try {
+        const result = await this.get('cards', { ...this.cardFilter });
+        if (sequence === this.cardSequence) {
+          const last = this.pages(result.total, this.cardFilter.page_size);
+          if (this.cardFilter.page > last) { this.cardFilter.page = last; return await this.loadCards(); }
+          this.cards = result; this.selectedCodes = [];
+        }
+      }
       catch (error) { if (sequence === this.cardSequence) this.error = error.message || String(error); }
       finally { if (sequence === this.cardSequence) this.cardsLoading = false; }
     },
     chooseCardState(value) { if (this.busy || value === this.cardFilter.status) return; this.cardFilter.status = value; this.cardFilter.page = 1; return this.loadCards(); },
+    changeCardPageSize() { this.cardFilter.page = 1; return this.loadCards(); },
     chooseDenomination(amount) { if (this.busy) return; this.cardFilter.denomination = amount; this.cardFilter.page = 1; this.run(() => this.loadCards()); },
     toggleAllCards(event) { this.selectedCodes = event.target.checked ? this.cards.rows.filter(row => !row.redeemed_by).map(row => row.code) : []; },
     cardState(row) { return !row.redeemed_by ? { label: '有效', class: 'green' } : ['[revoked]', '[deleted]'].includes(row.redeemed_by) ? { label: '已删除', class: '' } : { label: '已兑换', class: '' }; },
@@ -155,7 +163,18 @@ const app = createApp({
       if (this.busy || this.cardsLoading || !this.selectedCodes.length) return;
       const codes = [...this.selectedCodes];
       this.confirm('删除有效卡密', '将删除选中的 ' + codes.length + ' 张有效卡密，使其无法再兑换。已兑换记录会保留。', () => this.run(async () => {
-        await this.mutate('delete-cards', { codes }); this.overview = await this.get('overview'); await this.loadCards(); this.showNotice('选中的卡密已删除。');
+        let deleted = 0;
+        try {
+          for (let offset = 0; offset < codes.length; offset += 100) {
+            const result = await this.mutate('delete-cards', { codes: codes.slice(offset, offset + 100) });
+            deleted += result.deleted;
+          }
+        } catch (error) {
+          throw new Error('已确认删除 ' + deleted + ' 张；其余卡密请刷新后核对。' + (error.message || String(error)));
+        } finally {
+          await Promise.all([this.get('overview').then(value => { this.overview = value; }), this.loadCards()]);
+        }
+        this.showNotice('已删除 ' + deleted + ' 张选中的卡密。');
       }));
     },
     exportCodes() { if (!this.cardsLoading) this.downloadCodes(this.selectedCodes, 'aigen-active-cards.txt'); },
