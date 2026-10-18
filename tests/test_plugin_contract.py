@@ -1,3 +1,4 @@
+import ast
 import json
 import unittest
 from pathlib import Path
@@ -6,6 +7,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PluginContractTest(unittest.TestCase):
+    def test_user_finance_commands_are_formally_registered_with_descriptions(self):
+        tree = ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
+        registered = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            for decorator in node.decorator_list:
+                if (
+                    isinstance(decorator, ast.Call)
+                    and isinstance(decorator.func, ast.Attribute)
+                    and decorator.func.attr == "command"
+                ):
+                    registered[ast.literal_eval(decorator.args[0])] = node
+        for name in ("兑换卡密", "余额", "我的账单"):
+            self.assertIn(name, registered)
+            self.assertIn("用法：/" + name, ast.get_docstring(registered[name]))
+        self.assertNotIn("生成卡密", registered)
+        self.assertNotIn("模型价格", registered)
+
     def test_schema_removes_only_requested_feature_groups(self):
         schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
         removed = {

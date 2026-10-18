@@ -63,7 +63,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.7",
+    "1.4.11",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -597,6 +597,48 @@ class ImageGeneratorPlugin(Star):
             send_message=send_fallback_message,
         )
 
+    async def _dispatch_billing_command(self, event: AstrMessageEvent, text: str):
+        """Handle one financial message once across listener and command routes."""
+        if self._terminating or event.get_extra("aigen_billing_command_handled", False):
+            return None
+        event.set_extra("aigen_billing_command_handled", True)
+        event.stop_event()
+        response = handle_command(self.billing, event, text)
+        if len(response) > 1000:
+            await self._send_settings_menu(event, [response], title="余额与卡密")
+            return None
+        return event.chain_result([Plain(response)])
+
+    async def _registered_billing_command(
+        self, event: AstrMessageEvent, command: str, arguments: str = ""
+    ):
+        """Preserve raw validation, with parsed arguments for custom wake prefixes."""
+        text = self._clean_message(self._event_message_text(event))
+        if text.split(maxsplit=1)[:1] != [command]:
+            text = (command + " " + arguments).strip()
+        return await self._dispatch_billing_command(event, text)
+
+    @filter.command("兑换卡密", prefix_optional=False)
+    async def redeem_card_command(self, event: AstrMessageEvent, card: str = ""):
+        """兑换卡密并充值当前用户余额。用法：/兑换卡密 <卡密>，建议私聊兑换。"""
+        result = await self._registered_billing_command(event, "兑换卡密", card)
+        if result is not None:
+            yield result
+
+    @filter.command("余额", prefix_optional=False)
+    async def balance_command(self, event: AstrMessageEvent):
+        """查询当前用户的余额和 AstrBot 用户 ID。用法：/余额。"""
+        result = await self._registered_billing_command(event, "余额")
+        if result is not None:
+            yield result
+
+    @filter.command("我的账单", prefix_optional=False)
+    async def my_orders_command(self, event: AstrMessageEvent, page: int = 1):
+        """查询当前用户的生成账单。用法：/我的账单 [页码]，默认第 1 页。"""
+        result = await self._registered_billing_command(event, "我的账单", str(page))
+        if result is not None:
+            yield result
+
     @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def on_preset_request(self, event: AstrMessageEvent, ctx=None):
         """Route image/video prefixes and the longest preset without duplicates."""
@@ -615,12 +657,9 @@ class ImageGeneratorPlugin(Star):
             and text.split(maxsplit=1)[0] in BILLING_COMMANDS
             and self._has_astrbot_prefix(event, raw_text)
         ):
-            event.stop_event()
-            response = handle_command(self.billing, event, text)
-            if len(response) > 1000:
-                await self._send_settings_menu(event, [response], title="余额与卡密")
-            else:
-                yield event.chain_result([Plain(response)])
+            result = await self._dispatch_billing_command(event, text)
+            if result is not None:
+                yield result
             return
         audio_argument = self._resolve_audio_command(raw_text)
         if audio_argument is not None and (

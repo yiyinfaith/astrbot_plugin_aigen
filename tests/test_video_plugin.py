@@ -71,6 +71,13 @@ class Event(FakeEvent):
         self.fail_image_send_always = False
         self.image_send_attempts = 0
         self.video_send_attempts = 0
+        self._extras = {}
+
+    def get_extra(self, key=None, default=None):
+        return self._extras if key is None else self._extras.get(key, default)
+
+    def set_extra(self, key, value):
+        self._extras[key] = value
 
     def chain_result(self, chain):
         return chain

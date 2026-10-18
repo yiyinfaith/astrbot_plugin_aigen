@@ -722,6 +722,63 @@ class SharedGenerationPathsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(self.plugin._video_collections[key], collection)
         self.assertEqual(collection["text"], [])
 
+    async def test_registered_redemption_and_listener_execute_once_for_one_event(self):
+        card = self.plugin.billing.store.create_cards("admin", "2", 1)[0]
+        self.event.message_str = "/兑换卡密 " + card
+        key = self.plugin._video_session_key(self.event)
+        collection = {"text": []}
+        self.plugin._video_collections[key] = collection
+        first = [
+            part async for part in self.plugin.redeem_card_command(self.event, card)
+        ]
+        duplicate = [part async for part in self.plugin.on_preset_request(self.event)]
+        self.assertIn("兑换成功", first[0][0].text)
+        self.assertEqual(duplicate, [])
+        self.assertEqual(self.plugin.billing.store.balance(self.owner), (12000000, 0))
+        self.assertEqual(collection["text"], [])
+        self.assertTrue(self.event.stopped)
+
+        from test_video_plugin import Event
+
+        another = Event([], text=self.event.message_str)
+        another.get_platform_name = lambda: "aiocqhttp"
+        result = [part async for part in self.plugin.redeem_card_command(another, card)]
+        self.assertIn("已兑换", result[0][0].text)
+        self.assertEqual(self.plugin.billing.store.balance(self.owner), (12000000, 0))
+
+    async def test_listener_first_does_not_repeat_registered_finance_replies(self):
+        from test_video_plugin import Event
+
+        for text, handler, args in (
+            ("/余额", self.plugin.balance_command, ()),
+            ("/我的账单 2", self.plugin.my_orders_command, (2,)),
+        ):
+            event = Event([], text=text)
+            event.get_platform_name = lambda: "aiocqhttp"
+            first = [part async for part in self.plugin.on_preset_request(event)]
+            duplicate = [part async for part in handler(event, *args)]
+            self.assertEqual(len(first), 1)
+            self.assertEqual(duplicate, [])
+            self.assertTrue(event.stopped)
+
+    async def test_registered_redemption_keeps_usage_and_custom_prefix_arguments(self):
+        from test_video_plugin import Event
+
+        self.event.message_str = "/兑换卡密"
+        result = [part async for part in self.plugin.redeem_card_command(self.event)]
+        self.assertIn("用法：/兑换卡密", result[0][0].text)
+        self.assertEqual(self.plugin.billing.store.balance(self.owner), (10000000, 0))
+        card = self.plugin.billing.store.create_cards("admin", "2", 1)[0]
+        invalid = Event([], text="/兑换卡密 " + card + " 多余参数")
+        invalid.get_platform_name = lambda: "aiocqhttp"
+        result = [part async for part in self.plugin.redeem_card_command(invalid, card)]
+        self.assertIn("用法：/兑换卡密", result[0][0].text)
+        custom = Event([], text=".兑换卡密 " + card)
+        custom.get_platform_name = lambda: "aiocqhttp"
+        result = [part async for part in self.plugin.redeem_card_command(custom, card)]
+        self.assertIn("兑换成功", result[0][0].text)
+        self.assertEqual(self.plugin.billing.store.balance(self.owner), (12000000, 0))
+
     async def test_hot_reload_cancels_active_image_without_charging(self):
         entered = asyncio.Event()
 
