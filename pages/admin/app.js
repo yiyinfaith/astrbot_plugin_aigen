@@ -1,4 +1,4 @@
-import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.10';
+import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRing, GlassToggle, GlassOrb } from './glass.js?v=1.4.12';
 
 const { createApp } = window.Vue;
 const payloadOf = result => result?.status === 'ok' && 'data' in result ? result.data : result;
@@ -16,7 +16,9 @@ const app = createApp({
       cardSequence: 0, recordSequence: 0, cardsLoading: false, recordsLoading: false,
       records: { rows: [], total: 0 }, recordKind: 'users', recordFilter: { page: 1, search: '' }, negativeOnly: false,
       cardDraft: { amount: '10', count: 10 }, generated: { amount: '', codes: [] },
-      balanceDraft: { platform: 'aiocqhttp', user_id: '', expected: '0', amount: '0', reason: '', existing: false },
+      balanceDraft: { platform: '', user_id: '', expected: '0', amount: '0', reason: '' },
+      platforms: [], userOptions: [], userSearch: '', userPage: 1, userTotal: 0,
+      usersLoading: false, userSequence: 0, userTimer: null, balanceSelection: null,
       modal: null, pendingConfirmation: null, retryKeys: new Map(), toastTimer: null, offContext: null,
       cardStates: [{ value: 'active', label: '有效' }, { value: 'redeemed', label: '已兑换' }, { value: 'deleted', label: '已删除' }, { value: 'all', label: '全部' }],
       recordKinds: [{ value: 'users', label: '用户余额' }, { value: 'redemptions', label: '兑换记录' }, { value: 'orders', label: '生成账单' }, { value: 'audit', label: '管理员操作' }],
@@ -150,7 +152,7 @@ const app = createApp({
     toggleAllCards(event) { this.selectedCodes = event.target.checked ? this.cards.rows.filter(row => !row.redeemed_by).map(row => row.code) : []; },
     cardState(row) { return !row.redeemed_by ? { label: '有效', class: 'green' } : ['[revoked]', '[deleted]'].includes(row.redeemed_by) ? { label: '已删除', class: '' } : { label: '已兑换', class: '' }; },
     openCreateCards() { this.modal = { kind: 'create', title: '生成充值卡密' }; },
-    closeModal() { if (!this.busy) { this.modal = null; this.pendingConfirmation = null; } },
+    closeModal() { if (!this.busy) { this.modal = null; this.pendingConfirmation = null; ++this.userSequence; clearTimeout(this.userTimer); } },
     createCards() {
       return this.run(async () => {
         this.generated = await this.mutate('create-cards', { amount: this.cardDraft.amount, count: this.cardDraft.count });
@@ -192,17 +194,58 @@ const app = createApp({
     },
     changeRecordKind(value) { if (this.busy) return; this.recordKind = value; this.recordFilter.page = 1; this.records = { rows: [], total: 0 }; return this.loadRecords(); },
     toggleNegative(value) { this.negativeOnly = value; this.recordFilter.page = 1; return this.run(() => this.loadRecords()); },
-    openBalance(row) {
-      this.balanceDraft = { platform: row?.platform || 'aiocqhttp', user_id: row?.user_id || '', expected: row?.amount || '0', amount: row?.amount || '0', reason: '', existing: Boolean(row) };
-      this.modal = { kind: 'balance', title: '修改用户余额' };
+    async openBalance(row) {
+      this.balanceDraft = { platform: row?.platform || '', user_id: row?.user_id || '', expected: row?.amount || '0', amount: row?.amount || '0', reason: '' };
+      this.balanceSelection = row ? { ...row } : null;
+      this.platforms = []; this.userOptions = []; this.userSearch = ''; this.userPage = 1; this.userTotal = 0;
+      this.modal = { kind: 'balance', title: '修改用户余额' }; this.usersLoading = true;
+      const sequence = ++this.userSequence; clearTimeout(this.userTimer);
+      try {
+        const result = await this.get('platforms');
+        if (sequence !== this.userSequence || this.modal?.kind !== 'balance') return;
+        this.platforms = result.rows;
+        if (row?.platform && !this.platforms.some(item => item.value === row.platform)) this.platforms.push({ value: row.platform, label: row.platform });
+        if (!this.balanceDraft.platform) this.balanceDraft.platform = this.platforms[0]?.value || '';
+        await this.loadBalanceUsers();
+      } catch (error) { if (sequence === this.userSequence) { this.usersLoading = false; this.error = error.message || String(error); } }
+    },
+    changeBalancePlatform() {
+      this.balanceSelection = null; this.balanceDraft.user_id = ''; this.balanceDraft.expected = '0'; this.balanceDraft.amount = '0';
+      this.userSearch = ''; clearTimeout(this.userTimer); return this.loadBalanceUsers();
+    },
+    searchBalanceUsers() {
+      clearTimeout(this.userTimer); ++this.userSequence; this.userOptions = []; this.usersLoading = true;
+      this.userTimer = setTimeout(() => this.loadBalanceUsers(), 250);
+    },
+    async loadBalanceUsers(append = false) {
+      const sequence = ++this.userSequence, platform = this.balanceDraft.platform;
+      const page = append ? this.userPage + 1 : 1;
+      this.usersLoading = true;
+      if (!append) { this.userOptions = []; this.userTotal = 0; this.userPage = 1; }
+      if (!platform) { this.usersLoading = false; return; }
+      try {
+        const result = await this.get('user-options', { platform, search: this.userSearch, page });
+        if (sequence !== this.userSequence || this.modal?.kind !== 'balance') return;
+        this.userOptions = append ? [...this.userOptions, ...result.rows] : result.rows;
+        this.userTotal = result.total; this.userPage = page;
+        const selected = result.rows.find(item => item.user_id === this.balanceDraft.user_id);
+        if (selected && this.balanceSelection) this.balanceSelection = { ...selected };
+      } catch (error) { if (sequence === this.userSequence) this.error = error.message || String(error); }
+      finally { if (sequence === this.userSequence) this.usersLoading = false; }
+    },
+    selectBalanceUser() {
+      const row = this.userOptions.find(item => item.user_id === this.balanceDraft.user_id) || this.balanceSelection;
+      if (!row || row.platform !== this.balanceDraft.platform || row.user_id !== this.balanceDraft.user_id) { this.balanceDraft.user_id = ''; this.balanceDraft.expected = '0'; this.balanceDraft.amount = '0'; this.balanceSelection = null; return; }
+      this.balanceSelection = { ...row }; this.balanceDraft.expected = row.amount; this.balanceDraft.amount = row.amount;
     },
     setBalance() {
+      if (!this.balanceDraft.platform || !this.balanceDraft.user_id || !this.balanceSelection) { this.error = '请选择平台和用户。'; return; }
       return this.run(async () => {
-        const { existing, ...body } = this.balanceDraft;
-        await this.mutate('set-balance', body); this.modal = null;
+        await this.mutate('set-balance', { ...this.balanceDraft }); this.closeModalAfterSave();
         this.overview = await this.get('overview'); await this.loadRecords(); this.showNotice('用户余额已更新，操作记录已保存。');
       });
     },
+    closeModalAfterSave() { this.modal = null; ++this.userSequence; clearTimeout(this.userTimer); },
     confirm(title, body, action) { this.pendingConfirmation = action; this.modal = { kind: 'confirm', title, body }; },
     async confirmModal() { const action = this.pendingConfirmation; this.modal = null; this.pendingConfirmation = null; await action?.(); },
     orderState(value) { return { running: '生成中', settled: '已扣费', refunded: '未扣费 / 已退款', review: '待核对', reserved: '旧订单' }[value] || value; },
@@ -210,6 +253,6 @@ const app = createApp({
     auditDetail(row) { const value = row.result || {}; return row.kind === 'balance' ? value.owner + '：' + value.before + ' → ' + value.after + '；' + value.reason : row.kind === 'create_cards' ? value.count + ' 张 · 面额 ' + value.amount : row.kind === 'delete_cards' ? '删除 ' + value.deleted + ' 张' : value.models + ' 个模型 · 版本 ' + value.revision; },
   },
   mounted() { this.bootstrap(); },
-  beforeUnmount() { clearTimeout(this.previewTimer); clearTimeout(this.toastTimer); this.offContext?.(); },
+  beforeUnmount() { clearTimeout(this.previewTimer); clearTimeout(this.toastTimer); clearTimeout(this.userTimer); ++this.userSequence; this.offContext?.(); },
 });
 app.mount('#app');

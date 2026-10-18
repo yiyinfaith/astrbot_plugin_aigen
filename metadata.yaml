@@ -2,7 +2,7 @@ name: astrbot_plugin_aigen
 display_name: AI多模态生成器
 desc: 适用于Astrbot的多模态生成插件，包括生图、生视频、生音频和可配置自动路由
 short_desc: 多模态生成、自动路由、模型计费与卡密充值
-version: v1.4.11
+version: v1.4.12
 author: 一吟Faith
 repo: https://github.com/yiyinfaith/astrbot_plugin_aigen
 astrbot_version: ">=4.28.2,<5"

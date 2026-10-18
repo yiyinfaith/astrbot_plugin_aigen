@@ -529,16 +529,16 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
         card = self.service.store.create_cards(self.owner, "2", 1)[0]
         self.assertIn(
             "成功",
-            commands.handle_command(self.service, self.event, "兑换卡密 " + card),
+            commands.handle_command(self.service, self.event, "兑换AI卡密 " + card),
         )
         self.assertIn(
             "已兑换",
-            commands.handle_command(self.service, self.event, "兑换卡密 " + card),
+            commands.handle_command(self.service, self.event, "兑换AI卡密 " + card),
         )
         await self.call(AsyncMock(return_value=b"image"))
         self.assertIn(
             "共 0 条",
-            commands.handle_command(self.service, Identity(uid="other"), "我的账单"),
+            commands.handle_command(self.service, Identity(uid="other"), "AI账单"),
         )
 
 
@@ -715,7 +715,7 @@ class SharedGenerationPathsTest(unittest.IsolatedAsyncioTestCase):
         key = self.plugin._video_session_key(self.event)
         collection = {"text": []}
         self.plugin._video_collections[key] = collection
-        self.event.message_str = "/余额"
+        self.event.message_str = "/AI余额"
         result = [part async for part in self.plugin.on_preset_request(self.event)]
         self.assertTrue(result)
         self.assertTrue(self.event.stopped)
@@ -724,7 +724,7 @@ class SharedGenerationPathsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_registered_redemption_and_listener_execute_once_for_one_event(self):
         card = self.plugin.billing.store.create_cards("admin", "2", 1)[0]
-        self.event.message_str = "/兑换卡密 " + card
+        self.event.message_str = "/兑换AI卡密 " + card
         key = self.plugin._video_session_key(self.event)
         collection = {"text": []}
         self.plugin._video_collections[key] = collection
@@ -750,8 +750,8 @@ class SharedGenerationPathsTest(unittest.IsolatedAsyncioTestCase):
         from test_video_plugin import Event
 
         for text, handler, args in (
-            ("/余额", self.plugin.balance_command, ()),
-            ("/我的账单 2", self.plugin.my_orders_command, (2,)),
+            ("/AI余额", self.plugin.balance_command, ()),
+            ("/AI账单 2", self.plugin.my_orders_command, (2,)),
         ):
             event = Event([], text=text)
             event.get_platform_name = lambda: "aiocqhttp"
@@ -764,16 +764,16 @@ class SharedGenerationPathsTest(unittest.IsolatedAsyncioTestCase):
     async def test_registered_redemption_keeps_usage_and_custom_prefix_arguments(self):
         from test_video_plugin import Event
 
-        self.event.message_str = "/兑换卡密"
+        self.event.message_str = "/兑换AI卡密"
         result = [part async for part in self.plugin.redeem_card_command(self.event)]
-        self.assertIn("用法：/兑换卡密", result[0][0].text)
+        self.assertIn("用法：/兑换AI卡密", result[0][0].text)
         self.assertEqual(self.plugin.billing.store.balance(self.owner), (10000000, 0))
         card = self.plugin.billing.store.create_cards("admin", "2", 1)[0]
-        invalid = Event([], text="/兑换卡密 " + card + " 多余参数")
+        invalid = Event([], text="/兑换AI卡密 " + card + " 多余参数")
         invalid.get_platform_name = lambda: "aiocqhttp"
         result = [part async for part in self.plugin.redeem_card_command(invalid, card)]
-        self.assertIn("用法：/兑换卡密", result[0][0].text)
-        custom = Event([], text=".兑换卡密 " + card)
+        self.assertIn("用法：/兑换AI卡密", result[0][0].text)
+        custom = Event([], text=".兑换AI卡密 " + card)
         custom.get_platform_name = lambda: "aiocqhttp"
         result = [part async for part in self.plugin.redeem_card_command(custom, card)]
         self.assertIn("兑换成功", result[0][0].text)

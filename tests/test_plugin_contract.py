@@ -20,7 +20,7 @@ class PluginContractTest(unittest.TestCase):
                     and decorator.func.attr == "command"
                 ):
                     registered[ast.literal_eval(decorator.args[0])] = node
-        for name in ("兑换卡密", "余额", "我的账单"):
+        for name in ("兑换AI卡密", "AI余额", "AI账单"):
             self.assertIn(name, registered)
             self.assertIn("用法：/" + name, ast.get_docstring(registered[name]))
         self.assertNotIn("生成卡密", registered)

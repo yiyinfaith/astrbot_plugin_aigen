@@ -63,20 +63,17 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.11",
+    "1.4.12",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
     """Generate images through configured OpenAI-compatible or Gemini APIs."""
 
     _HELP_COMMANDS: ClassVar[set[str]] = {
-        "ai生成帮助",
-        "画图帮助",
-        "生图帮助",
-        "画图菜单",
-        "生图菜单",
-        "生视频帮助",
-        "生视频菜单",
+        "AI帮助",
+        "ai帮助",
+        "AI菜单",
+        "ai菜单",
     }
     _DRAW_COMMANDS: ClassVar[set[str]] = {"画图", "生图"}
     _VIDEO_COMMANDS: ClassVar[set[str]] = {"生视频", "生成视频"}
@@ -597,6 +594,17 @@ class ImageGeneratorPlugin(Star):
             send_message=send_fallback_message,
         )
 
+    def _register_user(self, event: AstrMessageEvent) -> str:
+        """Register only this plugin's caller, returning a user-facing error."""
+        service = getattr(self, "billing", None)
+        if service is None:
+            return ""
+        try:
+            service.register_user(event)
+        except BillingError as exc:
+            return str(exc)
+        return ""
+
     async def _dispatch_billing_command(self, event: AstrMessageEvent, text: str):
         """Handle one financial message once across listener and command routes."""
         if self._terminating or event.get_extra("aigen_billing_command_handled", False):
@@ -614,28 +622,29 @@ class ImageGeneratorPlugin(Star):
     ):
         """Preserve raw validation, with parsed arguments for custom wake prefixes."""
         text = self._clean_message(self._event_message_text(event))
-        if text.split(maxsplit=1)[:1] != [command]:
+        first = text.split(maxsplit=1)[0] if text else ""
+        if BILLING_COMMANDS.get(first) != command:
             text = (command + " " + arguments).strip()
         return await self._dispatch_billing_command(event, text)
 
-    @filter.command("兑换卡密", prefix_optional=False)
+    @filter.command("兑换AI卡密", alias={"兑换ai卡密"}, prefix_optional=False)
     async def redeem_card_command(self, event: AstrMessageEvent, card: str = ""):
-        """兑换卡密并充值当前用户余额。用法：/兑换卡密 <卡密>，建议私聊兑换。"""
-        result = await self._registered_billing_command(event, "兑换卡密", card)
+        """兑换 AIGen 卡密并充值当前用户余额。用法：/兑换AI卡密 <卡密>，建议私聊兑换。"""
+        result = await self._registered_billing_command(event, "兑换AI卡密", card)
         if result is not None:
             yield result
 
-    @filter.command("余额", prefix_optional=False)
+    @filter.command("AI余额", alias={"ai余额"}, prefix_optional=False)
     async def balance_command(self, event: AstrMessageEvent):
-        """查询当前用户的余额和 AstrBot 用户 ID。用法：/余额。"""
-        result = await self._registered_billing_command(event, "余额")
+        """查询当前用户的 AIGen 余额和 AstrBot 用户 ID。用法：/AI余额。"""
+        result = await self._registered_billing_command(event, "AI余额")
         if result is not None:
             yield result
 
-    @filter.command("我的账单", prefix_optional=False)
+    @filter.command("AI账单", alias={"ai账单"}, prefix_optional=False)
     async def my_orders_command(self, event: AstrMessageEvent, page: int = 1):
-        """查询当前用户的生成账单。用法：/我的账单 [页码]，默认第 1 页。"""
-        result = await self._registered_billing_command(event, "我的账单", str(page))
+        """查询当前用户的 AIGen 生成账单。用法：/AI账单 [页码]，默认第 1 页。"""
+        result = await self._registered_billing_command(event, "AI账单", str(page))
         if result is not None:
             yield result
 
@@ -792,6 +801,9 @@ class ImageGeneratorPlugin(Star):
                 event, prompt, preset_name, start=True
             )
         else:
+            if error := self._register_user(event):
+                yield event.chain_result([Plain(error)])
+                return
             try:
                 images = await self._extract_images(event, prompt, preset_name)
             except (ValueError, OSError) as exc:
@@ -840,6 +852,8 @@ class ImageGeneratorPlugin(Star):
         Returns:
             A selection hint, validation error, or collection start result.
         """
+        if error := self._register_user(event):
+            return [Plain(error)]
         parts = argument.split()
         if not parts:
             return [
@@ -1018,6 +1032,8 @@ class ImageGeneratorPlugin(Star):
         key = self._video_session_key(event)
         if self._terminating:
             return []
+        if error := self._register_user(event):
+            return [Plain(error)]
         if key in self._video_busy:
             return [Plain("已有视频任务正在生成，请等待结果，勿重复提交。")]
         raw = self._event_message_text(event)
@@ -1648,11 +1664,20 @@ class ImageGeneratorPlugin(Star):
     async def get_generation_capabilities(
         self, event: AstrMessageEvent, media_type: str = "all"
     ):
-        """查询管理员配置的媒体路线、模型、可选参数、取值范围和有效默认值，不创建生成任务。
+        """查询 AIGen（AI多模态生成器，astrbot_plugin_aigen）插件的 generate_image、generate_video、generate_audio 三个工具的用法、参数与模型能力。
+
+        image 对应本插件的 generate_image（生图），video 对应 generate_video（生视频），
+        audio 对应 generate_audio（生音频），all 查询这三个工具。返回各工具适用的媒体路线、
+        已配置模型、可选参数、取值范围及有效默认值。仅供上述三个工具使用，不代表其他插件的
+        同类工具或 AstrBot 全部模型的能力；不创建生成任务、不扣费。不确定参数或模型能力时先查询，
+        再把查询到的参数传给对应的生成工具。未知模型仅返回协议支持范围，不保证模型本身支持。
 
         Args:
-            media_type(string): image、video、audio 或 all。生成前不确定接口或模型能力时调用；未知模型仅返回协议能力。
+            media_type(string): image 查询 generate_image；video 查询 generate_video；audio 查询 generate_audio；all 查询 AIGen 的这三个工具，默认 all。
         """
+        if error := self._register_user(event):
+            yield error
+            return
         if media_type not in {"image", "video", "audio", "all"}:
             yield "媒体类型必须为 image、video、audio 或 all。"
             return
@@ -1662,10 +1687,13 @@ class ImageGeneratorPlugin(Star):
             "audio": self.audio_conf,
         }
         try:
-            yield "\n".join(
-                configured_capabilities(kind, conf)
-                for kind, conf in configs.items()
-                if media_type in {kind, "all"}
+            yield (
+                "AIGen（AI多模态生成器，astrbot_plugin_aigen）工具能力：\n"
+                + "\n".join(
+                    f"适用工具：generate_{kind}\n" + configured_capabilities(kind, conf)
+                    for kind, conf in configs.items()
+                    if media_type in {kind, "all"}
+                )
             )
         except (VideoError, ValueError, TypeError) as exc:
             yield str(exc)
@@ -1716,6 +1744,9 @@ class ImageGeneratorPlugin(Star):
             service_tier(string): Seedance 服务档位 default 或 flex。
             draft(boolean): Seedance 草稿模式开关。
         """
+        if error := self._register_user(event):
+            yield error
+            return
         if not self.video_conf.get("enable_llm_tool", True):
             yield "视频生成函数工具已停用。"
             return
@@ -1794,7 +1825,7 @@ class ImageGeneratorPlugin(Star):
         finally:
             self._video_generation_tasks.discard(task)
 
-    @filter.command("生视频", aliases={"生成视频"}, prefix_optional=False)
+    @filter.command("生视频", alias={"生成视频"}, prefix_optional=False)
     async def video_command(self, event: AstrMessageEvent):
         """根据文本、图片、音频和视频自动路由，支持引用、@头像和参数校验。"""
         prompt, preset_name, _ = self._resolve_video_prompt(
@@ -1885,6 +1916,9 @@ class ImageGeneratorPlugin(Star):
             emo_surprised(string): IndexTTS-2 当前只支持字符串 0。
             use_message_media(boolean): 是否读取当前和引用消息中的音频，默认 true。
         """
+        if error := self._register_user(event):
+            yield error
+            return
         parameters = supplied(
             {key: value for key, value in locals().items() if key in AUDIO}
         )
@@ -1990,6 +2024,9 @@ class ImageGeneratorPlugin(Star):
             max_tokens(number): Gemini/Chat 最大输出 token 数。
             use_message_media(boolean): 默认 true 读取当前或引用图片，纯文生时可设 false。
         """
+        if error := self._register_user(event):
+            yield error
+            return
         if not self.conf.get("enable_llm_tool", True):
             yield "图片生成函数工具当前已在插件配置中停用。"
             return
@@ -2064,9 +2101,12 @@ class ImageGeneratorPlugin(Star):
         if result:
             yield "\n".join(part.text for part in result if isinstance(part, Plain))
 
-    @filter.command("生图", aliases={"画图"}, prefix_optional=False)
+    @filter.command("生图", alias={"画图"}, prefix_optional=False)
     async def draw_command(self, event: AstrMessageEvent):
-        """Generate an image from ``/生图 <自定义提示词>`` or a preset."""
+        """根据提示词、图片或预设生成图片。用法：/生图 <提示词>，可附带或引用图片。"""
+        if error := self._register_user(event):
+            yield event.chain_result([Plain(error)])
+            return
         prompt, preset_name, model = self._resolve_draw_prompt(
             self._event_message_text(event)
         )
@@ -2091,23 +2131,15 @@ class ImageGeneratorPlugin(Star):
             yield event.chain_result(result)
 
     @filter.command(
-        "ai生成帮助",
-        aliases={
-            "生图帮助",
-            "画图帮助",
-            "生图菜单",
-            "画图菜单",
-            "生视频帮助",
-            "生视频菜单",
-        },
+        "AI帮助",
+        alias={"ai帮助", "AI菜单", "ai菜单"},
         prefix_optional=True,
     )
     async def help_command(self, event: AstrMessageEvent):
-        """Send configured help as one merged-forward message.
-
-        Args:
-            event: The requesting AstrBot event.
-        """
+        """查看 AIGen 的生成、余额与卡密使用说明。用法：/AI帮助，以合并转发消息发送。"""
+        if error := self._register_user(event):
+            await event.send(event.chain_result([Plain(error)]))
+            return
         text = str(self.conf.get("help_text", "帮助文档未配置。"))
         event.stop_event()
-        await self._send_settings_menu(event, [text], title="AI生成帮助")
+        await self._send_settings_menu(event, [text], title="AI帮助")

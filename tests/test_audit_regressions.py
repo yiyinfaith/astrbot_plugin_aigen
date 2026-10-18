@@ -351,7 +351,7 @@ class PluginAuditTest(unittest.IsolatedAsyncioTestCase):
         await self.fixture.receive("/生视频")
         await self.fixture.receive("a cat")
         before = next(iter(self.plugin._video_collections.values()))
-        help_event, result = await self.fixture.receive("/ai生成帮助")
+        help_event, result = await self.fixture.receive("/AI帮助")
         self.assertFalse(help_event.stopped)
         self.assertEqual(result, [])
         self.assertIs(next(iter(self.plugin._video_collections.values())), before)

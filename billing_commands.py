@@ -6,9 +6,12 @@ import sqlite3
 from .billing import BillingError, money
 
 COMMANDS = {
-    "余额",
-    "兑换卡密",
-    "我的账单",
+    "AI余额": "AI余额",
+    "ai余额": "AI余额",
+    "兑换AI卡密": "兑换AI卡密",
+    "兑换ai卡密": "兑换AI卡密",
+    "AI账单": "AI账单",
+    "ai账单": "AI账单",
 }
 
 
@@ -24,18 +27,19 @@ def handle_command(service, event, text: str) -> str:
         A single reply, suitable for one message or a merged forward.
     """
     parts = text.split()
-    command, args = parts[0], parts[1:]
+    command, args = (parts[0] if parts else ""), parts[1:]
     if command not in COMMANDS:
         return "不支持的命令。"
+    command = COMMANDS[command]
     try:
-        owner = service.owner(event)
+        owner = service.register_user(event)
         store = service.store
-        if command == "余额":
+        if command == "AI余额":
             available, _held = store.balance(owner)
-            return f"用户 ID：{event.get_sender_id()}\n余额：{money(available)}\n/我的账单 查询订单；/兑换卡密 <卡密> 充值。"
-        if command == "兑换卡密":
+            return f"用户 ID：{event.get_sender_id()}\n余额：{money(available)}\n/AI账单 查询订单；/兑换AI卡密 <卡密> 充值。"
+        if command == "兑换AI卡密":
             if len(args) != 1:
-                return "用法：/兑换卡密 <卡密>，建议私聊机器人兑换。"
+                return "用法：/兑换AI卡密 <卡密>，建议私聊机器人兑换。"
             amount = store.redeem(owner, args[0])
             available, _held = store.balance(owner)
             return f"兑换成功，充值 {money(amount)}。余额 {money(available)}。"
@@ -66,6 +70,6 @@ def handle_command(service, event, text: str) -> str:
     except BillingError as exc:
         return str(exc)
     except (ValueError, TypeError):
-        return "参数格式错误，请发送 /ai生成帮助 查看用法。"
+        return "参数格式错误，请发送 /AI帮助 查看用法。"
     except sqlite3.Error:
         return "账本暂时不可用，请联系管理员；不要重复提交生成。"

@@ -6,10 +6,10 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="data:," />
     <title>AIGen 管理中心</title>
-    <link rel="stylesheet" href="./style.css?v=1.4.10" />
+    <link rel="stylesheet" href="./style.css?v=1.4.12" />
     <script defer src="./vendor/vue.global.prod.js"></script>
     <script defer src="./vendor/liquid-glass.js"></script>
-    <script type="module" src="./app.js?v=1.4.10"></script>
+    <script type="module" src="./app.js?v=1.4.12"></script>
   </head>
   <body>
     <div id="app" v-cloak>
@@ -58,7 +58,14 @@
         <section class="modal-panel panel" role="dialog" aria-modal="true" :aria-label="modal.title" @keydown.esc="closeModal">
           <div class="panel-title"><h3>{{ modal.title }}</h3><button class="icon-button" :disabled="busy" @click="closeModal" aria-label="关闭弹窗">×</button></div>
           <template v-if="modal.kind==='create'"><label class="field">每张面额<input v-model="cardDraft.amount" inputmode="decimal" placeholder="例如 10" :disabled="busy" /></label><label class="field">生成数量<input v-model.number="cardDraft.count" type="number" min="1" max="100" :disabled="busy" /></label><glass-slider :value="cardDraft.count" @select="cardDraft.count=$event" ></glass-slider><p class="muted">每批最多 100 张。生成后会放入对应面额分类。</p><glass-button label="确认生成卡密" :disabled="busy" @activate="createCards" ></glass-button></template>
-          <template v-else-if="modal.kind==='balance'"><div class="field-grid"><label class="field">平台类型<input v-model="balanceDraft.platform" :disabled="busy || balanceDraft.existing" placeholder="aiocqhttp" /></label><label class="field">用户 ID<input v-model="balanceDraft.user_id" :disabled="busy || balanceDraft.existing" /></label></div><p class="balance-current">当前余额 <strong>{{ balanceDraft.expected }}</strong></p><label class="field">修改后余额<input v-model="balanceDraft.amount" inputmode="decimal" :disabled="busy" /></label><label class="field">修改原因<input v-model="balanceDraft.reason" :disabled="busy" placeholder="例如人工充值、更正余额" /></label><glass-button label="确认修改余额" :disabled="busy" @activate="setBalance" ></glass-button></template>
+          <template v-else-if="modal.kind==='balance'">
+            <div class="field-grid balance-selectors">
+              <label class="field">平台类型<select v-model="balanceDraft.platform" :disabled="busy || !platforms.length" @change="changeBalancePlatform" aria-label="平台类型"><option disabled value="">请选择平台</option><option v-for="platform in platforms" :key="platform.value" :value="platform.value">{{ platform.label }}</option></select></label>
+              <div class="field user-picker"><label for="balance-user-id">用户 ID</label><input v-model="userSearch" :disabled="busy || !balanceDraft.platform" placeholder="搜索用户 ID" aria-label="搜索用户 ID" @input="searchBalanceUsers" @keydown.enter.prevent="loadBalanceUsers()" /><select id="balance-user-id" v-model="balanceDraft.user_id" :disabled="busy || usersLoading || !balanceDraft.platform" @change="selectBalanceUser"><option value="">请选择用户</option><option v-if="balanceSelection && !userOptions.some(row=>row.user_id===balanceSelection.user_id)" :value="balanceSelection.user_id">{{ balanceSelection.user_id }}（已选）</option><option v-for="user in userOptions" :key="user.user_id" :value="user.user_id">{{ user.user_id }} · 余额 {{ user.amount }}</option></select><small class="muted" role="status">{{ usersLoading ? '正在读取用户…' : '共 '+userTotal+' 位匹配用户' }}</small><button v-if="userOptions.length<userTotal" class="row-action" :disabled="busy || usersLoading" @click="loadBalanceUsers(true)">加载更多用户</button></div>
+            </div>
+            <p v-if="!usersLoading && !userTotal && !balanceSelection" class="muted">没有匹配的用户。用户使用 AIGen 的命令或工具后会自动登记。</p>
+            <p class="balance-current">当前余额 <strong>{{ balanceDraft.expected }}</strong></p><label class="field">修改后余额<input v-model="balanceDraft.amount" inputmode="decimal" :disabled="busy || !balanceDraft.user_id" /></label><label class="field">修改原因<input v-model="balanceDraft.reason" :disabled="busy" placeholder="例如人工充值、更正余额" /></label><glass-button label="确认修改余额" :disabled="busy || usersLoading || !balanceDraft.user_id || !balanceSelection" @activate="setBalance" ></glass-button>
+          </template>
           <template v-else-if="modal.kind==='generated'"><p>已生成 {{ generated.codes.length }} 张，每张 {{ generated.amount }}。</p><textarea class="generated-codes" readonly :value="generated.codes.join('\n')" aria-label="已生成卡密"></textarea><glass-button label="导出本批卡密" @activate="downloadCodes(generated.codes, 'aigen-cards-'+generated.amount+'.txt')" ></glass-button></template>
           <glass-dialog v-else :title="modal.title" :body="modal.body" :disabled="busy" @confirm="confirmModal" @cancel="closeModal" ></glass-dialog>
         </section>

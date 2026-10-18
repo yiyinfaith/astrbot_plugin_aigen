@@ -371,6 +371,85 @@ class FinanceStore:
             change,
         )
 
+    def platforms(self) -> list[str]:
+        """Return historical account platform types without exposing other data."""
+        with closing(sqlite3.connect(self.store.path, timeout=10)) as db:
+            owners = db.execute("SELECT owner FROM balances")
+            result = set()
+            for (owner,) in owners:
+                try:
+                    platform, user_id = json.loads(owner)
+                    if (
+                        isinstance(platform, str)
+                        and isinstance(user_id, str)
+                        and platform
+                    ):
+                        result.add(platform)
+                except (TypeError, ValueError):
+                    continue
+        return sorted(result)
+
+    def user_options(self, platform, *, search="", page=1):
+        """Search only registered users on one platform, fifty results at a time.
+
+        Args:
+            platform: Exact AstrBot platform type used by BillingService.owner.
+            search: Literal substring of the user ID, never a SQL wildcard.
+            page: One-based result page.
+
+        Returns:
+            User IDs and current balances for the administrator's dropdown.
+        """
+        if (
+            not isinstance(platform, str)
+            or not platform.strip()
+            or len(platform) > 100
+            or not isinstance(search, str)
+            or len(search) > 200
+            or type(page) is not int
+            or not 1 <= page <= 100000
+        ):
+            raise BillingError("平台或用户搜索参数不合法。")
+
+        def escape(value):
+            return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+        # Owners are canonical JSON arrays; the complete platform prefix prevents
+        # cross-platform matches and keeps user searches outside the platform text.
+        prefix = (
+            json.dumps([platform.strip()], ensure_ascii=False, separators=(",", ":"))[
+                :-1
+            ]
+            + ',"'
+        )
+        fragment = json.dumps(search, ensure_ascii=False)[1:-1]
+        pattern = escape(prefix) + "%" + escape(fragment) + "%"
+        where = "substr(owner,1,?)=? COLLATE BINARY AND owner LIKE ? ESCAPE '\\'"
+        arguments = (len(prefix), prefix, pattern)
+        with closing(sqlite3.connect(self.store.path, timeout=10)) as db:
+            db.execute("BEGIN")
+            total = db.execute(
+                "SELECT COUNT(*) FROM balances WHERE " + where, arguments
+            ).fetchone()[0]
+            rows = db.execute(
+                "SELECT owner,amount FROM balances WHERE "
+                + where
+                + " ORDER BY owner COLLATE BINARY LIMIT 50 OFFSET ?",
+                (*arguments, (page - 1) * 50),
+            ).fetchall()
+        return {
+            "total": total,
+            "page": page,
+            "rows": [
+                {
+                    "platform": platform.strip(),
+                    "user_id": json.loads(owner)[1],
+                    "amount": money(amount),
+                }
+                for owner, amount in rows
+            ],
+        }
+
     def listing(
         self, kind, *, page=1, page_size=30, search="", status="all", denomination=""
     ):

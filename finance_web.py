@@ -24,6 +24,7 @@ class FinanceWebUI:
             finance: Management store sharing the live ledger.
         """
         self.finance = finance
+        self.context = context
         self.closed = False
         self.tasks = set()
         self.workers = set()
@@ -123,6 +124,8 @@ class FinanceWebUI:
             "redemptions",
             "orders",
             "audit",
+            "platforms",
+            "user-options",
         }
         writes = {
             "preview",
@@ -143,6 +146,31 @@ class FinanceWebUI:
             if request.method == "GET":
                 if action == "overview":
                     result = await self._work(self.finance.overview)
+                elif action == "platforms":
+                    historical = set(await self._work(self.finance.platforms))
+                    manager = getattr(self.context, "platform_manager", None)
+                    configured = (
+                        {instance.meta().name for instance in manager.get_insts()}
+                        if manager
+                        else set()
+                    )
+                    result = {
+                        "rows": [
+                            {
+                                "value": name,
+                                "label": name,
+                                "configured": name in configured,
+                            }
+                            for name in sorted(historical | configured)
+                        ]
+                    }
+                elif action == "user-options":
+                    result = await self._work(
+                        self.finance.user_options,
+                        request.query.get("platform", ""),
+                        search=request.query.get("search", ""),
+                        page=request.query.get("page", 1, type=int),
+                    )
                 elif action == "prices":
                     result = await self._work(self.finance.prices)
                     result["rows"] = await self._work(

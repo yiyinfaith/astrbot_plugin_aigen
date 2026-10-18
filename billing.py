@@ -518,7 +518,7 @@ class BillingStore:
             ).fetchone()[0]
             if balance <= 0 or (expected is not None and balance < expected):
                 raise BillingError(
-                    "余额不足；请 /余额 查询，或 /兑换卡密 <卡密> 充值。"
+                    "余额不足；请 /AI余额 查询，或 /兑换AI卡密 <卡密> 充值。"
                 )
             db.execute(
                 "INSERT INTO orders(id,owner,model,media,reserved,status,details) VALUES(?,?,?,?,0,'running',?)",
@@ -603,6 +603,13 @@ class BillingStore:
                     "UPDATE orders SET details=? WHERE id=?",
                     (json.dumps(details, ensure_ascii=False, default=str), order),
                 )
+
+    def ensure_user(self, owner: str):
+        """Create a zero-balance user without changing existing funds or history."""
+        with self.transaction() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO balances(owner,amount) VALUES(?,0)", (owner,)
+            )
 
     def balance(self, owner: str) -> tuple[int, int]:
         """Return available and frozen funds from a consistent snapshot.
@@ -698,6 +705,22 @@ class BillingService:
         if not uid or not platform:
             raise BillingError("无法识别 AstrBot 用户 ID，未提交生成。")
         return json.dumps([platform, uid], ensure_ascii=False, separators=(",", ":"))
+
+    def register_user(self, event) -> str:
+        """Register the trusted message sender, including free or query-only use.
+
+        Args:
+            event: Original AstrBot event injected by the command/tool runner.
+
+        Returns:
+            The account shared across this sender's groups and private chats.
+        """
+        owner = self.owner(event)
+        try:
+            self.store.ensure_user(owner)
+        except sqlite3.Error as exc:
+            raise BillingError("用户账本暂时不可用，请稍后重试或联系管理员。") from exc
+        return owner
 
     def quote(self, media: str, config: dict, counts: dict):
         """Find an exact model rule; an unpriced model is always free.
@@ -1006,6 +1029,9 @@ async def billed_call(
     """
     if service and service.closed:
         raise BillingError("插件正在重载，请稍后重试；未提交生成任务。")
+    # The LLM cannot select an owner. Always use the invoking message event,
+    # never the chat/group ID, quoted sender, material owner or model arguments.
+    owner = service.register_user(event) if service else ""
     quote = service.quote(media, config, counts) if service else None
     if quote is None:
         task = asyncio.current_task()
@@ -1021,7 +1047,7 @@ async def billed_call(
     service.recover_unsettled()
     expression, values, expected, rule = quote
     order = service.store.begin(
-        service.owner(event),
+        owner,
         media,
         str(config["model"]),
         expected,
