@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import json
 import sqlite3
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -217,7 +218,12 @@ class CallerTest(unittest.IsolatedAsyncioTestCase):
             code = self.service.store.create_cards("admin", "10", 1)[0]
             self.service.store.redeem(owner, code)
             replies = [part async for part in tool(event, **kwargs)]
-            self.assertEqual(replies, [])
+            self.assertEqual(len(replies), 1)
+            self.assertEqual(json.loads(replies[0]), {
+                "status": "completed",
+                "media_type": tool.__name__.removeprefix("generate_"),
+                "delivery": "sent",
+            })
             self.assertEqual(
                 self.service.store.balance(owner)[0], (10 - amount) * 1000000
             )

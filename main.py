@@ -71,7 +71,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.19",
+    "1.4.20",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -1764,7 +1764,9 @@ class ImageGeneratorPlugin(Star):
         service_tier: str = "",
         draft: bool | None = None,
     ):
-        """按图片、音频、视频的组合自动选择管理员配置的模型生成视频，成功仅发送视频。
+        """按图片、音频、视频的组合自动选择管理员配置的模型生成视频。
+
+        视频由插件直接发送，实际结果返回 Agent，保留后续对话流程。
 
         媒体不需要填写 URL；工具会读取当前消息和引用中的 QQ 图片、文件、语音和视频。
         用户说“图生视频”“让图中人物动起来”或“跳舞”，应选 reference（或省略），一图和多图都一样。
@@ -1867,6 +1869,8 @@ class ImageGeneratorPlugin(Star):
             if result:
                 # Strings go back to the LLM; media is delivered separately.
                 yield "\n".join(part.text for part in result if isinstance(part, Plain))
+            else:
+                yield '{"status":"completed","media_type":"video","delivery":"sent"}'
         finally:
             self._video_generation_tasks.discard(task)
 
@@ -1938,6 +1942,9 @@ class ImageGeneratorPlugin(Star):
         use_message_media: bool = True,
     ):
         """Generate speech or descriptive audio from text and attached audio.
+
+        Audio is sent directly; the actual result is returned to the Agent
+        without ending its conversation loop.
 
         Args:
             text(string): Exact reading text, or the audio generation prompt.
@@ -2014,11 +2021,13 @@ class ImageGeneratorPlugin(Star):
             options = parse_audio_materials([text], mode)
             options.route = AUDIO_TYPES.get(audio_type, "")
             options.parameters = parameters
-            for part in await self._generate_audio(
+            result = await self._generate_audio(
                 event, options, audios, tool_call=True
-            ):
-                if isinstance(part, Plain):
-                    yield part.text
+            )
+            if result:
+                yield "\n".join(part.text for part in result if isinstance(part, Plain))
+            else:
+                yield '{"status":"completed","media_type":"audio","delivery":"sent"}'
         finally:
             self._video_busy.discard(key)
             self._video_generation_tasks.discard(task)
@@ -2052,6 +2061,7 @@ class ImageGeneratorPlugin(Star):
         """使用统一图片生成入口生成或编辑图片。
 
         媒体不需要填写 URL；工具会读取当前消息和引用中的图片或图片文件。
+        图片由插件直接发送，实际结果返回 Agent，保留后续对话流程。
 
         Args:
             prompt(string): 可选的图片生成或编辑提示词。省略时优先使用当前消息文本；如果只有参考图，则使用通用编辑提示。
@@ -2152,6 +2162,8 @@ class ImageGeneratorPlugin(Star):
         )
         if result:
             yield "\n".join(part.text for part in result if isinstance(part, Plain))
+        else:
+            yield '{"status":"completed","media_type":"image","delivery":"sent"}'
 
     @filter.command("生图", alias={"画图"}, prefix_optional=False)
     async def draw_command(self, event: AstrMessageEvent):

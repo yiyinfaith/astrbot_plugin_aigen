@@ -1,5 +1,10 @@
 # 更新日志
 
+## v1.4.20
+
+- 修复 `generate_image`、`generate_video`、`generate_audio` 成功发送媒体后没有返回值，导致 AstrBot 直接结束 Agent 流程的问题；三个工具均返回客观交付状态，让主模型按当前人格自然继续对话。
+- 不添加要求 Agent 回复的提示词，不额外调用 LLM；指令生成、错误反馈、公网链接回退和计费流程保持原有行为。
+
 ## v1.4.19
 
 - 生图指令与 `generate_image` 按顺序发送上游返回的全部图片，覆盖 Images、Responses、Chat、Gemini 的多图和流式返回；忽略流式预览并避免重复发送 Responses 最终快照。

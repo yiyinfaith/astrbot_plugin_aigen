@@ -192,7 +192,10 @@ class BatchDeliveryTest(unittest.IsolatedAsyncioTestCase):
         result = [part async for part in self.plugin.generate_image(
             event, "cat", n=2, use_message_media=False,
         )]
-        self.assertEqual(result, [])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(json.loads(result[0]), {
+            "status": "completed", "media_type": "image", "delivery": "sent",
+        })
         self.assertEqual([chain[0].url for chain in event.sent], raw)
         self.assertTrue(all(len(chain) == 1 for chain in event.sent))
         self.plugin.data_mgr.record_usage.assert_awaited_once()

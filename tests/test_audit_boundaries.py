@@ -1,6 +1,7 @@
 """Provider result, parameter validation and caller identity regressions."""
 
 import base64
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -137,7 +138,10 @@ class ToolIdentityIsolationTest(unittest.IsolatedAsyncioTestCase):
                 event = behavior.Event([])
                 event.get_platform_name = lambda platform=platform: platform
                 result = [part async for part in tool(event, **kwargs)]
-                self.assertEqual(result, [], (kind, platform))
+                self.assertEqual(len(result), 1, (kind, platform))
+                self.assertEqual(json.loads(result[0]), {
+                    "status": "completed", "media_type": kind, "delivery": "sent",
+                })
             repeated = behavior.Event([])
             repeated.get_platform_name = lambda: "aiocqhttp"
             result = [part async for part in tool(repeated, **kwargs)]

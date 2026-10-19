@@ -2,7 +2,7 @@
 
 <p align="center"><img src="logo.png" alt="AIGen Logo" width="160" height="160" /></p>
 
-`astrbot_plugin_aigen` 为 AstrBot 4.28.2+ 提供图片、视频和音频生成、独立关键词预设、可配置自动路由、帮助与使用统计。当前版本 **v1.4.19**，支持热重载，不需要重启 AstrBot。不设置个人或群组次数限制。
+`astrbot_plugin_aigen` 为 AstrBot 4.28.2+ 提供图片、视频和音频生成、独立关键词预设、可配置自动路由、帮助与使用统计。当前版本 **v1.4.20**，支持热重载，不需要重启 AstrBot。不设置个人或群组次数限制。
 
 版本更新记录见[更新日志](CHANGELOG.md)，也可在 AstrBot 插件详情页的“更新日志”中查看。
 
@@ -368,7 +368,7 @@ IndexTTS-2 情感强度每项 0–1.4，`emo_surprised` 仅支持字符串 `"0"`
 
 ## LLM 函数工具
 
-两个工具都可以由 AstrBot 的 LLM 调用，名称和参数名固定。成功时插件只发送媒体，不发送进度、耗时或成功文字；失败原因和公网链接回退作为工具文字结果返回 LLM，由 bot 回复用户，不直接向聊天发送插件提示。普通命令保留直接反馈。
+`generate_image`、`generate_video`、`generate_audio` 三个工具都可以由 AstrBot 的 LLM 调用，名称和参数名固定。插件负责发送媒体，成功交付后向 Agent 返回包含 `status`、`media_type`、`delivery` 的客观状态，保留 AstrBot 原生对话流程，让主模型按当前人格自然接话。开始前是否说话、说什么，以及完成后的回复，由主模型自行决定；插件不追加要求回复的提示词，也不额外调用 LLM。失败原因和公网链接回退仍作为工具文字结果返回 LLM，由 bot 回复用户。普通命令保留直接反馈，不触发 LLM。
 
 ### `generate_image`
 
