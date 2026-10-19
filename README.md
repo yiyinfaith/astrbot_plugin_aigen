@@ -2,7 +2,7 @@
 
 <p align="center"><img src="logo.png" alt="AIGen Logo" width="160" height="160" /></p>
 
-`astrbot_plugin_aigen` 为 AstrBot 4.28.2+ 提供图片、视频和音频生成、独立关键词预设、可配置自动路由、帮助与使用统计。当前版本 **v1.4.16**，支持热重载，不需要重启 AstrBot。不设置个人或群组次数限制。
+`astrbot_plugin_aigen` 为 AstrBot 4.28.2+ 提供图片、视频和音频生成、独立关键词预设、可配置自动路由、帮助与使用统计。当前版本 **v1.4.17**，支持热重载，不需要重启 AstrBot。不设置个人或群组次数限制。
 
 版本更新记录见[更新日志](CHANGELOG.md)，也可在 AstrBot 插件详情页的“更新日志”中查看。
 
