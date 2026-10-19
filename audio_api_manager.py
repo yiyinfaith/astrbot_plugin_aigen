@@ -681,15 +681,6 @@ class AudioApiManager(VideoApiManager):
                         raise VideoError("Gemini 返回了无效的 Base64 音频。") from exc
                     mime = inline["mimeType"]
                     break
-        elif mode == "custom_endpoint":
-            encoded = json_path(
-                data, self.config.get("custom_base64_path", "audio_base64")
-            )
-            if encoded:
-                try:
-                    raw = base64.b64decode(encoded, validate=True)
-                except (ValueError, TypeError) as exc:
-                    raise VideoError("自定义接口返回了无效的 Base64 音频。") from exc
         task_id, status, artifact_url, error = self.parse_task(data)
         error = error.replace(key, "[redacted]")
         failure = {
@@ -728,6 +719,16 @@ class AudioApiManager(VideoApiManager):
             if normalized in failure:
                 track(state="failed")
                 raise VideoError(f"音频任务失败（ID：{task_id}）：{error or status}")
+            if mode == "custom_endpoint" and (not status or normalized in success):
+                encoded = json_path(
+                    data, self.config.get("custom_base64_path", "audio_base64")
+                )
+                if encoded:
+                    try:
+                        raw = base64.b64decode(encoded, validate=True)
+                    except (ValueError, TypeError) as exc:
+                        raise VideoError("自定义接口返回了无效的 Base64 音频。") from exc
+                    break
             if artifact_url and (not status or normalized in success):
                 break
             if normalized in success:

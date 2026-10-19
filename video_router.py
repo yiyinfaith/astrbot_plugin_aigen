@@ -297,7 +297,8 @@ def select_route(
         )
     from .generation_capabilities import VIDEO, parameter_defaults, supplied
 
-    effective = {**config, **parameter_defaults(config)}
+    defaults = parameter_defaults(config)
+    effective = {**config, **defaults, "_provided_parameters": dict(defaults)}
     if config.get("auto_route", True):
         label, default_model, default_long = ROUTES[route]
         rules = config.get("routes", {})

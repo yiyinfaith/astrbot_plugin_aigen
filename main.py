@@ -71,7 +71,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.17",
+    "1.4.18",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -115,7 +115,7 @@ class ImageGeneratorPlugin(Star):
         self.video_mgr = VideoApiManager(self.video_conf, data_dir)
         self.audio_mgr = AudioApiManager(self.audio_conf, data_dir)
         self._cleanup_task = None
-        self._llm_last_call: dict[str, float] = {}
+        self._llm_last_call: dict[tuple[str, str, str], float] = {}
         self._video_collections: dict[tuple[str, str, str], dict] = {}
         self._video_busy: set[tuple[str, str, str]] = set()
         self._video_generation_tasks: set[asyncio.Task] = set()
@@ -612,6 +612,12 @@ class ImageGeneratorPlugin(Star):
         except BillingError as exc:
             return str(exc)
         return ""
+
+    @staticmethod
+    def _tool_cooldown_key(event: AstrMessageEvent, kind: str) -> tuple[str, str, str]:
+        """Isolate tools and platform accounts while sharing a user's chats."""
+        platform = str(getattr(event, "get_platform_name", lambda: "")() or "").strip()
+        return kind, platform, norm_id(event.get_sender_id())
 
     async def _dispatch_billing_command(self, event: AstrMessageEvent, text: str):
         """Handle one financial message once across listener and command routes."""
@@ -1761,10 +1767,10 @@ class ImageGeneratorPlugin(Star):
         if self._terminating:
             yield "视频插件正在重载，请稍后再试。"
             return
-        uid = "video:" + norm_id(event.get_sender_id())
+        uid = self._tool_cooldown_key(event, "video")
         cooldown = max(0, int(self.video_conf.get("llm_cooldown_seconds", 60)))
         claimed_at = monotonic()
-        elapsed = claimed_at - self._llm_last_call.get(uid, 0)
+        elapsed = claimed_at - self._llm_last_call.get(uid, float("-inf"))
         if elapsed < cooldown:
             yield f"视频工具冷却中，请 {int(cooldown - elapsed) + 1} 秒后再试。"
             return
@@ -1940,8 +1946,7 @@ class ImageGeneratorPlugin(Star):
         ):
             yield "音频模式或类型无效。"
             return
-        uid = norm_id(event.get_sender_id())
-        cooldown_key = "audio:" + uid
+        cooldown_key = self._tool_cooldown_key(event, "audio")
         cooldown = max(0, int(self.audio_conf.get("llm_cooldown_seconds", 60)))
         if (
             monotonic() - self._llm_last_call.get(cooldown_key, float("-inf"))
@@ -2039,11 +2044,11 @@ class ImageGeneratorPlugin(Star):
             yield "图片生成函数工具当前已在插件配置中停用。"
             return
 
-        uid = norm_id(event.get_sender_id())
+        uid = self._tool_cooldown_key(event, "image")
         cooldown = max(0, int(self.conf.get("llm_cooldown_seconds", 60) or 0))
         now = monotonic()
         if cooldown:
-            elapsed = now - self._llm_last_call.get(uid, 0.0)
+            elapsed = now - self._llm_last_call.get(uid, float("-inf"))
             if elapsed < cooldown:
                 yield f"图片生成工具冷却中，请 {int(cooldown - elapsed) + 1} 秒后再试。"
                 return
