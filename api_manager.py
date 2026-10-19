@@ -34,6 +34,13 @@ class ImageResult(bytes):
         return result
 
 
+class ImageBatch:
+    """Ordered image results, including recoverable download failures."""
+
+    def __init__(self, images):
+        self.images = tuple(images)
+
+
 class ImageDownloadError(RuntimeError):
     """The image was generated, but its public artifact could not be fetched."""
 
@@ -509,9 +516,127 @@ class ApiManager:
                 output_items.extend(chunk["output"])
             if isinstance(chunk.get("item"), dict):
                 output_items.append(chunk["item"])
-        if output_items:
-            response_data["output"] = output_items
+        if output_items and not response_data.get("output"):
+            # Completed snapshots are authoritative. Repeated item events update
+            # the same output instead of delivering a streaming image twice.
+            merged = {}
+            for index, item in enumerate(output_items):
+                key = item.get("id") or ("event", index)
+                merged[key] = {**merged.get(key, {}), **item}
+            response_data["output"] = list(merged.values())
         return response_data if saw_json and response_data else None
+
+    def extract_image_urls(self, data: Dict) -> list[str]:
+        """Collect every generated image from standard provider response arrays."""
+        if not isinstance(data, dict):
+            return []
+        images = []
+
+        def entries(value):
+            return value if isinstance(value, list) else []
+
+        def add(value):
+            if isinstance(value, str) and value.strip():
+                images.append(value.strip())
+
+        def content_images(content):
+            if isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    value = part.get("image_url")
+                    add(value.get("url") if isinstance(value, dict) else value)
+                    if part.get("type") in {"image", "output_image"}:
+                        add(part.get("url"))
+                    if isinstance(part.get("text"), str):
+                        content_images(part["text"])
+            elif isinstance(content, str):
+                matches = re.findall(r"!\[[^\]]*\]\(([^\n]+?)\)", content)
+                if matches:
+                    for match in matches:
+                        add(match.strip().strip("<>"))
+                else:
+                    for match in re.findall(
+                        r"data:image/[\w.+-]+;base64,[A-Za-z0-9+/=]+", content
+                    ):
+                        add(match)
+
+        for item in entries(data.get("data")):
+            if isinstance(item, dict):
+                add(self.extract_image_url({"data": [item]}))
+        if images:
+            return images
+        for item in entries(data.get("output")):
+            if not isinstance(item, dict) or item.get("type") != "image_generation_call":
+                continue
+            value = item.get("result")
+            if isinstance(value, str) and value.strip():
+                value = value.strip()
+                add(
+                    value if value.startswith(("http://", "https://", "/", "data:"))
+                    else "data:image/png;base64," + "".join(value.split())
+                )
+        if images:
+            return images
+        for choice in entries(data.get("choices")):
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message") or {}
+            if not isinstance(message, dict):
+                continue
+            previous_count = len(images)
+            direct = message.get("images")
+            if isinstance(direct, list) and direct:
+                for image in direct:
+                    add(self.extract_image_url({
+                        "choices": [{"message": {"images": [image]}}]
+                    }))
+            else:
+                content_images(message.get("content"))
+                if len(images) == previous_count:
+                    add(self.extract_image_url({"choices": [choice]}))
+        if images:
+            return images
+        for candidate in entries(data.get("candidates")):
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content") or {}
+            parts = content.get("parts", []) if isinstance(content, dict) else []
+            for part in entries(parts):
+                if not isinstance(part, dict):
+                    continue
+                inline = part.get("inlineData") or part.get("inline_data") or {}
+                if isinstance(inline, dict) and inline.get("data"):
+                    mime = inline.get("mimeType", inline.get("mime_type", "image/png"))
+                    if str(mime).startswith("image/"):
+                        add(f"data:{mime};base64,{inline['data']}")
+                else:
+                    content_images(part.get("text"))
+        if not images:
+            add(self.extract_image_url(data))
+        return images
+
+    async def _load_image_results(self, sources, data, proxy=None, base_url=None):
+        """Keep every output in order and preserve each failed download's URL."""
+        results = []
+        for source in sources:
+            try:
+                if source.startswith("data:"):
+                    result = base64.b64decode(
+                        "".join(source.split(",", 1)[1].split()), validate=True
+                    )
+                else:
+                    result = await self._download_result_image(
+                        source, proxy, base_url, _image_url_expiry(data, source)
+                    )
+                results.append(result)
+            except ImageDownloadError as exc:
+                if len(sources) == 1:
+                    raise
+                results.append(exc)
+            except (ValueError, TypeError, IndexError):
+                results.append("接口返回了无法解码的图片数据。")
+        return results[0] if len(results) == 1 else ImageBatch(results)
 
     def get_mime_type(self, data: bytes) -> str:
         """简单的 MIME 类型检测"""
@@ -786,7 +911,7 @@ class ApiManager:
 
     async def _parse_images_api_success_response(
         self, resp_text: str, proxy: str = None
-    ) -> bytes | str:
+    ) -> bytes | ImageBatch | str:
         """统一解析 Images API 成功响应"""
         try:
             res_data = json.loads(resp_text)
@@ -807,26 +932,30 @@ class ApiManager:
             if not stream_items:
                 return f"数据解析失败: 返回内容不是 JSON. 内容: {resp_text[:100]}..."
             res_data = stream_items[-1]
-            if isinstance(res_data, dict) and "data" not in res_data:
+            completed = [
+                item for item in stream_items
+                if isinstance(item, dict)
+                and item.get("type") in {"image_generation.completed", "image_edit.completed"}
+                and item.get("b64_json")
+            ]
+            if completed:
+                res_data = {**res_data, "data": completed}
+            elif isinstance(res_data, dict) and "data" not in res_data:
+                generated = []
                 for item in stream_items:
                     if isinstance(item, dict) and isinstance(item.get("data"), list):
-                        res_data = {**res_data, "data": item["data"]}
-                        break
+                        generated.extend(item["data"])
+                if generated:
+                    res_data = {**res_data, "data": generated}
 
         if "error" in res_data:
             track(state="failed")
             return json.dumps(res_data["error"], ensure_ascii=False)
 
-        img_url = self.extract_image_url(res_data)
-        if not img_url:
+        sources = self.extract_image_urls(res_data)
+        if not sources:
             return f"Images API 返回成功但未找到图片数据。Raw: {str(res_data)[:200]}..."
-
-        if img_url.startswith("data:"):
-            return base64.b64decode(img_url.split(",")[-1])
-
-        return await self._download_result_image(
-            img_url, proxy, url_expires_at=_image_url_expiry(res_data, img_url)
-        )
+        return await self._load_image_results(sources, res_data, proxy)
 
     async def _call_images_api_multipart(
         self,
@@ -840,7 +969,7 @@ class ApiManager:
         exact_endpoint: bool = False,
         stream: bool | None = None,
         image_options: Dict | None = None,
-    ) -> bytes | str:
+    ) -> bytes | ImageBatch | str:
         """Call the Images edits endpoint with multipart form data.
 
         Args:
@@ -1025,7 +1154,7 @@ class ApiManager:
         exact_endpoint: bool = False,
         stream: bool = False,
         image_options: Dict | None = None,
-    ) -> bytes | str:
+    ) -> bytes | ImageBatch | str:
         """Call an OpenAI-compatible Images API endpoint.
 
         Text-to-image requests use a JSON ``images/generations`` request. Image
@@ -1250,7 +1379,7 @@ class ApiManager:
         generation_params: dict | None = None,
         stream: bool = False,
         image_options: Dict | None = None,
-    ) -> bytes | str:
+    ) -> bytes | ImageBatch | str:
         """Call the official OpenAI Responses image-generation tool.
 
         Args:
@@ -1388,51 +1517,10 @@ class ApiManager:
                     track(state="failed")
                     return json.dumps(response_data["error"], ensure_ascii=False)
 
-                output_items = response_data.get("output", [])
-                if isinstance(output_items, list):
-                    for item in output_items:
-                        if not isinstance(item, dict):
-                            continue
-                        if item.get("type") != "image_generation_call":
-                            continue
-
-                        result = item.get("result")
-                        if not isinstance(result, str) or not result.strip():
-                            continue
-
-                        result = result.strip()
-                        if result.startswith(("http://", "https://", "/")):
-                            return await self._download_result_image(
-                                result,
-                                proxy,
-                                base_url,
-                                _image_url_expiry(response_data, result),
-                            )
-                        if result.startswith("data:") and "," in result:
-                            result = result.split(",", 1)[1]
-
-                        try:
-                            return base64.b64decode(
-                                "".join(result.split()), validate=True
-                            )
-                        except Exception:
-                            return "Response API 返回了无法解码的图片数据。"
-
-                image_url = self.extract_image_url(response_data)
-                if image_url:
-                    if image_url.startswith("data:") and "," in image_url:
-                        try:
-                            encoded_image = image_url.split(",", 1)[1]
-                            return base64.b64decode(
-                                "".join(encoded_image.split()), validate=True
-                            )
-                        except Exception:
-                            return "Response API 返回了无法解码的图片数据。"
-                    return await self._download_result_image(
-                        image_url,
-                        proxy,
-                        base_url,
-                        _image_url_expiry(response_data, image_url),
+                sources = self.extract_image_urls(response_data)
+                if sources:
+                    return await self._load_image_results(
+                        sources, response_data, proxy, base_url
                     )
 
                 output_text = response_data.get("output_text")
@@ -1746,7 +1834,7 @@ class ApiManager:
         aspect_ratio: str = None,
         resolution: str = None,
         image_options: Dict | None = None,
-    ) -> bytes | str:
+    ) -> bytes | ImageBatch | str:
         result = await self._call_api_once(
             images,
             prompt,
@@ -1756,22 +1844,38 @@ class ApiManager:
             resolution=resolution,
             image_options=image_options,
         )
-        if isinstance(result, str):
-            for key in self._normalize_keys(self.config.get("api_keys")):
-                result = result.replace(key, "[redacted]")
-        if isinstance(result, bytes):
-            def verify():
+        artifacts = list(result.images) if isinstance(result, ImageBatch) else [result]
+        completed = 0
+        for index, artifact in enumerate(artifacts):
+            if isinstance(artifact, str):
+                for key in self._normalize_keys(self.config.get("api_keys")):
+                    artifact = artifact.replace(key, "[redacted]")
+                artifacts[index] = artifact
+                continue
+            if isinstance(artifact, ImageDownloadError):
+                completed += 1
+                continue
+            if not isinstance(artifact, bytes):
+                continue
+
+            def verify(raw=artifact):
                 try:
-                    with PILImage.open(io.BytesIO(result)) as image:
+                    with PILImage.open(io.BytesIO(raw)) as image:
                         image.load()
                     return True
                 except Exception:  # noqa: BLE001
                     return False
 
             if not await asyncio.to_thread(verify):
-                track(state="failed")
-                return "接口未返回可识别的完整图片，请核对原任务，勿立即重复提交。"
-        return result
+                artifacts[index] = "接口未返回可识别的完整图片，请核对原任务，勿立即重复提交。"
+            else:
+                completed += 1
+        if isinstance(result, (bytes, ImageBatch)):
+            track(
+                state="completed" if completed else "failed",
+                payload={"usage": {"image_count": completed}},
+            )
+        return ImageBatch(artifacts) if isinstance(result, ImageBatch) else artifacts[0]
 
     async def _call_api_once(
         self,
@@ -1782,7 +1886,7 @@ class ApiManager:
         aspect_ratio: str = None,
         resolution: str = None,
         image_options: Dict | None = None,
-    ) -> bytes | str:
+    ) -> bytes | ImageBatch | str:
         """核心生成逻辑"""
 
         self._reset_metrics()
@@ -2267,7 +2371,11 @@ class ApiManager:
                 track(state="failed")
                 return json.dumps(res_data["error"], ensure_ascii=False)
 
-            img_url = self.extract_image_url(res_data)
+            sources = self.extract_image_urls(res_data)
+            if len(sources) > 1:
+                return await self._load_image_results(sources, res_data, proxy, base)
+
+            img_url = sources[0] if sources else self.extract_image_url(res_data)
 
             # 终极 fallback，检查是否是那种直接放在外层的 tool_calls / images 遗漏
             if not img_url:

@@ -30,7 +30,7 @@ from astrbot.api.message_components import (
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core import AstrBotConfig
 
-from .api_manager import ApiManager, ImageDownloadError
+from .api_manager import ApiManager, ImageBatch, ImageDownloadError
 from .audio_api_manager import AudioApiManager, AudioDownloadError
 from .audio_router import (
     AUDIO_TYPES,
@@ -71,7 +71,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.18",
+    "1.4.19",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -499,36 +499,57 @@ class ImageGeneratorPlugin(Star):
             logger.exception("Image generation request failed")
             result = str(exc)
 
-        if not isinstance(result, bytes):
+        if not isinstance(result, (bytes, ImageBatch)):
             if self.conf.get("debug_mode", False):
                 return [Plain(f"图片生成失败：{result}")]
             return [Plain("图片生成失败，请稍后重试。")]
 
-        source_url = str(getattr(result, "url", "") or "")
-        source_expiry = str(getattr(result, "url_expires_at", "") or "")
-        result = await self.img_mgr.optimize_output_image(result)
+        artifacts = result.images if isinstance(result, ImageBatch) else (result,)
+        prepared = []
+        for artifact in artifacts:
+            if isinstance(artifact, bytes):
+                prepared.append((
+                    await self.img_mgr.optimize_output_image(artifact),
+                    str(getattr(artifact, "url", "") or ""),
+                    str(getattr(artifact, "url_expires_at", "") or ""),
+                ))
+            else:
+                prepared.append(artifact)
         elapsed = (datetime.now(timezone.utc) - start).total_seconds()
-        try:
-            await self.data_mgr.record_usage(uid, gid)
-        except Exception:  # noqa: BLE001
-            logger.exception("Could not record completed image usage")
+        if any(isinstance(artifact, (tuple, ImageDownloadError)) for artifact in prepared):
+            try:
+                await self.data_mgr.record_usage(uid, gid)
+            except Exception:  # noqa: BLE001
+                logger.exception("Could not record completed image usage")
         suffix = f" | 预设：{preset_name}" if preset_name not in {"", "自定义"} else ""
         if self.conf.get("show_model_info", False):
             suffix += f" | 模型：{model}"
-        reply: list[Any] = [Image.fromBytes(result)]
-        if include_result_text:
-            reply.append(Plain(f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}"))
-        if dispatch_result:
-            return await self._deliver_image_result(
-                event,
-                result,
-                source_url,
-                source_expiry,
-                include_result_text,
-                suffix,
-                f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}",
-                send_fallback_message=not tool_call,
-            )
+        reply: list[Any] = []
+        final_image = max(
+            (index for index, artifact in enumerate(prepared) if isinstance(artifact, tuple)),
+            default=-1,
+        )
+        for index, artifact in enumerate(prepared):
+            if isinstance(artifact, tuple):
+                raw, source_url, source_expiry = artifact
+                caption = include_result_text and index == final_image
+                if dispatch_result:
+                    reply.extend(await self._deliver_image_result(
+                        event, raw, source_url, source_expiry, caption, suffix,
+                        f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}",
+                        send_fallback_message=not tool_call,
+                    ))
+                else:
+                    reply.append(Image.fromBytes(raw))
+                    if caption:
+                        reply.append(Plain(f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}"))
+            elif isinstance(artifact, ImageDownloadError):
+                reply.extend(await self._deliver_image_fallback(
+                    event, artifact.url, artifact.url_expires_at,
+                    send_message=dispatch_result and not tool_call,
+                ))
+            else:
+                reply.append(Plain(f"第 {index + 1} 张图片处理失败：{artifact}"))
         return reply
 
     @staticmethod
@@ -710,6 +731,7 @@ class ImageGeneratorPlugin(Star):
             "取消",
             "设置",
             "设置重置",
+            "清除失败项",
         } and self._has_astrbot_prefix(event, raw_text)
         if collection or control:
             event.stop_event()
@@ -1152,6 +1174,14 @@ class ImageGeneratorPlugin(Star):
                     self._video_collections.pop(key, None)
                     collection["timer"].cancel()
                     return [Plain("已取消本次材料收集。")]
+                if control == "清除失败项" and not start:
+                    count = len(collection["errors"])
+                    collection["errors"].clear()
+                    return [Plain(
+                        f"已清除 {count} 项失败记录，已成功录入的材料和参数均保留。"
+                        "请重新发送失败的材料，最后发送 /生成；录入时限不变。"
+                        if count else "没有需要清除的失败项，已录入材料保持不变，可继续发送材料或 /生成。"
+                    )]
                 if not start and control in {"设置", "设置重置"}:
                     if control == "设置重置":
                         collection["parameters"] = {}
@@ -1230,7 +1260,7 @@ class ImageGeneratorPlugin(Star):
                 if text:
                     if sum(map(len, collection["text"])) + len(text) > 2_000_000:
                         collection["errors"].append(
-                            "文字材料超过 200 万字符，请 /取消 后减少材料。"
+                            "文字材料超过 200 万字符，本条文字未录入，请减少文字后重新发送。"
                         )
                     else:
                         collection["text"].append(text)
@@ -1252,7 +1282,7 @@ class ImageGeneratorPlugin(Star):
                     )
                     if collection["size"] + added_size > 100 * 1024 * 1024:
                         raise VideoError(
-                            "材料总量超过 100MB，请 /取消 后减少材料或使用较小的文件。"
+                            "材料总量超过 100MB，本条媒体未录入，请使用较小的文件，或 /取消 后减少材料。"
                         )
                     for field, sources in (
                         ("images", images),
@@ -1279,7 +1309,8 @@ class ImageGeneratorPlugin(Star):
                         Plain(
                             "材料读取失败，未提交生成任务：\n"
                             + "\n".join(collection["errors"])
-                            + "\n请 /取消 后重新发送材料。"
+                            + "\n发送 /清除失败项 可清除失败记录，已成功录入的材料和参数会保留；随后重新发送失败的材料，再 /生成。"
+                            + "\n如需全部重来，请发送 /取消。"
                         )
                     ]
                 try:
@@ -1865,6 +1896,14 @@ class ImageGeneratorPlugin(Star):
         if result:
             yield event.chain_result(result)
 
+    @filter.command("清除失败项", prefix_optional=False)
+    async def clear_failed_items_command(self, event: AstrMessageEvent):
+        """清除本人本次视频或音频录入中的失败记录。用法：/清除失败项，保留成功材料和参数。"""
+        event.stop_event()
+        result = await self._collect_video_request(event)
+        if result:
+            yield event.chain_result(result)
+
     @filter.llm_tool(name="generate_audio")
     async def generate_audio(
         self,
@@ -2025,8 +2064,8 @@ class ImageGeneratorPlugin(Star):
             output_compression(number): 可选输出压缩率 0-100；0 会原样发送，省略使用默认。
             moderation(string): 可选内容审核级别：auto、low。
             style(string): 可选风格：vivid、natural；主要适用于 DALL-E 3 兼容模型。
-            n(number): 可选生成数量 1–10，省略使用默认，插件回复第一张图片。
-            max_num_results(number): 可选 Responses 图片工具生成数量，1-50；未填写时使用接口默认值。
+            n(number): 可选生成数量 1–10，省略使用默认，插件按顺序发送上游实际返回的全部图片。
+            max_num_results(number): 可选 Responses 图片工具生成数量，1-50；未填写时使用接口默认值，实际返回的全部图片都会发送。
             input_fidelity(string): 可选编辑参考图保真度：low、high；没有输入图片时忽略。
             partial_images(number): 可选流式中间图片数量：0-3；仅由支持该字段的 OpenAI 图片接口处理。
             action(string): 可选 Responses 图片工具动作：auto、generate、edit；留空由接口自动判断。

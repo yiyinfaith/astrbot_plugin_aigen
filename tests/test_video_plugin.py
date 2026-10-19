@@ -171,6 +171,7 @@ def plugin_class():
         "VideoError": router.VideoError,
         "VideoDownloadError": api.VideoDownloadError,
         "ImageDownloadError": image_api.ImageDownloadError,
+        "ImageBatch": image_api.ImageBatch,
         "ApiManager": image_api.ApiManager,
         "video_params": api.video_params,
         "detect_aspect_ratio_from_image": importlib.import_module(

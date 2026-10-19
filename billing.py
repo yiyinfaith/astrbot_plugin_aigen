@@ -895,6 +895,7 @@ class Usage:
                     ),
                     "total_tokens": ("total_tokens", "totalTokenCount"),
                     "seconds": ("video_duration", "audio_duration", "duration_seconds"),
+                    "image_count": ("image_count",),
                 }
                 for target, names in mapping.items():
                     for name in names:
