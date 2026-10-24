@@ -1819,6 +1819,7 @@ class ImageGeneratorPlugin(Star):
             service_tier(string): Seedance 服务档位 default 或 flex。
             draft(boolean): Seedance 草稿模式开关。
         """
+        self._set_completed_media_units(event, 0)
         if error := self._register_user(event):
             yield error
             return
@@ -2004,6 +2005,7 @@ class ImageGeneratorPlugin(Star):
             emo_surprised(string): IndexTTS-2 当前只支持字符串 0。
             use_message_media(boolean): 是否读取当前和引用消息中的音频，默认 true。
         """
+        self._set_completed_media_units(event, 0)
         if error := self._register_user(event):
             yield error
             return
@@ -2114,6 +2116,7 @@ class ImageGeneratorPlugin(Star):
             max_tokens(number): Gemini/Chat 最大输出 token 数。
             use_message_media(boolean): 默认 true 读取当前或引用图片，纯文生时可设 false。
         """
+        self._set_completed_media_units(event, 0)
         if error := self._register_user(event):
             yield error
             return
@@ -2176,18 +2179,52 @@ class ImageGeneratorPlugin(Star):
             "max_tokens": max_tokens,
         }
 
-        result = await self._generate(
-            event,
-            prompt,
-            "自定义",
-            str(self.conf.get("model", "nano-banana") or "nano-banana"),
-            images,
-            show_progress=False,
-            include_result_text=False,
-            image_options=image_options,
-            dispatch_result=True,
-            tool_call=True,
-        )
+        # ``n`` is the tool's requested image count. Protocols such as Gemini
+        # have no upstream n field, even for n=1. Keep their requests valid and
+        # execute the logical batch behind this one cooldown check. Every item
+        # still goes through _generate -> billed_call with the original rules.
+        calls = 1
+        split_count = False
+        if type(n) is int and 1 <= n <= 10:
+            try:
+                effective = select_image_route(self.conf, images, str(self.conf.get("model") or "nano-banana"))
+            except VideoError as exc:
+                yield str(exc)
+                return
+            try:
+                validate_options("image", effective, {"n": n}, has_reference=bool(images))
+            except VideoError:
+                calls, split_count = n, True
+                image_options["n"] = None
+        completed = 0
+        result = []
+        try:
+            for _ in range(calls):
+                returned = False
+                try:
+                    result = await self._generate(
+                        event,
+                        prompt,
+                        "自定义",
+                        str(self.conf.get("model", "nano-banana") or "nano-banana"),
+                        images,
+                        show_progress=False,
+                        include_result_text=False,
+                        image_options=image_options,
+                        dispatch_result=True,
+                        tool_call=True,
+                    )
+                    returned = True
+                finally:
+                    if split_count:
+                        getter = getattr(event, "get_extra", None)
+                        units = getter("aigen_completed_media_units", None) if callable(getter) else None
+                        completed += max(0, units) if type(units) is int else int(returned and not result)
+                if result:
+                    break
+        finally:
+            if split_count:
+                self._set_completed_media_units(event, completed)
         if result:
             yield "\n".join(part.text for part in result if isinstance(part, Plain))
         else:

@@ -474,4 +474,6 @@ ruff check main.py config_manager.py data_manager.py video_router.py video_input
 
 ## 参考与许可
 
+2026-10-25 协作审计修复：`generate_image` 的 `n` 为逻辑图片数量。Gemini 等不支持上游 `n` 参数的路线会按单张执行同一逻辑批次，支持原生批量的路线仍一次请求；冷却只检查一次，每张继续调用原有计费流程，部分失败保留实际成功数量并停止后续提交。三个生成工具在配置拒绝、冷却或其他提前返回时明确报告实际媒体单位为 0。新增回归覆盖单张、三张、冷却及部分失败；完整 `tests/` 为 384 passed、1 skipped、230 subtests passed，变更文件 ruff 通过。Decision 到真实 Gemini 生图与图片理解完成实测；没有改动生产价格或用户余额。
+
 项目：[yiyinfaith/astrbot_plugin_aigen](https://github.com/yiyinfaith/astrbot_plugin_aigen)。配置、消息组件和函数工具依照 AstrBot 当前开发文档实现。视频适配参考 [AutoDL API](https://github.com/yiyinfaith/new-api-plugin-autodl/blob/main/API.md) 和 [Seedance 创建任务文档](https://docs.volcengine.com/docs/ark/create-video-generation-task-api?lang=zh)。遵守本仓库许可证及上游服务的使用要求。
