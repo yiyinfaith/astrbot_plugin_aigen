@@ -199,6 +199,7 @@ class BatchDeliveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([chain[0].url for chain in event.sent], raw)
         self.assertTrue(all(len(chain) == 1 for chain in event.sent))
         self.plugin.data_mgr.record_usage.assert_awaited_once()
+        self.assertEqual(event.get_extra("aigen_completed_media_units"), 2)
 
     async def test_command_keeps_all_images_and_one_success_caption(self):
         raw = pictures()
@@ -216,6 +217,7 @@ class BatchDeliveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(images, raw)
         self.assertEqual(sum("生成成功" in item for item in text), 1)
         self.assertTrue(any("https://media.test/2.png" in item for item in text))
+        self.assertEqual(event.get_extra("aigen_completed_media_units"), 3)
 
 
 class ClearFailedVideoTest(unittest.IsolatedAsyncioTestCase):

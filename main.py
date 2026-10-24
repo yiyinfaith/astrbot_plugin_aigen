@@ -237,6 +237,22 @@ class ImageGeneratorPlugin(Star):
         return str(getattr(event, "message_str", "") or "")
 
     @staticmethod
+    def _set_completed_media_units(event: Any, units: int) -> None:
+        """Expose actual generated units to cooperating plugins.
+
+        The event extra is optional and does not replace AIGen's authoritative
+        monetary billing.  Decision uses it only to reconcile its separate
+        per-session safety quota when a batch contains partial failures.
+        """
+
+        setter = getattr(event, "set_extra", None)
+        if callable(setter):
+            try:
+                setter("aigen_completed_media_units", max(0, int(units)))
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                pass
+
+    @staticmethod
     def _clean_message(text: str) -> str:
         """Remove one command prefix while retaining the user's prompt."""
         return re.sub(r"^(?:[/#！!])\s*", "", (text or "").strip()).strip()
@@ -386,6 +402,7 @@ class ImageGeneratorPlugin(Star):
         ``include_result_text`` to ``False`` and disabling progress output.
         Normal commands keep the configured success text.
         """
+        self._set_completed_media_units(event, 0)
         uid = norm_id(event.get_sender_id())
         gid = norm_id(event.get_group_id())
         try:
@@ -515,6 +532,13 @@ class ImageGeneratorPlugin(Star):
                 ))
             else:
                 prepared.append(artifact)
+        self._set_completed_media_units(
+            event,
+            sum(
+                isinstance(artifact, (tuple, ImageDownloadError))
+                for artifact in prepared
+            ),
+        )
         elapsed = (datetime.now(timezone.utc) - start).total_seconds()
         if any(isinstance(artifact, (tuple, ImageDownloadError)) for artifact in prepared):
             try:
@@ -1437,6 +1461,7 @@ class ImageGeneratorPlugin(Star):
         Returns:
             An error chain, or no elements after successful delivery.
         """
+        self._set_completed_media_units(event, 0)
         try:
             prepared = self.audio_mgr.prepare(options, audios)
             label = "文字" if options.mode == "朗读" else "提示词"
@@ -1478,6 +1503,7 @@ class ImageGeneratorPlugin(Star):
             )
         except Exception:  # noqa: BLE001
             logger.exception("Could not record audio usage; delivering completed audio")
+        self._set_completed_media_units(event, 1)
         path = result.path
         if path.suffix.lower() != ".wav":
             try:
@@ -1549,6 +1575,7 @@ class ImageGeneratorPlugin(Star):
         options=None,
         prompt_segments=None,
     ) -> list[Any]:
+        self._set_completed_media_units(event, 0)
         if not self.video_conf.get("enabled", True):
             return [Plain("视频生成功能已关闭。")]
         try:
@@ -1624,6 +1651,7 @@ class ImageGeneratorPlugin(Star):
             logger.exception(
                 "Could not record video usage; delivering the completed video"
             )
+        self._set_completed_media_units(event, 1)
         # A successful delivery is one video message.  Progress, if enabled,
         # was already sent before the paid request started.
         reply = [Video.fromFileSystem(str(result.path))]
