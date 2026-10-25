@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 from urllib.parse import urljoin
 from urllib.parse import urlparse
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 import aiohttp
 from PIL import Image as PILImage
 from typing import List, Dict
@@ -21,7 +21,7 @@ from .generation_params import (
     openai_size_for_generation,
     resolve_image_generation_params,
 )
-from .utils import normalize_api_root, read_image_response
+from .utils import normalize_api_root, read_api_response, read_image_response
 
 
 class ImageResult(bytes):
@@ -1067,7 +1067,7 @@ class ApiManager:
                     proxy=current_proxy,
                     timeout=timeout,
                 ) as resp:
-                    resp_text = await resp.text()
+                    resp_text = await read_api_response(resp)
                     track(raw=resp_text, status=resp.status)
 
                     if stream and self._stream_rejected(resp.status, resp_text):
@@ -1273,7 +1273,7 @@ class ApiManager:
                     proxy=current_proxy,
                     timeout=timeout,
                 ) as resp:
-                    resp_text = await resp.text()
+                    resp_text = await read_api_response(resp)
                     track(raw=resp_text, status=resp.status)
 
                     if stream and self._stream_rejected(resp.status, resp_text):
@@ -1468,7 +1468,7 @@ class ApiManager:
                 proxy=current_proxy,
                 timeout=timeout,
             ) as response:
-                response_text = await response.text()
+                response_text = await read_api_response(response)
                 track(raw=response_text, status=response.status)
 
                 if response.status != 200:
@@ -2059,6 +2059,33 @@ class ApiManager:
                 else:
                     payload[source] = value
 
+        # Explicit opt-in for gateways which filter native Gemini SSE pings.
+        # Convert before the only paid POST, never after a timeout/partial job.
+        gateway_host = urlsplit(normalize_api_root(base)).hostname or ""
+        if (interface_mode == "gemini_official" and self.config.get("use_stream", False)
+                and self.config.get("gemini_stream_openai_compat", False)
+                and not (gateway_host == "googleapis.com" or gateway_host.endswith(".googleapis.com"))):
+            if (image_options or {}).get("top_k") is not None:
+                return "OpenAI 网关流式兼容不支持 top_k，请移除此参数或关闭兼容开关；未提交生成请求。"
+            config = payload["generationConfig"]
+            content = [{"type": "text", "text": final_prompt}]
+            for image in images:
+                content.append({"type": "image_url", "image_url": {
+                    "url": "data:" + self.get_mime_type(image) + ";base64," + base64.b64encode(image).decode()
+                }})
+            payload = {"model": model, "stream": True, "messages": [{"role": "user", "content": content}],
+                       "extra_body": {"google": {"image_config": {
+                           "aspect_ratio": config["imageConfig"]["aspectRatio"],
+                           "image_size": config["imageConfig"]["imageSize"],
+                       }}}}
+            for src, dst in (("temperature", "temperature"), ("topP", "top_p"), ("seed", "seed"), ("maxOutputTokens", "max_tokens")):
+                if src in config:
+                    payload[dst] = config[src]
+            headers.pop("x-goog-api-key", None)
+            headers["Authorization"] = f"Bearer {key}"
+            url = self._normalize_generic_chat_url(base)
+            mode = "generic"
+
         # 4. 发送请求
         try:
             timeout_val = self.config.get("timeout", 120)
@@ -2090,7 +2117,7 @@ class ApiManager:
                     proxy=current_proxy,
                     timeout=timeout,
                 ) as resp:
-                    resp_text = await resp.text()
+                    resp_text = await read_api_response(resp)
                     track(raw=resp_text, status=resp.status)
                     last_status = resp.status
 

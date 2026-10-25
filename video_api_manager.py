@@ -22,6 +22,7 @@ from .api_manager import ApiManager
 from .billing import track
 from .config_manager import media_attempts
 from .generation_capabilities import prune_template_parameters, validate_options
+from .utils import read_api_response
 from .video_router import (
     InvalidMediaError,
     VideoError,
@@ -994,7 +995,7 @@ class VideoApiManager(ApiManager):
             ),
         ) as resp:
             # Redact diagnostics, never task IDs or signed artifact URLs.
-            text = await resp.text()
+            text = await read_api_response(resp)
             track(raw=text, status=resp.status if method == "POST" else 0)
             if resp.status >= 400:
                 detail = text.replace(key, "[redacted]")

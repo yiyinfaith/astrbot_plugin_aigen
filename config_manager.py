@@ -21,6 +21,7 @@ GLOBAL_KEYS = {
     "proxy_url",
     "timeout",
     "use_stream",
+    "gemini_stream_openai_compat",
     "help_text",
     "llm_cooldown_seconds",
 }

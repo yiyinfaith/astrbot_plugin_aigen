@@ -40,6 +40,12 @@
                 "hint": "生图接口使用流式参数；视频异步接口仍提交并轮询任务，同时接受上游 SSE 响应。自定义视频请求模板可用 {stream} 参数。标准视频协议不添加文档禁止的 stream 字段。",
                 "default": false
             },
+            "gemini_stream_openai_compat": {
+                "description": "【网络】Gemini 网关流式保活兼容",
+                "type": "bool",
+                "hint": "适用于同时提供 OpenAI 接口的 New API 网关。Gemini 流式生图通过 Chat Completions 提交，保留模型、Key、参考图、画幅和分辨率，沿用网关计费及心跳。Google 官方地址、非流式和自定义协议不受影响。",
+                "default": false
+            },
             "help_text": {
                 "description": "【帮助】使用 /AI帮助 指令时显示的文本",
                 "type": "text",

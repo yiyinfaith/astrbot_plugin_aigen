@@ -4,6 +4,48 @@ from urllib.parse import urlsplit, urlunsplit
 
 _API_VERSION_SEGMENT = re.compile(r"^v\d+(?:(?:alpha|beta)\d*)?$", re.IGNORECASE)
 MAX_IMAGE_BYTES = 100 * 1024 * 1024
+MAX_API_RESPONSE_BYTES = 150 * 1024 * 1024
+
+
+async def read_api_response(response) -> str:
+    """Drain real response traffic while discarding SSE comment heartbeats.
+
+    Heartbeats must originate at the server/gateway. Reading chunks keeps the
+    socket active without accumulating comments or treating them as a result.
+    The caller's configured total timeout and cancellation remain authoritative.
+    """
+    if not callable(getattr(getattr(response, "content", None), "iter_any", None)):
+        return await response.text()  # Compatibility with host response wrappers.
+    is_sse = "text/event-stream" in response.headers.get("Content-Type", "").lower()
+    data = bytearray()
+    line_start = True
+    comment = False
+
+    def append(chunk):
+        if len(data) + len(chunk) > MAX_API_RESPONSE_BYTES:
+            raise ValueError("API 响应超过 150MB 上限；已提交的生成请求不会自动重试。")
+        data.extend(chunk)
+
+    async for chunk in response.content.iter_any():
+        if not is_sse:
+            append(chunk)
+            continue
+        # Split only the new chunk: repeatedly scanning a growing base64 line
+        # makes large generated images quadratic in size.
+        pieces = chunk.split(b"\n")
+        for index, piece in enumerate(pieces):
+            piece = piece.rstrip(b"\r")
+            if line_start and piece:
+                comment = piece.startswith(b":")
+                line_start = False
+            if not comment and piece:
+                append(piece)
+            if index < len(pieces) - 1:
+                if not line_start and not comment:
+                    append(b"\n")
+                line_start = True
+                comment = False
+    return data.decode(response.charset or "utf-8", errors="replace")
 
 
 async def read_image_response(response) -> bytes:
