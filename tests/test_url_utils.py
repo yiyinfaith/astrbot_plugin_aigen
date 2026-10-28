@@ -40,16 +40,28 @@ class UrlNormalizationTest(unittest.TestCase):
 
 
 class PresetKeywordMatchTest(unittest.TestCase):
-    def test_keyword_can_follow_a_mention(self):
-        self.assertEqual(
-            match_keyword_in_text("@小明手办化", ["手办化", "手办化2"]),
-            ("手办化", 3),
-        )
+    def test_keyword_requires_token_boundaries(self):
+        keywords = ["手办化", "手办化2"]
+        for text in (
+            "手办化",
+            "1 手办化 2",
+            "1 手办化",
+            "手办化 1",
+            "@xxx手办化",
+            "手办化@xxx",
+            "手办化@xxx123",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNotNone(match_keyword_in_text(text, keywords))
+
+        for text in ("手办化123", "123手办化@xxx"):
+            with self.subTest(text=text):
+                self.assertIsNone(match_keyword_in_text(text, keywords))
 
     def test_longest_overlapping_keyword_wins(self):
         self.assertEqual(
-            match_keyword_in_text("请手办化2", ["手办化", "手办化2"]),
-            ("手办化2", 1),
+            match_keyword_in_text("请 手办化2 ", ["手办化", "手办化2"]),
+            ("手办化2", 2),
         )
 
     def test_empty_keywords_are_ignored(self):

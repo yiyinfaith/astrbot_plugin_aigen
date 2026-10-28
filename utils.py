@@ -78,12 +78,34 @@ def norm_id(raw_id: Any) -> str:
 
 
 def match_keyword_in_text(text: Any, keywords: Any) -> tuple[str, int] | None:
-    """Match the longest configured keyword anywhere in ``text``.
+    """Match the longest configured keyword as a whitespace-delimited token.
 
-    This follows the requested fuzzy matching rule.  The longest-first order
-    makes overlapping presets deterministic (for example,
-    ``手办化2`` wins over ``手办化``).
+    This mirrors the local memelite plugin's non-fuzzy matching: a keyword
+    must be at the start/end of the message or next to whitespace.  A QQ
+    ``@`` mention is a special boundary, because AstrBot may serialize an
+    ``At`` component without inserting spaces (for example,
+    ``@小明手办化`` or ``手办化@小明``).  Digits and other attached text are
+    not boundaries, so ``手办化123`` cannot trigger a preset.
     """
+
+    def _left_boundary(value: str, index: int) -> bool:
+        if index <= 0 or value[index - 1].isspace():
+            return True
+        token_start = index - 1
+        while token_start >= 0 and not value[token_start].isspace():
+            token_start -= 1
+        token = value[token_start + 1 : index]
+        return token.startswith("@") and len(token) > 1
+
+    def _right_boundary(value: str, end: int) -> bool:
+        if end >= len(value) or value[end].isspace():
+            return True
+        token_end = end
+        while token_end < len(value) and not value[token_end].isspace():
+            token_end += 1
+        token = value[end:token_end]
+        return token.startswith("@") and len(token) > 1
+
     value = str(text or "")
     candidates_set: set[str] = set()
     for raw_keyword in keywords or []:
@@ -94,9 +116,15 @@ def match_keyword_in_text(text: Any, keywords: Any) -> tuple[str, int] | None:
             candidates_set.add(keyword)
     candidates = sorted(candidates_set, key=lambda item: (-len(item), item))
     for keyword in candidates:
-        index = value.find(keyword)
-        if index >= 0:
-            return keyword, index
+        search_from = 0
+        while True:
+            index = value.find(keyword, search_from)
+            if index < 0:
+                break
+            end = index + len(keyword)
+            if _left_boundary(value, index) and _right_boundary(value, end):
+                return keyword, index
+            search_from = index + 1
     return None
 
 
