@@ -93,7 +93,11 @@ def resolve_audio_preset(config: dict, options: AudioOptions, audios: list) -> s
             keyword, prompt = item.split(":", 1)
             if keyword.strip() and prompt.strip():
                 presets[keyword.strip()] = prompt.strip()
-    matched = match_keyword_in_text(options.prompt, presets)
+    matched = match_keyword_in_text(
+        options.prompt,
+        presets,
+        require_boundaries=False,
+    )
     if not matched:
         return options.prompt
     keyword, offset = matched

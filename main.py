@@ -71,7 +71,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.21",
+    "1.4.22",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -320,7 +320,11 @@ class ImageGeneratorPlugin(Star):
             if prefix and (clean == prefix or clean.startswith(prefix + " ")):
                 return clean[len(prefix) :].strip(), "自定义", model
 
-        matched = match_keyword_in_text(clean, prompt_map)
+        matched = match_keyword_in_text(
+            clean,
+            prompt_map,
+            require_boundaries=kind in {"image", "video"},
+        )
         if matched:
             key, match_at = matched
             prompt = prompt_map.get(key)

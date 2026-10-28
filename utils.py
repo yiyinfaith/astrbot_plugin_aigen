@@ -77,15 +77,22 @@ def norm_id(raw_id: Any) -> str:
     return str(raw_id).strip()
 
 
-def match_keyword_in_text(text: Any, keywords: Any) -> tuple[str, int] | None:
-    """Match the longest configured keyword as a whitespace-delimited token.
+def match_keyword_in_text(
+    text: Any,
+    keywords: Any,
+    *,
+    require_boundaries: bool = True,
+) -> tuple[str, int] | None:
+    """Match the longest configured keyword.
 
-    This mirrors the local memelite plugin's non-fuzzy matching: a keyword
-    must be at the start/end of the message or next to whitespace.  A QQ
-    ``@`` mention is a special boundary, because AstrBot may serialize an
-    ``At`` component without inserting spaces (for example,
-    ``@小明手办化`` or ``手办化@小明``).  Digits and other attached text are
-    not boundaries, so ``手办化123`` cannot trigger a preset.
+    When ``require_boundaries`` is enabled, this mirrors the local memelite
+    plugin's non-fuzzy matching: a keyword must be at the start/end of the
+    message or next to whitespace.  A QQ ``@`` mention is a special boundary,
+    because AstrBot may serialize an ``At`` component without inserting spaces
+    (for example, ``@小明手办化`` or ``手办化@小明``).  Digits and other
+    attached text are not boundaries, so ``手办化123`` cannot trigger a
+    preset.  Callers that intentionally keep fuzzy matching can disable this
+    check explicitly.
     """
 
     def _left_boundary(value: str, index: int) -> bool:
@@ -122,7 +129,10 @@ def match_keyword_in_text(text: Any, keywords: Any) -> tuple[str, int] | None:
             if index < 0:
                 break
             end = index + len(keyword)
-            if _left_boundary(value, index) and _right_boundary(value, end):
+            if (
+                not require_boundaries
+                or (_left_boundary(value, index) and _right_boundary(value, end))
+            ):
                 return keyword, index
             search_from = index + 1
     return None
