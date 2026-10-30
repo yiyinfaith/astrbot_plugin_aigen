@@ -162,6 +162,22 @@ class ImageGeneratorPlugin(Star):
             if session is not None and not session.closed:
                 await session.close()
 
+    @staticmethod
+    def _cleanup_cache_files(directory: Path, cutoff: float) -> None:
+        """Remove stale plugin-owned video artifacts without touching other files."""
+        try:
+            entries = directory.iterdir()
+        except OSError as exc:
+            logger.debug("Could not inspect video cache %s: %s", directory, exc)
+            return
+        for path in entries:
+            if path.is_file() and path.suffix.lower() in {".mp4", ".json"}:
+                try:
+                    if path.stat().st_mtime < cutoff:
+                        path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.debug("Could not clean video cache %s: %s", path, exc)
+
     async def _cleanup_video_cache(self):
         """Keep completed MP4s for platform delivery; never touch user files."""
         while True:
@@ -172,9 +188,11 @@ class ImageGeneratorPlugin(Star):
             )
 
             def cleanup(cutoff=cutoff):
-                for path in self.video_mgr.data_dir.glob("*.mp4"):
-                    if path.stat().st_mtime < cutoff:
-                        path.unlink(missing_ok=True)
+                # Video polling writes one JSON task record next to each MP4.
+                # Both are plugin-owned cache artifacts and must age out
+                # together; otherwise long-running bots leak one metadata file
+                # for every submitted task even after the video is removed.
+                self._cleanup_cache_files(self.video_mgr.data_dir, cutoff)
 
             try:
                 await asyncio.to_thread(cleanup)

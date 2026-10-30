@@ -3,10 +3,11 @@
 import asyncio
 import copy
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
-from time import monotonic
+from time import monotonic, time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -50,6 +51,28 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.plugin.terminate()
+
+    def test_video_cache_cleanup_removes_task_records_with_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            stale_video = cache / "stale.mp4"
+            stale_record = cache / "stale.json"
+            fresh_record = cache / "fresh.json"
+            unrelated = cache / "keep.txt"
+            for path in (stale_video, stale_record, fresh_record, unrelated):
+                path.write_bytes(b"cache")
+            # ``st_mtime`` uses wall-clock seconds; a sufficiently old value is
+            # portable across platforms and independent of the test's timezone.
+            old = time() - 3600
+            os.utime(stale_video, (old, old))
+            os.utime(stale_record, (old, old))
+
+            self.plugin._cleanup_cache_files(cache, time() - 60)
+
+            self.assertFalse(stale_video.exists())
+            self.assertFalse(stale_record.exists())
+            self.assertTrue(fresh_record.exists())
+            self.assertTrue(unrelated.exists())
 
     async def receive(
         self, text="", chain=None, *, sender="99", group="group", origin="qq:group"
