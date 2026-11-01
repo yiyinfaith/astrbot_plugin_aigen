@@ -183,9 +183,11 @@ class ApiManager:
 
     def _get_interface_mode(self) -> str:
         """Return the selected current interface mode."""
-        mode = str(
-            self.config.get("interface_mode", "openai_image") or "openai_image"
-        ).strip().lower()
+        mode = (
+            str(self.config.get("interface_mode", "openai_image") or "openai_image")
+            .strip()
+            .lower()
+        )
         valid_modes = {
             "openai_image",
             "openai_chat",
@@ -567,13 +569,17 @@ class ApiManager:
         if images:
             return images
         for item in entries(data.get("output")):
-            if not isinstance(item, dict) or item.get("type") != "image_generation_call":
+            if (
+                not isinstance(item, dict)
+                or item.get("type") != "image_generation_call"
+            ):
                 continue
             value = item.get("result")
             if isinstance(value, str) and value.strip():
                 value = value.strip()
                 add(
-                    value if value.startswith(("http://", "https://", "/", "data:"))
+                    value
+                    if value.startswith(("http://", "https://", "/", "data:"))
                     else "data:image/png;base64," + "".join(value.split())
                 )
         if images:
@@ -588,9 +594,11 @@ class ApiManager:
             direct = message.get("images")
             if isinstance(direct, list) and direct:
                 for image in direct:
-                    add(self.extract_image_url({
-                        "choices": [{"message": {"images": [image]}}]
-                    }))
+                    add(
+                        self.extract_image_url(
+                            {"choices": [{"message": {"images": [image]}}]}
+                        )
+                    )
             else:
                 content_images(message.get("content"))
                 if len(images) == previous_count:
@@ -806,22 +814,16 @@ class ApiManager:
         values = {
             "quality": str(options.get("quality") or "").strip().lower(),
             "background": str(options.get("background") or "").strip().lower(),
-            "output_format": str(options.get("output_format") or "")
-            .strip()
-            .lower(),
+            "output_format": str(options.get("output_format") or "").strip().lower(),
             "moderation": str(options.get("moderation") or "").strip().lower(),
             "style": str(options.get("style") or "").strip().lower(),
-            "input_fidelity": str(options.get("input_fidelity") or "")
-            .strip()
-            .lower(),
+            "input_fidelity": str(options.get("input_fidelity") or "").strip().lower(),
             "action": str(options.get("action") or "").strip().lower(),
         }
         allowed = {
             # ``None`` means use the generic default; an empty set means the
             # selected model family explicitly does not advertise the field.
-            "quality": (
-                allowed_quality if allowed_quality is not None else set()
-            ),
+            "quality": (allowed_quality if allowed_quality is not None else set()),
             "background": {"auto", "transparent", "opaque"},
             "output_format": {"png", "jpeg", "webp"},
             "moderation": {"auto", "low"},
@@ -857,7 +859,12 @@ class ApiManager:
             partial_images = int(options.get("partial_images") or 0)
         except (TypeError, ValueError):
             partial_images = 0
-        if include_gpt_image_fields and include_partial_images and options.get("partial_images") is not None and 0 <= partial_images <= 3:
+        if (
+            include_gpt_image_fields
+            and include_partial_images
+            and options.get("partial_images") is not None
+            and 0 <= partial_images <= 3
+        ):
             if multipart:
                 target.add_field("partial_images", str(partial_images))
             else:
@@ -868,8 +875,10 @@ class ApiManager:
         except (TypeError, ValueError):
             compression = 0
         if (
-            include_gpt_image_fields or include_response_tool_fields
-        ) and 0 <= compression <= 100 and options.get("output_compression") is not None:
+            (include_gpt_image_fields or include_response_tool_fields)
+            and 0 <= compression <= 100
+            and options.get("output_compression") is not None
+        ):
             if multipart:
                 target.add_field("output_compression", str(compression))
             else:
@@ -933,9 +942,11 @@ class ApiManager:
                 return f"数据解析失败: 返回内容不是 JSON. 内容: {resp_text[:100]}..."
             res_data = stream_items[-1]
             completed = [
-                item for item in stream_items
+                item
+                for item in stream_items
                 if isinstance(item, dict)
-                and item.get("type") in {"image_generation.completed", "image_edit.completed"}
+                and item.get("type")
+                in {"image_generation.completed", "image_edit.completed"}
                 and item.get("b64_json")
             ]
             if completed:
@@ -1087,7 +1098,11 @@ class ApiManager:
                             image_options=image_options,
                         )
 
-                    if resp.status in {404, 405} and "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
+                    if (
+                        resp.status in {404, 405}
+                        and "<html" in resp_text.lower()
+                        and idx < len(candidate_urls) - 1
+                    ):
                         logger.warning(
                             f"Images API multipart 返回 HTML 页面，尝试下一个候选地址: {candidate_urls[idx + 1]}"
                         )
@@ -1293,7 +1308,11 @@ class ApiManager:
                             image_options=image_options,
                         )
 
-                    if resp.status in {404, 405} and "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
+                    if (
+                        resp.status in {404, 405}
+                        and "<html" in resp_text.lower()
+                        and idx < len(candidate_urls) - 1
+                    ):
                         logger.warning(
                             f"Images API 返回 HTML 页面，尝试下一个候选地址: {candidate_urls[idx + 1]}"
                         )
@@ -1322,7 +1341,11 @@ class ApiManager:
                                 continue
                             return f"Images API edits endpoint unsupported {resp.status}: {err_msg[:300]} | URL: {url}"
 
-                        if resp.status in {400, 415, 422} and self._should_retry_images_api_with_multipart(
+                        if resp.status in {
+                            400,
+                            415,
+                            422,
+                        } and self._should_retry_images_api_with_multipart(
                             err_msg, has_input_image
                         ):
                             logger.info(
@@ -1867,7 +1890,9 @@ class ApiManager:
                     return False
 
             if not await asyncio.to_thread(verify):
-                artifacts[index] = "接口未返回可识别的完整图片，请核对原任务，勿立即重复提交。"
+                artifacts[index] = (
+                    "接口未返回可识别的完整图片，请核对原任务，勿立即重复提交。"
+                )
             else:
                 completed += 1
         if isinstance(result, (bytes, ImageBatch)):
@@ -1918,7 +1943,9 @@ class ApiManager:
             )
 
         generation_params = resolve_image_generation_params(
-            prompt if (image_options or {}).get("_infer_prompt_parameters", True) else "",
+            prompt
+            if (image_options or {}).get("_infer_prompt_parameters", True)
+            else "",
             default_resolution=self.config.get("image_resolution", "1K"),
             default_aspect_ratio=default_aspect_ratio,
             resolution=resolution or (image_options or {}).get("resolution"),
@@ -2051,7 +2078,13 @@ class ApiManager:
             # extensions, but those are deliberately confined to their own
             # custom endpoint mode rather than mixed into this protocol.
 
-        for source, target in (("temperature", "temperature"), ("top_p", "topP"), ("top_k", "topK"), ("seed", "seed"), ("max_tokens", "maxOutputTokens")):
+        for source, target in (
+            ("temperature", "temperature"),
+            ("top_p", "topP"),
+            ("top_k", "topK"),
+            ("seed", "seed"),
+            ("max_tokens", "maxOutputTokens"),
+        ):
             value = (image_options or {}).get(source)
             if value is not None:
                 if mode == "gemini_official":
@@ -2062,23 +2095,50 @@ class ApiManager:
         # Explicit opt-in for gateways which filter native Gemini SSE pings.
         # Convert before the only paid POST, never after a timeout/partial job.
         gateway_host = urlsplit(normalize_api_root(base)).hostname or ""
-        if (interface_mode == "gemini_official" and self.config.get("use_stream", False)
-                and self.config.get("gemini_stream_openai_compat", False)
-                and not (gateway_host == "googleapis.com" or gateway_host.endswith(".googleapis.com"))):
+        if (
+            interface_mode == "gemini_official"
+            and self.config.get("use_stream", False)
+            and self.config.get("gemini_stream_openai_compat", False)
+            and not (
+                gateway_host == "googleapis.com"
+                or gateway_host.endswith(".googleapis.com")
+            )
+        ):
             if (image_options or {}).get("top_k") is not None:
                 return "OpenAI 网关流式兼容不支持 top_k，请移除此参数或关闭兼容开关；未提交生成请求。"
             config = payload["generationConfig"]
             content = [{"type": "text", "text": final_prompt}]
             for image in images:
-                content.append({"type": "image_url", "image_url": {
-                    "url": "data:" + self.get_mime_type(image) + ";base64," + base64.b64encode(image).decode()
-                }})
-            payload = {"model": model, "stream": True, "messages": [{"role": "user", "content": content}],
-                       "extra_body": {"google": {"image_config": {
-                           "aspect_ratio": config["imageConfig"]["aspectRatio"],
-                           "image_size": config["imageConfig"]["imageSize"],
-                       }}}}
-            for src, dst in (("temperature", "temperature"), ("topP", "top_p"), ("seed", "seed"), ("maxOutputTokens", "max_tokens")):
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:"
+                            + self.get_mime_type(image)
+                            + ";base64,"
+                            + base64.b64encode(image).decode()
+                        },
+                    }
+                )
+            payload = {
+                "model": model,
+                "stream": True,
+                "messages": [{"role": "user", "content": content}],
+                "extra_body": {
+                    "google": {
+                        "image_config": {
+                            "aspect_ratio": config["imageConfig"]["aspectRatio"],
+                            "image_size": config["imageConfig"]["imageSize"],
+                        }
+                    }
+                },
+            }
+            for src, dst in (
+                ("temperature", "temperature"),
+                ("topP", "top_p"),
+                ("seed", "seed"),
+                ("maxOutputTokens", "max_tokens"),
+            ):
                 if src in config:
                     payload[dst] = config[src]
             headers.pop("x-goog-api-key", None)
@@ -2122,7 +2182,11 @@ class ApiManager:
                     last_status = resp.status
 
                     # 如果返回 HTML，且后面还有候选地址，则继续尝试常见 API 前缀
-                    if resp.status in {404, 405} and "<html" in resp_text.lower() and idx < len(candidate_urls) - 1:
+                    if (
+                        resp.status in {404, 405}
+                        and "<html" in resp_text.lower()
+                        and idx < len(candidate_urls) - 1
+                    ):
                         logger.warning(
                             f"Generic API 地址返回了 HTML 页面，尝试下一个候选地址: {candidate_urls[idx + 1]}"
                         )
@@ -2156,7 +2220,9 @@ class ApiManager:
                                         base,
                                         proxy,
                                         generation_params=generation_params,
-                                        stream=bool(self.config.get("use_stream", False)),
+                                        stream=bool(
+                                            self.config.get("use_stream", False)
+                                        ),
                                         image_options=image_options,
                                     )
 
@@ -2187,7 +2253,9 @@ class ApiManager:
                                         base,
                                         proxy,
                                         generation_params=generation_params,
-                                        stream=bool(self.config.get("use_stream", False)),
+                                        stream=bool(
+                                            self.config.get("use_stream", False)
+                                        ),
                                         image_options=image_options,
                                     )
 

@@ -11,7 +11,11 @@ from .utils import norm_id
 
 class DataManager:
     def __init__(
-        self, data_dir: Path, config: Any, video_config: Any = None, audio_config: Any = None
+        self,
+        data_dir: Path,
+        config: Any,
+        video_config: Any = None,
+        audio_config: Any = None,
     ):
         self.data_dir = Path(data_dir)
         self.config = config

@@ -129,9 +129,8 @@ def match_keyword_in_text(
             if index < 0:
                 break
             end = index + len(keyword)
-            if (
-                not require_boundaries
-                or (_left_boundary(value, index) and _right_boundary(value, end))
+            if not require_boundaries or (
+                _left_boundary(value, index) and _right_boundary(value, end)
             ):
                 return keyword, index
             search_from = index + 1

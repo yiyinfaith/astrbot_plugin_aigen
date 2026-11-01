@@ -1,9 +1,7 @@
 """Request contracts, sparse settings, deadlines and group ownership."""
 
 import asyncio
-import copy
 import json
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -11,8 +9,6 @@ from unittest.mock import AsyncMock
 import test_audio_generation as audio_tests
 import test_video_collection as collection_tests
 import test_video_plugin as behavior
-
-from config_manager import migrate_config
 
 caps = behavior.capabilities
 router = behavior.router
@@ -260,24 +256,6 @@ class ParameterContractTest(unittest.IsolatedAsyncioTestCase):
         for kind, config, options in cases:
             with self.subTest(options), self.assertRaises(router.VideoError):
                 caps.validate_options(kind, config, options)
-
-    def test_timeout_migration_preserves_custom_values_and_backs_up(self):
-        config = audio_tests.settings()
-        config["_config_layout_version"] = 4
-        config["video_settings"]["collection_timeout_seconds"] = 60
-        config["audio_settings"]["collection_timeout_seconds"] = 240
-        original = copy.deepcopy(config)
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertTrue(migrate_config(config, Path(tmp)))
-            self.assertEqual(
-                config["video_settings"]["collection_timeout_seconds"], 120
-            )
-            self.assertEqual(
-                config["audio_settings"]["collection_timeout_seconds"], 240
-            )
-            saved = next(Path(tmp).glob("config_before_v1.3.0_*.json"))
-            self.assertEqual(json.loads(saved.read_text("utf-8")), original)
-            self.assertFalse(migrate_config(config, Path(tmp)))
 
     def test_custom_optional_fields_are_omitted_when_not_provided(self):
         template = {

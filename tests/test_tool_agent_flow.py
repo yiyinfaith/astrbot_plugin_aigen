@@ -14,11 +14,17 @@ class ToolAgentFlowTest(unittest.IsolatedAsyncioTestCase):
 
     def configure_outputs(self):
         self.plugin.api_mgr.call_api = AsyncMock(return_value=b"image")
-        self.plugin.img_mgr.optimize_output_image = AsyncMock(side_effect=lambda raw: raw)
+        self.plugin.img_mgr.optimize_output_image = AsyncMock(
+            side_effect=lambda raw: raw
+        )
         self.plugin.audio_mgr.prepare = lambda *a, **k: None
-        self.plugin.audio_mgr.generate = AsyncMock(return_value=behavior.audio_api.AudioResult(
-            Path("output.wav"), "audio-task", "audio",
-        ))
+        self.plugin.audio_mgr.generate = AsyncMock(
+            return_value=behavior.audio_api.AudioResult(
+                Path("output.wav"),
+                "audio-task",
+                "audio",
+            )
+        )
         self.plugin.context.llm_generate = AsyncMock()
         self.plugin.context.tool_loop_agent = AsyncMock()
         self.plugin.context.get_using_provider_async = AsyncMock()
@@ -46,25 +52,43 @@ class ToolAgentFlowTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(event.sent[0]), 1)
                     self.assertIsInstance(event.sent[0][0], component)
                     states.append(json.loads(result))
-                self.assertEqual(states, [{
-                    "status": "completed", "media_type": media, "delivery": "sent",
-                }])
+                self.assertEqual(
+                    states,
+                    [
+                        {
+                            "status": "completed",
+                            "media_type": media,
+                            "delivery": "sent",
+                        }
+                    ],
+                )
         self.plugin.api_mgr.call_api.assert_awaited_once()
         self.plugin.video_mgr.generate.assert_awaited_once()
         self.plugin.audio_mgr.generate.assert_awaited_once()
         self.assert_no_extra_llm()
 
-    async def test_failed_tools_never_report_completed_or_send_a_completion_caption(self):
+    async def test_failed_tools_never_report_completed_or_send_a_completion_caption(
+        self,
+    ):
         self.configure_outputs()
         self.plugin.api_mgr.call_api.return_value = "upstream failure"
-        self.plugin.video_mgr.generate.side_effect = behavior.router.VideoError("video failure")
-        self.plugin.audio_mgr.generate.side_effect = behavior.router.VideoError("audio failure")
+        self.plugin.video_mgr.generate.side_effect = behavior.router.VideoError(
+            "video failure"
+        )
+        self.plugin.audio_mgr.generate.side_effect = behavior.router.VideoError(
+            "audio failure"
+        )
         for media, tool, arguments, _ in self.calls():
             with self.subTest(media=media):
                 event = behavior.Event([])
-                results = [part async for part in tool(
-                    event, use_message_media=False, **arguments,
-                )]
+                results = [
+                    part
+                    async for part in tool(
+                        event,
+                        use_message_media=False,
+                        **arguments,
+                    )
+                ]
                 self.assertEqual(len(results), 1)
                 self.assertIsInstance(results[0], str)
                 self.assertNotIn('"completed"', results[0])
@@ -74,9 +98,21 @@ class ToolAgentFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_command_delivery_keeps_existing_summary_without_agent_status(self):
         self.configure_outputs()
         invocations = (
-            (self.plugin._generate, ("cat", "自定义", "image", []), {"dispatch_result": True}),
-            (self.plugin._generate_video, ("cat", "自定义", []), {"dispatch_result": True}),
-            (self.plugin._generate_audio, (behavior.audio_router.AudioOptions(prompt="hello"), []), {}),
+            (
+                self.plugin._generate,
+                ("cat", "自定义", "image", []),
+                {"dispatch_result": True},
+            ),
+            (
+                self.plugin._generate_video,
+                ("cat", "自定义", []),
+                {"dispatch_result": True},
+            ),
+            (
+                self.plugin._generate_audio,
+                (behavior.audio_router.AudioOptions(prompt="hello"), []),
+                {},
+            ),
         )
         for method, arguments, kwargs in invocations:
             with self.subTest(method=method.__name__):

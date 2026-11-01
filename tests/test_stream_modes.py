@@ -122,7 +122,9 @@ class StreamModeRequestTest(unittest.IsolatedAsyncioTestCase):
                                     {
                                         "inlineData": {
                                             "mimeType": "image/png",
-                                            "data": base64.b64encode(IMAGE_DATA).decode(),
+                                            "data": base64.b64encode(
+                                                IMAGE_DATA
+                                            ).decode(),
                                         }
                                     }
                                 ]
@@ -146,7 +148,10 @@ class StreamModeRequestTest(unittest.IsolatedAsyncioTestCase):
         )
         try:
             result = await manager.call_api(
-                [], "draw", "gemini-2.5-flash-image", image_options={"aspect_ratio": "16:9"}
+                [],
+                "draw",
+                "gemini-2.5-flash-image",
+                image_options={"aspect_ratio": "16:9"},
             )
         finally:
             if manager._session and not manager._session.closed:
@@ -154,7 +159,9 @@ class StreamModeRequestTest(unittest.IsolatedAsyncioTestCase):
             await runner.cleanup()
 
         self.assertEqual(result, IMAGE_DATA)
-        self.assertEqual(captured["path"], "/v1beta/models/gemini-2.5-flash-image:generateContent")
+        self.assertEqual(
+            captured["path"], "/v1beta/models/gemini-2.5-flash-image:generateContent"
+        )
         self.assertEqual(captured["api_key"], "test-key")
         config = captured["payload"]["generationConfig"]
         self.assertEqual(config["responseModalities"], ["IMAGE"])

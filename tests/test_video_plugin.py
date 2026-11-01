@@ -313,9 +313,14 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
                 Event([]), prompt="猫", duration=1
             )
         ]
-        self.assertEqual(json.loads(result[0]), {
-            "status": "completed", "media_type": "video", "delivery": "sent",
-        })
+        self.assertEqual(
+            json.loads(result[0]),
+            {
+                "status": "completed",
+                "media_type": "video",
+                "delivery": "sent",
+            },
+        )
         self.plugin.video_mgr.generate.assert_awaited_once()
 
     async def test_llm_tool_success_sends_video_only_and_reads_quoted_media(self):
@@ -327,9 +332,14 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             async for reply in self.plugin.generate_video(event, "说话", duration=1)
         ]
         self.assertEqual(len(result), 1)
-        self.assertEqual(json.loads(result[0]), {
-            "status": "completed", "media_type": "video", "delivery": "sent",
-        })
+        self.assertEqual(
+            json.loads(result[0]),
+            {
+                "status": "completed",
+                "media_type": "video",
+                "delivery": "sent",
+            },
+        )
         self.assertEqual(len(event.sent), 1)
         self.assertTrue(any(isinstance(chain[0], Video) for chain in event.sent))
         self.assertTrue(all(isinstance(chain[0], Video) for chain in event.sent))
@@ -778,9 +788,14 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
             async for reply in self.plugin.generate_image(event, "make it cinematic")
         ]
         self.assertEqual(len(result), 1)
-        self.assertEqual(json.loads(result[0]), {
-            "status": "completed", "media_type": "image", "delivery": "sent",
-        })
+        self.assertEqual(
+            json.loads(result[0]),
+            {
+                "status": "completed",
+                "media_type": "image",
+                "delivery": "sent",
+            },
+        )
         self.assertEqual(len(event.sent), 1)
         self.assertEqual(len(event.sent[0]), 1)
         self.assertIsInstance(event.sent[0][0], Image)

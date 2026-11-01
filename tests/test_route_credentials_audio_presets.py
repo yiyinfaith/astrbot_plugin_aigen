@@ -12,10 +12,9 @@ import test_audio_generation as audio_fixture
 import test_video_plugin as behavior
 from aiohttp import web
 from test_api_manager_urls import PACKAGE
-from test_config_migration import loader_class
 from test_video_api import MP4
 
-from config_manager import migrate_config, schema_defaults
+from config_manager import schema_defaults
 
 ROOT = Path(__file__).resolve().parents[1]
 data_module = importlib.import_module(PACKAGE + ".data_manager")
@@ -33,38 +32,6 @@ class PresetAndSchemaTest(unittest.TestCase):
             self.assertEqual(template["items"]["base_url"]["default"], "")
             self.assertEqual(template["items"]["api_keys"]["default"], "")
             self.assertTrue(template["items"]["api_keys"]["secret"])
-
-    def test_host_normalization_preserves_presets_routes_and_new_route_credentials(
-        self,
-    ):
-        config = copy.deepcopy(self.defaults)
-        config["_config_layout_version"] = 6
-        config["image_settings"]["prompt_list"] = ["image:precious original"]
-        config["audio_settings"]["prompt_list"] = ["soft:complete audio prompt"]
-        for rule in config["video_settings"]["routes"]:
-            rule.pop("base_url", None)
-            rule.pop("api_keys", None)
-        config["video_settings"]["routes"][0].update(
-            base_url="https://route.test", api_keys="route-key-a\nroute-key-b"
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "config.json"
-            path.write_text(json.dumps(config), encoding="utf-8")
-            loaded = loader_class()(str(path), schema=self.schema)
-            self.assertTrue(migrate_config(loaded, Path(directory) / "backups"))
-        self.assertEqual(
-            loaded["image_settings"]["prompt_list"],
-            config["image_settings"]["prompt_list"],
-        )
-        self.assertEqual(
-            loaded["audio_settings"]["prompt_list"],
-            config["audio_settings"]["prompt_list"],
-        )
-        for old, new in zip(
-            config["video_settings"]["routes"], loaded["video_settings"]["routes"]
-        ):
-            self.assertEqual(new, {"base_url": "", "api_keys": "", **old})
-        self.assertEqual(loaded["_config_layout_version"], 7)
 
     def test_three_preset_maps_load_independently(self):
         with tempfile.TemporaryDirectory() as directory:

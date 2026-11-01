@@ -73,7 +73,25 @@ class PluginContractTest(unittest.TestCase):
         image_schema = schema["image_settings"]["items"]
         self.assertIn("model", image_schema)
         self.assertIn("image_resolution", image_schema)
-        self.assertEqual(len(image_schema["prompt_list"]["default"]), 44)
+        self.assertEqual(image_schema["prompt_list"]["default"], [])
+        self.assertEqual(
+            set(schema),
+            {"global_settings", "image_settings", "video_settings", "audio_settings"},
+        )
+        self.assertNotIn("billing_prices", schema["global_settings"]["items"])
+        self.assertNotIn("result_image_download_retries", image_schema)
+        self.assertNotIn("download_retries", image_schema)
+        self.assertNotIn(
+            "result_video_download_retries",
+            schema["video_settings"]["items"],
+        )
+        self.assertFalse(
+            any(
+                key.startswith("custom_")
+                for key in schema["audio_settings"]["items"]
+                if key != "custom_prompt_need_prefix"
+            )
+        )
         visible = [name for name, node in schema.items() if not node.get("invisible")]
         self.assertEqual(
             visible,

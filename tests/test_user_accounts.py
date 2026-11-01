@@ -219,11 +219,14 @@ class CallerTest(unittest.IsolatedAsyncioTestCase):
             self.service.store.redeem(owner, code)
             replies = [part async for part in tool(event, **kwargs)]
             self.assertEqual(len(replies), 1)
-            self.assertEqual(json.loads(replies[0]), {
-                "status": "completed",
-                "media_type": tool.__name__.removeprefix("generate_"),
-                "delivery": "sent",
-            })
+            self.assertEqual(
+                json.loads(replies[0]),
+                {
+                    "status": "completed",
+                    "media_type": tool.__name__.removeprefix("generate_"),
+                    "delivery": "sent",
+                },
+            )
             self.assertEqual(
                 self.service.store.balance(owner)[0], (10 - amount) * 1000000
             )

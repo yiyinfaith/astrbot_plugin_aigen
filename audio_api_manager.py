@@ -727,7 +727,9 @@ class AudioApiManager(VideoApiManager):
                     try:
                         raw = base64.b64decode(encoded, validate=True)
                     except (ValueError, TypeError) as exc:
-                        raise VideoError("自定义接口返回了无效的 Base64 音频。") from exc
+                        raise VideoError(
+                            "自定义接口返回了无效的 Base64 音频。"
+                        ) from exc
                     break
             if artifact_url and (not status or normalized in success):
                 break

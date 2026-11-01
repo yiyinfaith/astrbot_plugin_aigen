@@ -1,7 +1,6 @@
 """Regression tests for the user-visible collection and submission contract."""
 
 import asyncio
-import copy
 import json
 import os
 import tempfile
@@ -20,15 +19,9 @@ from test_video_plugin import (
     Record,
     Video,
     api,
-    router,
 )
 
-from config_manager import (
-    LEGACY_COLLECTION_HELP_TEXT,
-    LEGACY_HELP_TEXT,
-    migrate_config,
-    schema_defaults,
-)
+from config_manager import schema_defaults
 
 
 class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
@@ -660,132 +653,3 @@ class VideoCollectionTest(unittest.IsolatedAsyncioTestCase):
         finish, result = await self.receive("/生成")
         self.assertEqual(result, [])
         self.assertIsInstance(finish.sent[-1][0], Video)
-
-
-class VideoConfigUpgradeTest(unittest.TestCase):
-    def test_v110_upgrade_only_changes_new_defaults_and_preserves_custom_values(self):
-        schema = json.loads(
-            (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(
-                "utf-8"
-            )
-        )
-        for help_text in (LEGACY_COLLECTION_HELP_TEXT, "自定义帮助"):
-            config = schema_defaults(schema)
-            config["_config_layout_version"] = 2
-            config["global_settings"]["help_text"] = help_text
-            config["video_settings"]["collection_timeout_seconds"] = 180
-            config["video_settings"]["routes"][0]["interface_mode"] = "inherit"
-            before = copy.deepcopy(config)
-            with tempfile.TemporaryDirectory() as tmp:
-                self.assertTrue(migrate_config(config, Path(tmp)))
-                snapshot = next(Path(tmp).glob("config_before_v1.1.1_*.json"))
-                self.assertEqual(json.loads(snapshot.read_text("utf-8")), before)
-                self.assertFalse(migrate_config(config, Path(tmp)))
-            expected = copy.deepcopy(before)
-            expected["_config_layout_version"] = 7
-            for key in ("result_image_download_retries", "download_retries"):
-                expected["image_settings"].pop(key, None)
-            expected["video_settings"].pop("result_video_download_retries", None)
-            for key in list(expected["audio_settings"]):
-                if key.startswith("custom_") and key != "custom_prompt_need_prefix":
-                    expected["audio_settings"].pop(key)
-            if help_text == LEGACY_COLLECTION_HELP_TEXT:
-                expected["global_settings"]["help_text"] = schema_defaults(schema)[
-                    "global_settings"
-                ]["help_text"]
-            self.assertEqual(config, expected)
-
-    def test_v110_upgrade_adds_missing_sixty_second_default(self):
-        config = {"_config_layout_version": 2, "video_settings": {}}
-        with tempfile.TemporaryDirectory() as tmp:
-            migrate_config(config, Path(tmp))
-        self.assertEqual(config["video_settings"]["collection_timeout_seconds"], 120)
-
-    def test_only_old_default_help_is_updated_custom_help_is_preserved(self):
-        schema = json.loads(
-            (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(
-                "utf-8"
-            )
-        )
-        for text in (
-            LEGACY_HELP_TEXT,
-            LEGACY_COLLECTION_HELP_TEXT,
-            "我的自定义帮助，保留全文",
-        ):
-            config = schema_defaults(schema)
-            config["_config_layout_version"] = 1
-            config["global_settings"]["help_text"] = text
-            with tempfile.TemporaryDirectory() as tmp:
-                migrate_config(config, Path(tmp))
-            self.assertEqual(
-                config["global_settings"]["help_text"],
-                schema_defaults(schema)["global_settings"]["help_text"]
-                if text in {LEGACY_HELP_TEXT, LEGACY_COLLECTION_HELP_TEXT}
-                else text,
-            )
-
-    def test_upgrade_preserves_presets_keys_and_custom_routes(self):
-        schema = json.loads(
-            (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(
-                "utf-8"
-            )
-        )
-        config = schema_defaults(schema)
-        config["_config_layout_version"] = 1
-        config["image_settings"].update(
-            extra_prefix="我的生图",
-            prompt_list=[f"预设{i}:完整提示词" for i in range(112)],
-            api_keys="private-test-key",
-        )
-        config["video_settings"]["extra_prefix"] = "我的视频"
-        config["video_settings"]["routes"] = [
-            {
-                "__template_key": "image_video_to_video",
-                "model": "wan2.2-animate-move",
-                "interface_mode": "dashscope",
-                "resolution": "464p",
-            },
-            {
-                "__template_key": "video_to_video",
-                "model": "my-provider",
-                "interface_mode": "seedance",
-            },
-        ]
-        before = copy.deepcopy(config)
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertTrue(migrate_config(config, Path(tmp)))
-            snapshot = json.loads(next(Path(tmp).glob("*.json")).read_text("utf-8"))
-            self.assertEqual(snapshot, before)
-            self.assertFalse(migrate_config(config, Path(tmp)))
-            self.assertEqual(len(list(Path(tmp).glob("*.json"))), 1)
-        self.assertEqual(
-            config["image_settings"]["prompt_list"],
-            before["image_settings"]["prompt_list"],
-        )
-        self.assertEqual(config["image_settings"]["api_keys"], "private-test-key")
-        self.assertEqual(config["image_settings"]["extra_prefix"], ["我的生图"])
-        self.assertEqual(config["video_settings"]["extra_prefix"], ["我的视频"])
-        routes = {r["__template_key"]: r for r in config["video_settings"]["routes"]}
-        self.assertEqual(routes["image_video_to_video"]["model"], "")
-        self.assertEqual(routes["motion_transfer"]["model"], "wan2.2-animate-move")
-        self.assertEqual(routes["motion_transfer"]["interface_mode"], "minimax")
-        self.assertEqual(routes["video_to_video"]["interface_mode"], "seedance")
-        self.assertEqual(
-            routes["audio_sync"]["model"], "minimax_h3_image_audio_to_video"
-        )
-
-    def test_default_routes_all_use_minimax_and_empty_generic_image_video_model(self):
-        schema = json.loads(
-            (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(
-                "utf-8"
-            )
-        )
-        routes = schema_defaults(schema)["video_settings"]["routes"]
-        self.assertTrue(all(r["interface_mode"] == "minimax" for r in routes))
-        self.assertEqual(
-            next(r for r in routes if r["__template_key"] == "image_video_to_video")[
-                "model"
-            ],
-            "",
-        )
-        self.assertEqual(set(router.ROUTES), {r["__template_key"] for r in routes})

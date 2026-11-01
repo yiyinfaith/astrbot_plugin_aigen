@@ -22,7 +22,7 @@ from test_video_plugin import (
     image_router,
 )
 
-from config_manager import migrate_config, schema_defaults
+from config_manager import schema_defaults
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -246,24 +246,6 @@ class AudioRoutingTest(unittest.TestCase):
             "gemini_official",
         )
         self.assertEqual(config, original)
-
-    def test_upgrade_removes_only_video_legacy_progress_and_preserves_presets(self):
-        config = settings()
-        config["_config_layout_version"] = 3
-        config.pop("audio_settings")
-        config["image_settings"].pop("routes")
-        config["image_settings"].pop("auto_route")
-        config["image_settings"].update(
-            api_keys="private-test-value", prompt_list=["mine:all text"]
-        )
-        config["video_settings"]["generating_msg_template"] = "obsolete"
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertTrue(migrate_config(config, Path(tmp)))
-            self.assertEqual(len(list(Path(tmp).glob("*.json"))), 1)
-        self.assertNotIn("generating_msg_template", config["video_settings"])
-        self.assertEqual(config["image_settings"]["prompt_list"], ["mine:all text"])
-        self.assertEqual(config["image_settings"]["api_keys"], "private-test-value")
-        self.assertIn("audio_settings", config)
 
 
 class AudioCollectionTest(unittest.IsolatedAsyncioTestCase):

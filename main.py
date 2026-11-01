@@ -41,7 +41,7 @@ from .audio_router import (
 from .billing import BillingError, BillingService, billed_call
 from .billing_commands import COMMANDS as BILLING_COMMANDS
 from .billing_commands import handle_command
-from .config_manager import media_attempts, media_config, migrate_config
+from .config_manager import media_attempts, media_config
 from .data_manager import DataManager
 from .finance_store import FinanceStore
 from .finance_web import FinanceWebUI
@@ -89,7 +89,6 @@ class ImageGeneratorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         data_dir = Path(StarTools.get_data_dir())
-        migrate_config(config, data_dir / "config_backups")
         self.root_conf = config
         self.billing = BillingService(
             data_dir / "billing.sqlite3", config.get("global_settings", {})
@@ -547,11 +546,13 @@ class ImageGeneratorPlugin(Star):
         prepared = []
         for artifact in artifacts:
             if isinstance(artifact, bytes):
-                prepared.append((
-                    await self.img_mgr.optimize_output_image(artifact),
-                    str(getattr(artifact, "url", "") or ""),
-                    str(getattr(artifact, "url_expires_at", "") or ""),
-                ))
+                prepared.append(
+                    (
+                        await self.img_mgr.optimize_output_image(artifact),
+                        str(getattr(artifact, "url", "") or ""),
+                        str(getattr(artifact, "url_expires_at", "") or ""),
+                    )
+                )
             else:
                 prepared.append(artifact)
         self._set_completed_media_units(
@@ -562,7 +563,9 @@ class ImageGeneratorPlugin(Star):
             ),
         )
         elapsed = (datetime.now(timezone.utc) - start).total_seconds()
-        if any(isinstance(artifact, (tuple, ImageDownloadError)) for artifact in prepared):
+        if any(
+            isinstance(artifact, (tuple, ImageDownloadError)) for artifact in prepared
+        ):
             try:
                 await self.data_mgr.record_usage(uid, gid)
             except Exception:  # noqa: BLE001
@@ -572,7 +575,11 @@ class ImageGeneratorPlugin(Star):
             suffix += f" | 模型：{model}"
         reply: list[Any] = []
         final_image = max(
-            (index for index, artifact in enumerate(prepared) if isinstance(artifact, tuple)),
+            (
+                index
+                for index, artifact in enumerate(prepared)
+                if isinstance(artifact, tuple)
+            ),
             default=-1,
         )
         for index, artifact in enumerate(prepared):
@@ -580,20 +587,31 @@ class ImageGeneratorPlugin(Star):
                 raw, source_url, source_expiry = artifact
                 caption = include_result_text and index == final_image
                 if dispatch_result:
-                    reply.extend(await self._deliver_image_result(
-                        event, raw, source_url, source_expiry, caption, suffix,
-                        f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}",
-                        send_fallback_message=not tool_call,
-                    ))
+                    reply.extend(
+                        await self._deliver_image_result(
+                            event,
+                            raw,
+                            source_url,
+                            source_expiry,
+                            caption,
+                            suffix,
+                            f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}",
+                            send_fallback_message=not tool_call,
+                        )
+                    )
                 else:
                     reply.append(Image.fromBytes(raw))
                     if caption:
                         reply.append(Plain(f"\n✅ 生成成功（{elapsed:.1f}s）{suffix}"))
             elif isinstance(artifact, ImageDownloadError):
-                reply.extend(await self._deliver_image_fallback(
-                    event, artifact.url, artifact.url_expires_at,
-                    send_message=dispatch_result and not tool_call,
-                ))
+                reply.extend(
+                    await self._deliver_image_fallback(
+                        event,
+                        artifact.url,
+                        artifact.url_expires_at,
+                        send_message=dispatch_result and not tool_call,
+                    )
+                )
             else:
                 reply.append(Plain(f"第 {index + 1} 张图片处理失败：{artifact}"))
         return reply
@@ -1223,11 +1241,14 @@ class ImageGeneratorPlugin(Star):
                 if control == "清除失败项" and not start:
                     count = len(collection["errors"])
                     collection["errors"].clear()
-                    return [Plain(
-                        f"已清除 {count} 项失败记录，已成功录入的材料和参数均保留。"
-                        "请重新发送失败的材料，最后发送 /生成；录入时限不变。"
-                        if count else "没有需要清除的失败项，已录入材料保持不变，可继续发送材料或 /生成。"
-                    )]
+                    return [
+                        Plain(
+                            f"已清除 {count} 项失败记录，已成功录入的材料和参数均保留。"
+                            "请重新发送失败的材料，最后发送 /生成；录入时限不变。"
+                            if count
+                            else "没有需要清除的失败项，已录入材料保持不变，可继续发送材料或 /生成。"
+                        )
+                    ]
                 if not start and control in {"设置", "设置重置"}:
                     if control == "设置重置":
                         collection["parameters"] = {}
@@ -2073,9 +2094,7 @@ class ImageGeneratorPlugin(Star):
             options = parse_audio_materials([text], mode)
             options.route = AUDIO_TYPES.get(audio_type, "")
             options.parameters = parameters
-            result = await self._generate_audio(
-                event, options, audios, tool_call=True
-            )
+            result = await self._generate_audio(event, options, audios, tool_call=True)
             if result:
                 yield "\n".join(part.text for part in result if isinstance(part, Plain))
             else:
@@ -2209,12 +2228,16 @@ class ImageGeneratorPlugin(Star):
         split_count = False
         if type(n) is int and 1 <= n <= 10:
             try:
-                effective = select_image_route(self.conf, images, str(self.conf.get("model") or "nano-banana"))
+                effective = select_image_route(
+                    self.conf, images, str(self.conf.get("model") or "nano-banana")
+                )
             except VideoError as exc:
                 yield str(exc)
                 return
             try:
-                validate_options("image", effective, {"n": n}, has_reference=bool(images))
+                validate_options(
+                    "image", effective, {"n": n}, has_reference=bool(images)
+                )
             except VideoError:
                 calls, split_count = n, True
                 image_options["n"] = None
@@ -2240,8 +2263,16 @@ class ImageGeneratorPlugin(Star):
                 finally:
                     if split_count:
                         getter = getattr(event, "get_extra", None)
-                        units = getter("aigen_completed_media_units", None) if callable(getter) else None
-                        completed += max(0, units) if type(units) is int else int(returned and not result)
+                        units = (
+                            getter("aigen_completed_media_units", None)
+                            if callable(getter)
+                            else None
+                        )
+                        completed += (
+                            max(0, units)
+                            if type(units) is int
+                            else int(returned and not result)
+                        )
                 if result:
                     break
         finally:
