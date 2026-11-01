@@ -40,24 +40,25 @@ class FinanceStoreTest(unittest.TestCase):
         self.billing = b.BillingService(
             Path(self.directory.name) / "billing.sqlite3", {}
         )
-        self.finance = storage.FinanceStore(
-            self.billing.store, [{"model": "m", "expression": "fixed(1)"}]
-        )
+        self.finance = storage.FinanceStore(self.billing.store)
+        with self.billing.store.transaction() as db:
+            db.execute(
+                "INSERT INTO model_prices(rule) VALUES(?)",
+                (json.dumps({"model": "m", "expression": "fixed(1)"}),),
+            )
         self.billing.finance = self.finance
         self.owner = self.billing.owner(financial.Identity())
 
     def operation(self):
         return uuid.uuid4().hex
 
-    def test_import_is_once_and_does_not_compile_prices_at_startup(self):
+    def test_reopening_does_not_compile_prices_at_startup(self):
         with patch.object(
             pricing,
             "compile_price",
             side_effect=AssertionError("must not compile on reload"),
         ):
-            storage.FinanceStore(
-                self.billing.store, [{"model": "bad", "expression": "invalid()"}]
-            )
+            storage.FinanceStore(self.billing.store)
         self.assertEqual(
             self.finance.rules(), [{"model": "m", "expression": "fixed(1)"}]
         )
@@ -257,23 +258,26 @@ class FinanceStoreTest(unittest.TestCase):
         with self.assertRaises(storage.FinanceConflict):
             self.finance.save_prices("admin", self.operation(), 0, [])
 
-    def test_normalizing_an_imported_model_does_not_change_price_units(self):
+    def test_normalizing_a_saved_model_does_not_change_price_units(self):
         path = Path(self.directory.name) / "legacy.sqlite3"
         old = {"model": " m ", "mode": "expression", "expression": "p * 2"}
-        manager = storage.FinanceStore(b.BillingStore(path), [old])
-        row = manager.prices()["rows"][0]
+        manager = storage.FinanceStore(b.BillingStore(path))
+        manager.save_prices("admin", self.operation(), 0, [old])
+        snapshot = manager.prices()
+        row = snapshot["rows"][0]
         manager.save_prices(
             "admin",
             self.operation(),
-            0,
+            snapshot["revision"],
             [{"id": row["id"], "model": "m", "expression": old["expression"]}],
         )
         current = manager.rules()[0]
         self.assertEqual(current["model"], "m")
-        self.assertEqual(current["mode"], "expression")
         self.assertEqual(
             pricing.compile_price(current).evaluate({"input_tokens": 1000}),
-            pricing.compile_price(old).evaluate({"input_tokens": 1000}),
+            pricing.compile_price({"expression": old["expression"]}).evaluate(
+                {"input_tokens": 1000}
+            ),
         )
 
 

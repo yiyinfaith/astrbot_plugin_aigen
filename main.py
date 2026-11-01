@@ -93,10 +93,7 @@ class ImageGeneratorPlugin(Star):
         self.billing = BillingService(
             data_dir / "billing.sqlite3", config.get("global_settings", {})
         )
-        self.finance = FinanceStore(
-            self.billing.store,
-            config.get("global_settings", {}).get("billing_prices", []),
-        )
+        self.finance = FinanceStore(self.billing.store)
         self.billing.finance = self.finance
         self._finance_api = FinanceWebUI(context, self.finance)
         self.conf = media_config(config, "image")

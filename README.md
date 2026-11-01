@@ -2,8 +2,6 @@
 
 <p align="center"><img src="logo.png" alt="AIGen Logo" width="160" height="160" /></p>
 
-版本更新记录见[更新日志](CHANGELOG.md)，也可在 AstrBot 插件详情页的“更新日志”中查看。
-
 ## 安装和升级
 
 在 AstrBot 插件管理中使用仓库 URL 安装，已有安装点击本插件的“更新”即可从 GitHub 获取代码并热重载：

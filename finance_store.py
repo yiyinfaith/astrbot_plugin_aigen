@@ -17,13 +17,8 @@ class FinanceConflict(BillingError):
 
 
 class FinanceStore:
-    def __init__(self, store, legacy_prices=None):
-        """Extend the existing ledger without validating price expressions.
-
-        Args:
-            store: The already initialized BillingStore, never a second instance.
-            legacy_prices: Existing config rules to import exactly once.
-        """
+    def __init__(self, store):
+        """Initialize the WebUI ledger without importing legacy configuration."""
         self.store = store
         with store.transaction() as db:
             db.execute(
@@ -35,18 +30,9 @@ class FinanceStore:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS admin_operations (id TEXT PRIMARY KEY,actor TEXT NOT NULL,kind TEXT NOT NULL,request_hash TEXT NOT NULL,result TEXT NOT NULL,created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
             )
-            if not db.execute(
-                "SELECT 1 FROM finance_settings WHERE key='prices_imported'"
-            ).fetchone():
-                for rule in legacy_prices if isinstance(legacy_prices, list) else []:
-                    db.execute(
-                        "INSERT INTO model_prices(rule) VALUES(?)",
-                        (json.dumps(rule, ensure_ascii=False),),
-                    )
-                db.execute("INSERT INTO finance_settings VALUES('prices_imported','1')")
-                db.execute(
-                    "INSERT OR IGNORE INTO finance_settings VALUES('price_revision','0')"
-                )
+            db.execute(
+                "INSERT OR IGNORE INTO finance_settings VALUES('price_revision','0')"
+            )
             db.execute("PRAGMA user_version=3")
 
     def rules(self):
