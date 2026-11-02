@@ -2,6 +2,14 @@ import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRi
 
 const { createApp } = window.Vue;
 const payloadOf = result => result?.status === 'ok' && 'data' in result ? result.data : result;
+const plainValue = value => {
+  const raw = window.Vue?.toRaw ? window.Vue.toRaw(value) : value;
+  if (Array.isArray(raw)) return raw.map(plainValue);
+  if (raw && typeof raw === 'object') {
+    return Object.fromEntries(Object.entries(raw).map(([key, item]) => [key, plainValue(item)]));
+  }
+  return raw;
+};
 const capabilityFields = [
   ['input_text', '输入文本范围'],
   ['input_images', '输入图片范围'],
@@ -125,7 +133,7 @@ const app = createApp({
       clearTimeout(this.previewTimer); const sequence = ++this.previewSequence; this.validating = true;
       this.previewTimer = setTimeout(async () => {
         try {
-          const result = await this.post('preview', { ...this.draft });
+          const result = await this.post('preview', plainValue(this.draft));
           if (sequence === this.previewSequence) this.preview = result;
         } catch (error) {
           if (sequence === this.previewSequence) this.preview = { valid: false, detail: error.message || String(error), tiers: [] };
@@ -135,9 +143,9 @@ const app = createApp({
     savePrice() {
       if (!this.draft.model.trim()) { this.error = '请填写模型 ID。'; return; }
       return this.run(async () => {
-        const rows = this.priceRows.map(row => ({ id: row.id, model: row.model, expression: row.expression, supported_ranges: row.supported_ranges || {} }));
+        const rows = this.priceRows.map(row => plainValue({ id: row.id, model: row.model, expression: row.expression, supported_ranges: row.supported_ranges || {} }));
         const position = rows.findIndex(row => row.id === this.draft.id);
-        if (position >= 0) rows[position] = { ...this.draft }; else rows.push({ ...this.draft });
+        if (position >= 0) rows[position] = plainValue(this.draft); else rows.push(plainValue(this.draft));
         const selectedModel = this.draft.model.trim();
         await this.mutate('save-prices', { revision: this.priceRevision, rows });
         const [prices, overview] = await Promise.all([this.get('prices'), this.get('overview')]);
@@ -149,7 +157,7 @@ const app = createApp({
     requestDeletePrice() {
       const id = this.draft.id, model = this.draft.model;
       this.confirm('删除模型价格', '删除 ' + model + ' 的价格规则后，该模型将免费。', () => this.run(async () => {
-        const rows = this.priceRows.filter(row => row.id !== id).map(row => ({ id: row.id, model: row.model, expression: row.expression, supported_ranges: row.supported_ranges || {} }));
+        const rows = this.priceRows.filter(row => row.id !== id).map(row => plainValue({ id: row.id, model: row.model, expression: row.expression, supported_ranges: row.supported_ranges || {} }));
         await this.mutate('save-prices', { revision: this.priceRevision, rows });
         await this.loadAll(); this.showNotice('已删除模型价格。');
       }));
