@@ -2319,6 +2319,6 @@ class ImageGeneratorPlugin(Star):
         if error := self._register_user(event):
             await event.send(event.chain_result([Plain(error)]))
             return
-        text = str(self.conf.get("help_text", "帮助文档未配置。"))
+        text = str(self.conf.get("help_text", ""))
         event.stop_event()
         await self._send_settings_menu(event, [text], title="AI帮助")
