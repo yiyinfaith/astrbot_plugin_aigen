@@ -2,7 +2,17 @@ import { GlassNav, GlassSegments, GlassButton, GlassSlider, GlassDialog, GlassRi
 
 const { createApp } = window.Vue;
 const payloadOf = result => result?.status === 'ok' && 'data' in result ? result.data : result;
-const snapshot = row => JSON.stringify([row.model.trim(), row.expression]);
+const capabilityFields = [
+  ['input_text', '输入文本范围'],
+  ['input_images', '输入图片范围'],
+  ['input_videos', '输入视频范围'],
+  ['input_audios', '输入音频范围'],
+  ['output_seconds', '输出秒数范围'],
+  ['output_resolution', '输出分辨率范围'],
+  ['output_aspect_ratio', '输出比例范围'],
+];
+const emptyRanges = () => Object.fromEntries(capabilityFields.map(([key]) => [key, '']));
+const snapshot = row => JSON.stringify([row.model.trim(), row.expression, row.supported_ranges || {}]);
 const balanceUnits = value => {
   const text = String(value).trim();
   if (text.length > 40 || !/^[+-]?(?:\d+(?:\.\d{0,6})?|\.\d{1,6})$/.test(text)) return null;
@@ -21,8 +31,8 @@ const app = createApp({
     return {
       bridge: null, loading: true, loaded: false, busy: false, error: '', notice: '', tab: 0,
       overview: { models: 0, users: 0, categories: [], charged: '0', running: 0 },
-      priceRows: [], priceRevision: 0, priceSearch: '', draft: { id: null, model: '', expression: '0' },
-      originalDraft: JSON.stringify(['', '0']), preview: { valid: true, tiers: [], table: null }, validating: false, previewSequence: 0, previewTimer: null,
+      priceRows: [], priceRevision: 0, priceSearch: '', draft: { id: null, model: '', expression: '0', supported_ranges: emptyRanges() }, capabilityFields,
+      originalDraft: JSON.stringify(['', '0', {}]), preview: { valid: true, tiers: [], table: null }, validating: false, previewSequence: 0, previewTimer: null,
       cards: { rows: [], total: 0 }, selectedCodes: [], cardFilter: { page: 1, page_size: 30, status: 'active', denomination: '', search: '' },
       cardSequence: 0, recordSequence: 0, cardsLoading: false, recordsLoading: false,
       records: { rows: [], total: 0 }, recordKind: 'users', recordFilter: { page: 1, search: '' }, negativeOnly: false,
@@ -103,12 +113,12 @@ const app = createApp({
     },
     selectPrice(row, force = false) {
       if (this.dirty && !force) { this.confirm('切换模型', '切换模型将放弃尚未保存的价格编辑。', () => this.selectPrice(row, true)); return; }
-      this.draft = { id: row.id, model: String(row.model || ''), expression: String(row.expression || '') };
+      this.draft = { id: row.id, model: String(row.model || ''), expression: String(row.expression || ''), supported_ranges: { ...emptyRanges(), ...(row.supported_ranges || {}) } };
       this.originalDraft = snapshot(this.draft); this.preview = { ...row }; this.schedulePreview();
     },
     newPrice(force = false) {
       if (this.dirty && !force) { this.confirm('添加模型', '添加新模型将放弃尚未保存的价格编辑。', () => this.newPrice(true)); return; }
-      this.draft = { id: null, model: '', expression: '0' }; this.originalDraft = snapshot(this.draft); this.schedulePreview();
+      this.draft = { id: null, model: '', expression: '0', supported_ranges: emptyRanges() }; this.originalDraft = snapshot(this.draft); this.schedulePreview();
     },
     useExample(example) { this.draft.expression = example.expression; this.schedulePreview(); },
     schedulePreview() {
@@ -125,7 +135,7 @@ const app = createApp({
     savePrice() {
       if (!this.draft.model.trim()) { this.error = '请填写模型 ID。'; return; }
       return this.run(async () => {
-        const rows = this.priceRows.map(row => ({ id: row.id, model: row.model, expression: row.expression }));
+        const rows = this.priceRows.map(row => ({ id: row.id, model: row.model, expression: row.expression, supported_ranges: row.supported_ranges || {} }));
         const position = rows.findIndex(row => row.id === this.draft.id);
         if (position >= 0) rows[position] = { ...this.draft }; else rows.push({ ...this.draft });
         const selectedModel = this.draft.model.trim();
@@ -139,7 +149,7 @@ const app = createApp({
     requestDeletePrice() {
       const id = this.draft.id, model = this.draft.model;
       this.confirm('删除模型价格', '删除 ' + model + ' 的价格规则后，该模型将免费。', () => this.run(async () => {
-        const rows = this.priceRows.filter(row => row.id !== id).map(row => ({ id: row.id, model: row.model, expression: row.expression }));
+        const rows = this.priceRows.filter(row => row.id !== id).map(row => ({ id: row.id, model: row.model, expression: row.expression, supported_ranges: row.supported_ranges || {} }));
         await this.mutate('save-prices', { revision: this.priceRevision, rows });
         await this.loadAll(); this.showNotice('已删除模型价格。');
       }));

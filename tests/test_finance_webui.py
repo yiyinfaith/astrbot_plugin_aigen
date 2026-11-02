@@ -258,6 +258,50 @@ class FinanceStoreTest(unittest.TestCase):
         with self.assertRaises(storage.FinanceConflict):
             self.finance.save_prices("admin", self.operation(), 0, [])
 
+    def test_supported_ranges_save_without_changing_price_expression(self):
+        ranges = {
+            "input_text": "1-10000",
+            "input_images": "1-9",
+            "input_videos": "0",
+            "input_audios": "0",
+            "output_seconds": "1-15",
+            "output_resolution": "480p,768p",
+            "output_aspect_ratio": "16:9,9:16",
+        }
+        snapshot = self.finance.prices()
+        row = snapshot["rows"][0]
+        expression = row["rule"]["expression"]
+        self.finance.save_prices(
+            "admin",
+            self.operation(),
+            snapshot["revision"],
+            [
+                {
+                    "id": row["id"],
+                    "model": row["rule"]["model"],
+                    "expression": expression,
+                    "supported_ranges": ranges,
+                }
+            ],
+        )
+        saved = self.finance.rules()[0]
+        self.assertEqual(saved["expression"], expression)
+        self.assertEqual(saved["supported_ranges"], ranges)
+        with self.assertRaises(b.BillingError):
+            current = self.finance.prices()
+            self.finance.save_prices(
+                "admin",
+                self.operation(),
+                current["revision"],
+                [
+                    {
+                        "model": row["rule"]["model"],
+                        "expression": expression,
+                        "supported_ranges": {"output_seconds": "1-500"},
+                    }
+                ],
+            )
+
     def test_normalizing_a_saved_model_does_not_change_price_units(self):
         path = Path(self.directory.name) / "legacy.sqlite3"
         old = {"model": " m ", "mode": "expression", "expression": "p * 2"}

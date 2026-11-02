@@ -31,6 +31,7 @@ audio_api = importlib.import_module(PACKAGE + ".audio_api_manager")
 audio_router = importlib.import_module(PACKAGE + ".audio_router")
 image_router = importlib.import_module(PACKAGE + ".image_router")
 capabilities = importlib.import_module(PACKAGE + ".generation_capabilities")
+model_capability_helpers = importlib.import_module(PACKAGE + ".model_capabilities")
 
 
 class Plain:
@@ -169,6 +170,7 @@ def plugin_class():
         "AUDIO_TYPES": audio_router.AUDIO_TYPES,
         "parse_audio_materials": audio_router.parse_audio_materials,
         "select_image_route": image_router.select_image_route,
+        "_refresh_model_capabilities": lambda self: None,
         "VideoError": router.VideoError,
         "VideoDownloadError": api.VideoDownloadError,
         "ImageDownloadError": image_api.ImageDownloadError,
@@ -193,6 +195,9 @@ def plugin_class():
         "norm_id": utils.norm_id,
         "match_keyword_in_text": utils.match_keyword_in_text,
         "extract_image_urls_from_text": utils.extract_image_urls_from_text,
+        "friendly_generation_error": utils.friendly_generation_error,
+        "allows": model_capability_helpers.allows,
+        "has_range": model_capability_helpers.has_range,
         "logger": __import__("logging").getLogger("behavior"),
         "aiohttp": __import__("aiohttp"),
     }

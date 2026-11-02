@@ -286,15 +286,6 @@ def select_route(
         route = "image_audio_to_video" if images else "audio_to_video"
     else:
         route = "image_to_video" if images else "text_to_video"
-    if (
-        validate_materials
-        and not videos
-        and reference not in {"motion_transfer", "audio_sync"}
-        and (len(images) > 9 or len(audios) > 3)
-    ):
-        raise VideoError(
-            f"此类生视频最多接收 9 张图片、3 段音频；当前图片 {len(images)}、音频 {len(audios)}。未提交生成任务。"
-        )
     from .generation_capabilities import VIDEO, parameter_defaults, supplied
 
     defaults = parameter_defaults(config)
@@ -338,6 +329,9 @@ def select_route(
             raise VideoError(
                 f"检测到{label}（图片 {len(images)}、音频 {len(audios)}、视频 {len(videos)}），请先在“生视频设置 → 自动路由模型 → {label}”配置模型和接口格式；未提交收费任务。"
             )
+        from .model_capabilities import merge_model_ranges
+
+        effective = merge_model_ranges(effective, model)
         effective["model"] = model
         for key in ("base_url", "api_keys"):
             value = rule.get(key)
@@ -364,6 +358,31 @@ def select_route(
             **parameter_defaults(config),
             **route_defaults,
         }
+    from .model_capabilities import allows, has_range, merge_model_ranges
+
+    effective = merge_model_ranges(effective, str(effective.get("model", "")))
+    if validate_materials:
+        for key, count in (
+            ("input_images", len(images)),
+            ("input_audios", len(audios)),
+            ("input_videos", len(videos)),
+            ("input_text", len(str(prompt or ""))),
+        ):
+            if has_range(effective, key) and not allows(effective, key, count):
+                raise VideoError(
+                    f"模型 {effective.get('model', '')} 的{key}范围不包含当前输入数量 {count}。未提交生成任务。"
+                )
+        if (
+            not videos
+            and reference not in {"motion_transfer", "audio_sync"}
+            and (
+                (not has_range(effective, "input_images") and len(images) > 9)
+                or (not has_range(effective, "input_audios") and len(audios) > 3)
+            )
+        ):
+            raise VideoError(
+                f"此类生视频最多接收 9 张图片、3 段音频；当前图片 {len(images)}、音频 {len(audios)}。未提交生成任务。"
+            )
     effective.update(overrides)
     effective["reference_mode"] = reference
     return route, effective

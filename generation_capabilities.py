@@ -411,6 +411,36 @@ def parameter_specs(
             if "{" + aliases.get(key, key) + "}" in template
             or "{" + key + "}" in template
         }
+    from .model_capabilities import bounds, has_range, values
+
+    if kind == "video":
+        if has_range(config, "output_seconds") and "duration" in specs:
+            allowed = values(config, "output_seconds")
+            limit = bounds(config, "output_seconds")
+            raw = config["supported_ranges"]["output_seconds"].strip()
+            if limit:
+                specs["duration"] = replace(
+                    specs["duration"],
+                    minimum=limit[0],
+                    maximum=limit[1],
+                    choices=() if "-" in raw else allowed,
+                    menu=allowed,
+                )
+        for source, target in (
+            ("output_resolution", "resolution"),
+            ("output_aspect_ratio", "aspect_ratio"),
+        ):
+            allowed = values(config, source) if has_range(config, source) else ()
+            if allowed and target in specs:
+                specs[target] = enum(specs[target].label, *allowed)
+    elif kind == "image":
+        for source, target in (
+            ("output_resolution", "resolution"),
+            ("output_aspect_ratio", "aspect_ratio"),
+        ):
+            allowed = values(config, source) if has_range(config, source) else ()
+            if allowed and target in specs:
+                specs[target] = enum(specs[target].label, *allowed)
     return specs
 
 
@@ -501,6 +531,7 @@ def describe_capabilities(kind: str, config: dict) -> dict:
                 "choices": spec.choices,
                 "minimum": spec.minimum,
                 "maximum": spec.maximum,
+                "menu": spec.menu,
             }
             for key, spec in specs.items()
         },
@@ -523,6 +554,22 @@ def describe_capabilities(kind: str, config: dict) -> dict:
                 "videos": caps[4],
                 "max_seconds": caps[5] or None,
             }
+        from .model_capabilities import has_range
+
+        configured_materials = {}
+        for key in (
+            "input_text",
+            "input_images",
+            "input_videos",
+            "input_audios",
+            "output_seconds",
+            "output_resolution",
+            "output_aspect_ratio",
+        ):
+            if has_range(config, key):
+                configured_materials[key] = config["supported_ranges"][key]
+        if configured_materials:
+            info["configured_supported_ranges"] = configured_materials
     elif kind == "audio":
         mode = info["interface_mode"]
         info["protocol_operations"] = (
@@ -550,6 +597,15 @@ def describe_capabilities(kind: str, config: dict) -> dict:
         if config.get("model") in {"IndexTTS-2", "indextts2-v1"}:
             info["materials"] = {"audios": [1, 2], "text_characters": [1, 2048]}
             info["protocol_operations"] = ["reference_to_speech"]
+        from .model_capabilities import has_range
+
+        configured_materials = {
+            key: config["supported_ranges"][key]
+            for key in ("input_text", "input_audios")
+            if has_range(config, key)
+        }
+        if configured_materials:
+            info["configured_supported_ranges"] = configured_materials
         if mode in {"openai_chat", "gemini_official"}:
             info["reference_note"] = (
                 "协议可以编码参考音频；未知模型的音色克隆或编辑能力尚未确认，固定音色模型不能保证还原参考人声。"
@@ -569,8 +625,12 @@ def build_menu(
     specs = parameter_specs(kind, config, has_reference=has_reference)
     if kind == "video" and config.get("_long_model") and "duration" in specs:
         long_config = {**config, "model": config["_long_model"]}
+        long_config.pop("supported_ranges", None)
         if config.get("_long_interface_mode") not in {None, "", "inherit"}:
             long_config["interface_mode"] = config["_long_interface_mode"]
+        from .model_capabilities import merge_model_ranges
+
+        long_config = merge_model_ranges(long_config, config["_long_model"])
         long_spec = parameter_specs(kind, long_config, has_reference=has_reference).get(
             "duration"
         )
@@ -618,7 +678,10 @@ def apply_menu_selection(text: str, mapping: dict, current: dict) -> dict | None
 
 def configured_capabilities(kind: str, config: dict) -> str:
     """Describe configured short/long routes without copying private fields."""
+    from .model_capabilities import merge_model_ranges
+
     config = {**config, **parameter_defaults(config, include_adapter=kind == "audio")}
+    config = merge_model_ranges(config, str(config.get("model", "")))
     voice_field = {
         "minimax_speech": "minimax_voice",
         "gemini_official": "gemini_voice",
@@ -637,6 +700,7 @@ def configured_capabilities(kind: str, config: dict) -> str:
                 if value is not None and value != "" and value != "inherit":
                     effective[key] = value
             effective.update(parameter_defaults(rule, include_adapter=kind == "audio"))
+            effective = merge_model_ranges(effective, str(effective.get("model", "")))
             if kind == "audio" and (
                 rule.get("voice") or "voice" in parameter_defaults(rule)
             ):
@@ -652,8 +716,12 @@ def configured_capabilities(kind: str, config: dict) -> str:
             result.append(info)
             if kind == "video" and rule.get("long_model"):
                 effective["model"] = rule["long_model"]
+                effective.pop("supported_ranges", None)
                 if rule.get("long_interface_mode") not in {None, "", "inherit"}:
                     effective["interface_mode"] = rule["long_interface_mode"]
+                effective = merge_model_ranges(
+                    effective, str(effective.get("model", ""))
+                )
                 info = describe_capabilities(kind, effective)
                 info.update(route=rule.get("__template_key"), duration_branch=">10s")
                 result.append(info)

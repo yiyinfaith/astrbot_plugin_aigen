@@ -61,7 +61,14 @@ from .generation_params import (
 )
 from .image_manager import ImageManager
 from .image_router import select_image_route
-from .utils import extract_image_urls_from_text, match_keyword_in_text, norm_id
+from .model_capabilities import allows, has_range
+from .utils import (
+    concise_error_detail,
+    extract_image_urls_from_text,
+    friendly_generation_error,
+    match_keyword_in_text,
+    norm_id,
+)
 from .video_api_manager import VideoApiManager, VideoDownloadError, video_params
 from .video_inputs import collect_media, normalize_media_event, text_media
 from .video_router import VideoError, VideoOptions, parse_video_command, select_route
@@ -99,6 +106,7 @@ class ImageGeneratorPlugin(Star):
         self.conf = media_config(config, "image")
         self.video_conf = media_config(config, "video")
         self.audio_conf = media_config(config, "audio")
+        self._refresh_model_capabilities()
         for name in ("base_url", "api_keys"):
             if not self.audio_conf.get(name):
                 self.audio_conf[name] = self.video_conf.get(name, "")
@@ -117,6 +125,29 @@ class ImageGeneratorPlugin(Star):
         self._video_generation_tasks: set[asyncio.Task] = set()
         self._video_collection_tasks: set[asyncio.Task] = set()
         self._terminating = False
+
+    def _refresh_model_capabilities(self):
+        """Attach WebUI model capability ranges to the three route configs."""
+        mapping = {}
+        finance = getattr(self, "finance", None)
+        if finance is not None:
+            try:
+                for rule in finance.rules():
+                    if not isinstance(rule, dict):
+                        continue
+                    model = str(rule.get("model", "") or "").strip()
+                    ranges = rule.get("supported_ranges")
+                    if model and isinstance(ranges, dict) and ranges:
+                        mapping[model] = dict(ranges)
+            except Exception:  # noqa: BLE001
+                logger.exception("Could not load model capability ranges")
+        for name in ("conf", "video_conf", "audio_conf"):
+            config = getattr(self, name, None)
+            if isinstance(config, dict):
+                config["_model_capabilities"] = mapping
+        audio_manager = getattr(self, "audio_mgr", None)
+        if isinstance(getattr(audio_manager, "config", None), dict):
+            audio_manager.config["_model_capabilities"] = mapping
 
     async def initialize(self):
         """Load usage statistics and configured presets after plugin injection."""
@@ -421,10 +452,19 @@ class ImageGeneratorPlugin(Star):
         Normal commands keep the configured success text.
         """
         self._set_completed_media_units(event, 0)
+        self._refresh_model_capabilities()
         uid = norm_id(event.get_sender_id())
         gid = norm_id(event.get_group_id())
         try:
             effective = select_image_route(self.conf, images, model)
+            for key, value in (
+                ("input_text", len(str(prompt or ""))),
+                ("input_images", len(images)),
+            ):
+                if has_range(effective, key) and not allows(effective, key, value):
+                    raise VideoError(
+                        f"模型 {effective.get('model', '')} 的{key}范围不包含当前输入数量 {value}。"
+                    )
             image_options = supplied(image_options or {})
             inherited = supplied(
                 {key: effective[key] for key in IMAGE if key in effective}
@@ -440,7 +480,15 @@ class ImageGeneratorPlugin(Star):
                 "resolution", effective.get("image_resolution", "1K")
             )
         except VideoError as exc:
-            return [Plain(str(exc))]
+            return [
+                Plain(
+                    friendly_generation_error(
+                        "图片",
+                        exc,
+                        "请检查图片材料与路线配置，再调整参数或重新发送 /画图。",
+                    )
+                )
+            ]
         model = effective["model"]
         manager = self.api_mgr
         if any(
@@ -532,12 +580,28 @@ class ImageGeneratorPlugin(Star):
             result = str(exc)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Image generation request failed")
-            result = str(exc)
+            return [
+                Plain(
+                    friendly_generation_error(
+                        "图片",
+                        exc,
+                        "请检查模型路线、接口设置和图片材料后重试；若问题持续，请联系管理员。",
+                    )
+                )
+            ]
 
         if not isinstance(result, (bytes, ImageBatch)):
-            if self.conf.get("debug_mode", False):
-                return [Plain(f"图片生成失败：{result}")]
-            return [Plain("图片生成失败，请稍后重试。")]
+            return [
+                Plain(
+                    friendly_generation_error(
+                        "图片",
+                        result,
+                        "请检查提示词、参考图片和模型参数后重试；问题持续时请联系管理员。"
+                        if not tool_call
+                        else "",
+                    )
+                )
+            ]
 
         artifacts = result.images if isinstance(result, ImageBatch) else (result,)
         prepared = []
@@ -1052,6 +1116,7 @@ class ImageGeneratorPlugin(Star):
         self, collection: dict, parameters: dict | None = None
     ) -> dict:
         """Resolve a menu route before all required materials have arrived."""
+        self._refresh_model_capabilities()
         if collection["kind"] == "audio":
             options = parse_audio_materials(
                 collection["text"], collection["audio_mode"]
@@ -1269,7 +1334,15 @@ class ImageGeneratorPlugin(Star):
                         await self._send_settings_menu(event, sections)
                         return []
                     except (VideoError, ValueError, TypeError) as exc:
-                        return [Plain(str(exc))]
+                        return [
+                            Plain(
+                                friendly_generation_error(
+                                    "参数设置",
+                                    exc,
+                                    "请确认路线模型已在插件 WebUI 配置；可发送 /取消 结束本次录入后重新开始。",
+                                )
+                            )
+                        ]
                 if collection["settings_menu"] is not None and not start:
                     if finish:
                         collection["settings_menu"] = None
@@ -1304,7 +1377,15 @@ class ImageGeneratorPlugin(Star):
                                 )
                             ]
                         except (VideoError, ValueError, TypeError) as exc:
-                            return [Plain(str(exc))]
+                            return [
+                                Plain(
+                                    friendly_generation_error(
+                                        "参数设置",
+                                        exc,
+                                        "请从合并转发的选项中重新选择数字，多个选项用空格分隔；可发送 /设置 重新查看。",
+                                    )
+                                )
+                            ]
                 selecting_type = kind == "audio" and bool(collection["type_choices"])
                 if selecting_type:
                     choice = raw.strip()
@@ -1359,7 +1440,8 @@ class ImageGeneratorPlugin(Star):
                     logger.warning("Could not collect video input: %s", exc)
                     if len(collection["errors"]) < 5:
                         collection["errors"].append(
-                            str(exc)[:500] or "有材料无法读取，请重新发送。"
+                            concise_error_detail(str(exc), limit=160)
+                            or "有材料无法读取，请重新发送。"
                         )
                 if (
                     self._terminating
@@ -1456,7 +1538,11 @@ class ImageGeneratorPlugin(Star):
                 except (VideoError, OSError, ValueError, TypeError) as exc:
                     return [
                         Plain(
-                            f"{exc}\n材料仍保留，可补充缺少的材料后再次 /生成；如需删除材料，请 /取消 后重新开始。"
+                            friendly_generation_error(
+                                "视频" if kind == "video" else "音频",
+                                exc,
+                                "本次材料仍保留；可发送 /设置 调整参数，补充或修正材料后再发 /生成。发送 /取消 可结束本次录入。",
+                            )
                         )
                     ]
                 self._video_collections.pop(key, None)
@@ -1502,6 +1588,7 @@ class ImageGeneratorPlugin(Star):
             An error chain, or no elements after successful delivery.
         """
         self._set_completed_media_units(event, 0)
+        self._refresh_model_capabilities()
         try:
             prepared = self.audio_mgr.prepare(options, audios)
             label = "文字" if options.mode == "朗读" else "提示词"
@@ -1529,7 +1616,17 @@ class ImageGeneratorPlugin(Star):
             return self._audio_fallback(exc.url)
         except (VideoError, aiohttp.ClientError, OSError, ValueError) as exc:
             logger.warning("Audio generation failed: %s", exc)
-            return [Plain(str(exc))]
+            if tool_call:
+                return [Plain(str(exc))]
+            return [
+                Plain(
+                    friendly_generation_error(
+                        "音频",
+                        exc,
+                        "请检查材料、模型路线和 /设置；确认后再发送 /生成。",
+                    )
+                )
+            ]
         except Exception:  # noqa: BLE001
             logger.exception("Unexpected audio generation failure")
             return [
@@ -1616,6 +1713,7 @@ class ImageGeneratorPlugin(Star):
         prompt_segments=None,
     ) -> list[Any]:
         self._set_completed_media_units(event, 0)
+        self._refresh_model_capabilities()
         if not self.video_conf.get("enabled", True):
             return [Plain("视频生成功能已关闭。")]
         try:
@@ -1623,7 +1721,17 @@ class ImageGeneratorPlugin(Star):
                 prompt, images, audios or [], videos or [], duration, options
             )
         except (VideoError, ValueError, TypeError) as exc:
-            return [Plain(str(exc))]
+            if tool_call:
+                return [Plain(str(exc))]
+            return [
+                Plain(
+                    friendly_generation_error(
+                        "视频",
+                        exc,
+                        "请检查材料和 /设置；修正后重新发送 /生成，或发送 /取消 结束本次录入。",
+                    )
+                )
+            ]
         if not tool_call:
             if prompt_segments is None:
                 prompt_segments = int(bool(str(prompt or "").strip()))
@@ -1675,7 +1783,17 @@ class ImageGeneratorPlugin(Star):
         except (VideoError, aiohttp.ClientError, OSError, ValueError) as exc:
             logger.warning("Video generation failed: %s", exc)
             # Task IDs and input validation are actionable even outside debug mode.
-            return [Plain(str(exc))]
+            if tool_call:
+                return [Plain(str(exc))]
+            return [
+                Plain(
+                    friendly_generation_error(
+                        "视频",
+                        exc,
+                        "请检查材料、模型路线和 /设置；确认后再发送 /生成。",
+                    )
+                )
+            ]
         except Exception:  # noqa: BLE001
             logger.exception("Unexpected video generation failure")
             return [
@@ -1799,6 +1917,7 @@ class ImageGeneratorPlugin(Star):
             "video": self.video_conf,
             "audio": self.audio_conf,
         }
+        self._refresh_model_capabilities()
         try:
             yield (
                 "AIGen（AI多模态生成器，astrbot_plugin_aigen）工具能力：\n"

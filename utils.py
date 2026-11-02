@@ -1,10 +1,65 @@
 import re
+import json
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 _API_VERSION_SEGMENT = re.compile(r"^v\d+(?:(?:alpha|beta)\d*)?$", re.IGNORECASE)
 MAX_IMAGE_BYTES = 100 * 1024 * 1024
 MAX_API_RESPONSE_BYTES = 150 * 1024 * 1024
+
+
+def concise_error_detail(value: Any, limit: int = 220) -> str:
+    """Extract a short, credential-safe explanation from an upstream error."""
+    if isinstance(value, dict):
+        code = value.get("code") or value.get("type") or ""
+        message = next(
+            (
+                value.get(key)
+                for key in ("message", "detail", "reason", "status_msg", "error")
+                if isinstance(value.get(key), (str, dict)) and value.get(key)
+            ),
+            "",
+        )
+        if isinstance(message, dict):
+            message = concise_error_detail(message, limit)
+        text = f"{code}: {message}" if code and message else str(message or code)
+    else:
+        text = str(value or "")
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, (dict, list)):
+            return concise_error_detail(parsed, limit)
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"(?i)bearer\s+[^\s,;]+", "Bearer [redacted]", text)
+    text = re.sub(
+        r"(?i)\b(api[_ -]?key|token|secret|password)\s*[:=]\s*[^\s,;]+",
+        r"\1=[redacted]",
+        text,
+    )
+    text = re.sub(r"\bsk-[A-Za-z0-9_-]{12,}\b", "[redacted]", text)
+    lines = [
+        re.sub(r"\s+", " ", line).strip()
+        for line in text.splitlines()
+        if line.strip()
+        and not re.search(r"(?i)(traceback|file \".*\", line \d+| at .+\(.+\))", line)
+    ]
+    text = " ".join(lines)
+    text = re.sub(r"\s+", " ", text).strip(" \t\r\n{}\"'")
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
+
+
+def friendly_generation_error(kind: str, error: Any, guidance: str) -> str:
+    """Keep a useful error detail and append one actionable next step."""
+    detail = concise_error_detail(error)
+    message = f"{kind}生成未能继续：{detail or '接口未提供具体原因。'}"
+    if guidance:
+        message += "\n" + guidance
+    return message
 
 
 async def read_api_response(response) -> str:

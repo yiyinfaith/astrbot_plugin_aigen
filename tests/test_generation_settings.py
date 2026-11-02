@@ -1,6 +1,7 @@
 """Request contracts, sparse settings, deadlines and group ownership."""
 
 import asyncio
+import importlib
 import json
 import unittest
 from pathlib import Path
@@ -15,9 +16,90 @@ router = behavior.router
 api = behavior.api
 audio_api = behavior.audio_api
 audio_router = behavior.audio_router
+model_capabilities = importlib.import_module(behavior.PACKAGE + ".model_capabilities")
 
 
 class ParameterContractTest(unittest.IsolatedAsyncioTestCase):
+    def test_model_ranges_expand_duration_menu_and_keep_numbering_contiguous(self):
+        model = "minimax_h3_lightx2v_no_pic"
+        config = {
+            "model": model,
+            "interface_mode": "minimax",
+            "supported_ranges": {
+                "input_text": "1-10000",
+                "input_images": "0",
+                "input_videos": "0",
+                "input_audios": "0",
+                "output_seconds": "1-15",
+                "output_resolution": "480p,768p",
+                "output_aspect_ratio": "16:9,9:16",
+            },
+        }
+        sections, mapping = caps.build_menu("video", config, {})
+        self.assertEqual(mapping["1"], ("duration", 1))
+        self.assertEqual(mapping["15"], ("duration", 15))
+        self.assertEqual(mapping["16"], ("resolution", "480p"))
+        self.assertEqual(mapping["17"], ("resolution", "768p"))
+        self.assertEqual(len(sections), 4)
+        self.assertEqual(
+            caps.validate_options("video", config, {"duration": 15}),
+            {"duration": 15},
+        )
+        with self.assertRaises(router.VideoError):
+            caps.validate_options("video", config, {"duration": 16})
+
+    def test_configured_material_ranges_follow_selected_route_model(self):
+        model = "custom-video"
+        ranges = {
+            "input_text": "1-10000",
+            "input_images": "1-12",
+            "input_videos": "0",
+            "input_audios": "0",
+            "output_seconds": "1-15",
+        }
+        config = {
+            "auto_route": False,
+            "model": model,
+            "interface_mode": "seedance",
+            "_model_capabilities": {model: ranges},
+        }
+        _, effective = router.select_route(
+            config, [object()] * 12, [], [], 15, prompt="a prompt"
+        )
+        self.assertEqual(effective["supported_ranges"], ranges)
+        with self.assertRaises(router.VideoError):
+            router.select_route(config, [object()] * 13, [], [], 15, prompt="a prompt")
+
+    def test_range_syntax_and_oversized_duration_menu_are_rejected(self):
+        normalized = model_capabilities.normalize_supported_ranges(
+            {"output_seconds": "1-15", "output_resolution": " 480p, 768p,480p "}
+        )
+        self.assertEqual(
+            normalized, {"output_seconds": "1-15", "output_resolution": "480p,768p"}
+        )
+        for invalid in (
+            {"output_seconds": "15-1"},
+            {"output_seconds": "1-500"},
+            {"unexpected": "1-2"},
+            {"output_resolution": "480p,,768p"},
+        ):
+            with self.assertRaises(router.VideoError):
+                model_capabilities.normalize_supported_ranges(invalid)
+
+    def test_upstream_error_details_are_redacted_and_compact(self):
+        detail = behavior.utils.concise_error_detail(
+            {
+                "error": {
+                    "code": "invalid_request",
+                    "message": "invalid duration; api_key=secret-value",
+                },
+                "trace": "x" * 1000,
+            }
+        )
+        self.assertIn("invalid duration", detail)
+        self.assertNotIn("secret-value", detail)
+        self.assertLessEqual(len(detail), 220)
+
     def test_sparse_choices_are_atomic_and_preserve_unselected_fields(self):
         mapping = {"1": ("speed", 1), "2": ("speed", 2), "3": ("volume", 0)}
         current = {"voice": "alloy", "speed": 0.5}

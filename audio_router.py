@@ -161,8 +161,6 @@ def select_audio_route(
             raise VideoError("此音频类型需要至少一段参考音频。")
         if route in {"audio_editing", "speech_editing"} and count != 1:
             raise VideoError("音频编辑和语音编辑需要恰好一段原始音频。")
-        if count > 3:
-            raise VideoError(f"此类生音频最多接收 3 段参考音频，当前 {count} 段。")
     from .config_manager import AUDIO_ADAPTER_DEFAULTS
     from .generation_capabilities import AUDIO, parameter_defaults, supplied
 
@@ -190,6 +188,23 @@ def select_audio_route(
                 effective[key] = rule[key]
         effective.update(supplied({key: rule[key] for key in AUDIO if key in rule}))
         effective.update(parameter_defaults(rule, include_adapter=True))
+    from .model_capabilities import allows, has_range, merge_model_ranges
+
+    effective = merge_model_ranges(effective, str(effective.get("model", "")))
+    if validate_materials:
+        if has_range(effective, "input_audios"):
+            if not allows(effective, "input_audios", count):
+                raise VideoError(
+                    f"模型 {effective.get('model', '')} 的输入音频范围不包含当前 {count} 段。"
+                )
+        elif count > 3:
+            raise VideoError(f"此类生音频最多接收 3 段参考音频，当前 {count} 段。")
+        if has_range(effective, "input_text") and not allows(
+            effective, "input_text", len(options.prompt)
+        ):
+            raise VideoError(
+                f"模型 {effective.get('model', '')} 的输入文本范围不包含当前 {len(options.prompt)} 个字符。"
+            )
     from .generation_capabilities import validate_options
 
     defaults = {

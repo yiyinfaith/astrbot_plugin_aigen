@@ -21,7 +21,9 @@ def select_image_route(config: dict, images: list, model: str) -> dict:
 
     effective = {**config, **parameter_defaults(config), "model": model}
     if not config.get("auto_route", True) or "routes" not in config:
-        return effective
+        from .model_capabilities import merge_model_ranges
+
+        return merge_model_ranges(effective, str(model or ""))
     route = "image_to_image" if images else "text_to_image"
     label = "图生图" if images else "文生图"
     matches = [
@@ -31,6 +33,11 @@ def select_image_route(config: dict, images: list, model: str) -> dict:
     ]
     if len(matches) != 1:
         raise VideoError(f"请在生图自动路由中为{label}配置恰好一条路线。")
+    from .model_capabilities import merge_model_ranges
+
+    effective = merge_model_ranges(
+        effective, str(matches[0].get("model", effective.get("model", "")))
+    )
     for key in ("model", "interface_mode", "base_url", "api_keys"):
         value = matches[0].get(key)
         if value and value != "inherit":

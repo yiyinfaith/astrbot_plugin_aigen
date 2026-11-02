@@ -130,6 +130,9 @@ class FinanceStore:
         if type(revision) is not int or not isinstance(rows, list) or len(rows) > 500:
             raise BillingError("模型价格参数不合法。")
         validated, models = [], set()
+        from .model_capabilities import normalize_supported_ranges
+        from .video_router import VideoError
+
         for row in rows:
             if not isinstance(row, dict):
                 raise BillingError("模型价格必须包含模型 ID 和表达式。")
@@ -147,8 +150,19 @@ class FinanceStore:
             if model in models:
                 raise BillingError("模型 ID 重复，请每个模型只保留一条规则。")
             models.add(model)
+            try:
+                supported_ranges = normalize_supported_ranges(
+                    row.get("supported_ranges", {})
+                )
+            except VideoError as exc:
+                raise BillingError(str(exc)) from exc
             validated.append(
-                {"id": row.get("id"), "model": model, "expression": expression.strip()}
+                {
+                    "id": row.get("id"),
+                    "model": model,
+                    "expression": expression.strip(),
+                    "supported_ranges": supported_ranges,
+                }
             )
 
         def change(db):
@@ -177,9 +191,20 @@ class FinanceStore:
                     except BillingError:
                         source = original.get("expression", "")
                     if source == row["expression"]:
-                        saved.append({**original, "model": row["model"]})
+                        saved_rule = {**original, "model": row["model"]}
+                        if row["supported_ranges"]:
+                            saved_rule["supported_ranges"] = row["supported_ranges"]
+                        else:
+                            saved_rule.pop("supported_ranges", None)
+                        saved.append(saved_rule)
                         continue
-                saved.append({"model": row["model"], "expression": row["expression"]})
+                saved_rule = {
+                    "model": row["model"],
+                    "expression": row["expression"],
+                }
+                if row["supported_ranges"]:
+                    saved_rule["supported_ranges"] = row["supported_ranges"]
+                saved.append(saved_rule)
             db.execute("DELETE FROM model_prices")
             for rule in saved:
                 db.execute(

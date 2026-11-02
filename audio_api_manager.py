@@ -29,6 +29,7 @@ from .video_api_manager import (
     render_template,
 )
 from .video_router import InvalidMediaError, VideoError
+from .utils import concise_error_detail
 
 
 @dataclass
@@ -125,6 +126,22 @@ class AudioApiManager(VideoApiManager):
         route = c.get("audio_route", "text_to_speech")
         if mode not in AUDIO_MODES or not model:
             raise VideoError("请配置生音频模型及支持的接口格式。")
+        from .model_capabilities import allows, has_range
+
+        if has_range(c, "input_audios"):
+            if not allows(c, "input_audios", len(audios)):
+                raise VideoError(
+                    f"模型 {model} 的输入音频范围不包含当前 {len(audios)} 段。"
+                )
+        elif model in {"IndexTTS-2", "indextts2-v1"} and not 1 <= len(audios) <= 2:
+            raise VideoError("IndexTTS-2 需要 1–2 段参考音频。")
+        if has_range(c, "input_text"):
+            if not allows(c, "input_text", len(text)):
+                raise VideoError(
+                    f"模型 {model} 的输入文本范围不包含当前 {len(text)} 个字符。"
+                )
+        elif model in {"IndexTTS-2", "indextts2-v1"} and not 1 <= len(text) <= 2048:
+            raise VideoError("IndexTTS-2 朗读文字长度须为 1–2048 字符。")
         fmt = str(c.get("response_format", "wav"))
         if fmt not in {"wav", "mp3", "opus", "aac", "flac", "pcm"}:
             raise VideoError("音频格式必须为 wav、mp3、opus、aac、flac 或 pcm。")
@@ -187,11 +204,13 @@ class AudioApiManager(VideoApiManager):
             create = "/v1/t2a_v2"
         elif mode in {"minimax", "autodl_native"}:
             if model in {"IndexTTS-2", "indextts2-v1"}:
-                if route != "reference_to_speech" or not 1 <= len(audios) <= 2:
+                if route != "reference_to_speech" or (
+                    not has_range(c, "input_audios") and not 1 <= len(audios) <= 2
+                ):
                     raise VideoError(
                         "IndexTTS-2 用于文字＋参考音频朗读，需要 1–2 段音频（第 1 段音色，第 2 段可选情感）。"
                     )
-                if not 1 <= len(text) <= 2048:
+                if not has_range(c, "input_text") and not 1 <= len(text) <= 2048:
                     raise VideoError("IndexTTS-2 朗读文字长度须为 1–2048 字符。")
             if mode == "minimax":
                 content = ([{"type": "text", "text": text}] if text else []) + [
@@ -510,7 +529,7 @@ class AudioApiManager(VideoApiManager):
         )
         if isinstance(error, dict):
             error = error.get("message") or error.get("code") or "音频生成失败"
-        return str(task_id), str(status), str(url), str(error)
+        return str(task_id), str(status), str(url), concise_error_detail(error)
 
     async def generate(self, options: AudioOptions, audios: list[str]) -> AudioResult:
         """Generate audio using one paid POST and read-only task polling.
@@ -617,9 +636,9 @@ class AudioApiManager(VideoApiManager):
                 ) as response:
                     track(status=response.status)
                     if response.status >= 400:
-                        detail = (await response.text()).replace(key, "[redacted]")[
-                            :400
-                        ]
+                        detail = concise_error_detail(
+                            (await response.text()).replace(key, "[redacted]")
+                        )
                         raise VideoHttpError(
                             f"音频接口错误（HTTP {response.status}）：{detail}",
                             response.status,
@@ -651,8 +670,10 @@ class AudioApiManager(VideoApiManager):
                 track(state="failed")
                 raise VideoError(
                     "MiniMax 语音生成失败："
-                    + str(meta.get("status_msg", "未知原因"))[:400].replace(
-                        key, "[redacted]"
+                    + concise_error_detail(
+                        str(meta.get("status_msg", "未知原因")).replace(
+                            key, "[redacted]"
+                        )
                     )
                 )
             encoded = json_path(data, "data.audio")

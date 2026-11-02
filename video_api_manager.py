@@ -22,7 +22,7 @@ from .api_manager import ApiManager
 from .billing import track
 from .config_manager import media_attempts
 from .generation_capabilities import prune_template_parameters, validate_options
-from .utils import read_api_response
+from .utils import concise_error_detail, read_api_response
 from .video_router import (
     InvalidMediaError,
     VideoError,
@@ -311,6 +311,8 @@ def video_params(prompt: str, config: dict, duration: int = 0) -> dict:
         seconds = int(seconds) if seconds.is_integer() else seconds
     else:
         seconds = integer(raw_duration, "视频时长", 1)
+    from .model_capabilities import allows, has_range
+
     match = re.search(
         r"(?<![\d.])(-?\d+(?:\.\d+)?)\s*(?:秒|seconds?\b|s\b)", prompt, re.IGNORECASE
     )
@@ -326,8 +328,24 @@ def video_params(prompt: str, config: dict, duration: int = 0) -> dict:
     match = re.search(r"(?<!\d)(\d{1,3})[:：](\d{1,3})(?!\d)", prompt)
     if match and not config.get("_ratio_explicit"):
         ratio = match.group(1) + ":" + match.group(2)
-    if ratio not in {"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}:
+    if has_range(config, "output_aspect_ratio"):
+        valid_ratios = set(config["supported_ranges"]["output_aspect_ratio"].split(","))
+    else:
+        valid_ratios = {"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}
+    if ratio not in valid_ratios:
         raise VideoError("视频比例必须是 adaptive、21:9、16:9、4:3、1:1、3:4 或 9:16。")
+    if has_range(config, "output_resolution") and not allows(
+        config, "output_resolution", resolution
+    ):
+        raise VideoError(
+            f"模型 {config.get('model', '')} 不支持 {resolution}；请使用已配置的输出分辨率。"
+        )
+    if has_range(config, "output_seconds") and not allows(
+        config, "output_seconds", seconds
+    ):
+        raise VideoError(
+            f"模型 {config.get('model', '')} 不支持 {seconds} 秒；请使用已配置的输出秒数范围。"
+        )
     if ratio == "adaptive" and not config.get("_has_reference", True):
         raise VideoError("文生视频必须选择具体比例，不能使用 adaptive。")
     return {
@@ -348,9 +366,12 @@ def orientation(ratio: str) -> str:
     )
 
 
-def native_resolution(group: str, resolution: str, ratio: str) -> str:
+def native_resolution(
+    group: str, resolution: str, ratio: str, supported_resolutions=None
+) -> str:
     direction = orientation(ratio)
-    if resolution not in RESOLUTIONS[group]:
+    supported = set(supported_resolutions or RESOLUTIONS[group])
+    if resolution not in supported:
         raise VideoError(
             f"该工作流不支持 {resolution}，可用档位：{', '.join(RESOLUTIONS[group])}"
         )
@@ -367,7 +388,7 @@ def native_resolution(group: str, resolution: str, ratio: str) -> str:
             768: 1376 if group == "A" else 1344,
             1088: 1920,
             1440: 2560,
-        }[width]
+        }.get(width, round(width * 16 / 9))
         return (
             f"{resolution}竖({width}*{height})"
             if direction == "portrait"
@@ -483,6 +504,13 @@ class VideoApiManager(ApiManager):
         # any of the six protocols, so leave that capability decision to the
         # provider instead of rejecting it by interface name here.
         p = video_params(prompt, c, duration)
+        from .model_capabilities import has_range, values
+
+        supported_resolutions = (
+            values(c, "output_resolution")
+            if has_range(c, "output_resolution")
+            else None
+        )
         caps = WORKFLOWS.get(model)
         if model == "wan2.2-animate-move":
             caps = WORKFLOWS["wan2.2animate-v4-motion_retargeting"]
@@ -492,15 +520,44 @@ class VideoApiManager(ApiManager):
             )
         if caps and mode in {"openai_video", "minimax", "autodl_native"}:
             imin, imax, amin, amax, vcount, max_seconds, group = caps
+            from .model_capabilities import bounds, has_range
+
+            configured_limits = {
+                key: bounds(c, key)
+                for key in (
+                    "input_images",
+                    "input_audios",
+                    "input_videos",
+                    "output_seconds",
+                    "input_text",
+                )
+                if has_range(c, key)
+            }
+            if configured_limits.get("input_images"):
+                imin, imax = map(int, configured_limits["input_images"])
+            if configured_limits.get("input_audios"):
+                amin, amax = map(int, configured_limits["input_audios"])
+            if configured_limits.get("input_videos"):
+                vmin, vmax = map(int, configured_limits["input_videos"])
+            else:
+                vmin = vmax = vcount
             if (
                 not imin <= len(images) <= imax
                 or not amin <= len(audios) <= amax
-                or len(videos) != vcount
+                or not vmin <= len(videos) <= vmax
             ):
                 raise VideoError(
                     f"模型 {model} 需要图片 {imin}–{imax} 张、音频 {amin}–{amax} 段、视频 {vcount} 段；当前输入不符合要求。"
                 )
-            if max_seconds and p["duration"] > max_seconds:
+            configured_seconds = configured_limits.get("output_seconds")
+            if (
+                configured_seconds
+                and not configured_seconds[0] <= p["duration"] <= configured_seconds[1]
+            ):
+                raise VideoError(
+                    f"模型 {model} 支持 {configured_seconds[0]:g}–{configured_seconds[1]:g} 秒；未提交付费任务。"
+                )
+            if not configured_seconds and max_seconds and p["duration"] > max_seconds:
                 raise VideoError(
                     f"模型 {model} 最多支持 {max_seconds} 秒；未提交付费任务。"
                 )
@@ -518,14 +575,19 @@ class VideoApiManager(ApiManager):
                     # MiniMax explicitly maps unavailable square output to the
                     # workflow's default portrait direction, as its API defines.
                     validation_ratio = "adaptive"
-                native_resolution(group, p["resolution"], validation_ratio)
+                native_resolution(
+                    group,
+                    p["resolution"],
+                    validation_ratio,
+                    supported_resolutions,
+                )
             if p["size"] and mode == "openai_video":
                 if group in {"C", "D", "E"}:
                     raise VideoError(
                         "该工作流不支持精确 size，请留空并使用分辨率/比例。"
                     )
                 sizes = set()
-                for resolution in RESOLUTIONS[group]:
+                for resolution in supported_resolutions or RESOLUTIONS[group]:
                     width = int(resolution[:-1])
                     height = (
                         864
@@ -552,7 +614,20 @@ class VideoApiManager(ApiManager):
                 if model == "minimax_h3_lightx2v_no_pic"
                 else 10000
             )
-            if model not in NO_TEXT_MODELS and len(prompt) > text_limit:
+            configured_text = configured_limits.get("input_text")
+            if (
+                configured_text
+                and model not in NO_TEXT_MODELS
+                and not configured_text[0] <= len(prompt) <= configured_text[1]
+            ):
+                raise VideoError(
+                    f"模型 {model} 输入文本长度需为 {configured_text[0]:g}–{configured_text[1]:g} 字符；未提交收费任务。"
+                )
+            if (
+                not configured_text
+                and model not in NO_TEXT_MODELS
+                and len(prompt) > text_limit
+            ):
                 raise VideoError(
                     f"模型 {model} 提示词最多 {text_limit} 字符，当前 {len(prompt)}；未提交收费任务。"
                 )
@@ -626,6 +701,7 @@ class VideoApiManager(ApiManager):
                 WORKFLOWS[target][6],
                 p["resolution"],
                 "adaptive" if frames else p["ratio"],
+                supported_resolutions,
             )
         body = {}
         if mode == "openai_video":
@@ -743,10 +819,12 @@ class VideoApiManager(ApiManager):
                     else "duration"
                 ] = p["duration"]
                 body["resolution"] = native_resolution(
-                    caps[6], p["resolution"], p["ratio"]
+                    caps[6], p["resolution"], p["ratio"], supported_resolutions
                 )
             elif caps and caps[6] == "E":
-                body["resolution"] = native_resolution("E", p["resolution"], p["ratio"])
+                body["resolution"] = native_resolution(
+                    "E", p["resolution"], p["ratio"], supported_resolutions
+                )
             else:
                 body.update(duration=p["duration"], resolution=p["resolution"])
             if (
@@ -964,7 +1042,7 @@ class VideoApiManager(ApiManager):
         )
         if isinstance(error, dict):
             error = error.get("message") or error.get("code") or "视频任务失败"
-        return str(task_id), str(status), str(url), str(error)
+        return str(task_id), str(status), str(url), concise_error_detail(error)
 
     async def _json_request(
         self, method: str, url: str, key: str, headers: dict, body=None
@@ -1036,7 +1114,8 @@ class VideoApiManager(ApiManager):
                         "上游服务异常" if resp.status >= 500 else "视频接口请求失败",
                     )
                 raise VideoHttpError(
-                    f"{reason}（HTTP {resp.status}）：{detail[:400]}", resp.status
+                    f"{reason}（HTTP {resp.status}）：{concise_error_detail(detail)}",
+                    resp.status,
                 )
             try:
                 if "text/event-stream" in resp.headers.get("Content-Type", ""):
@@ -1146,7 +1225,7 @@ class VideoApiManager(ApiManager):
         if not task_id and not url:
             if error:
                 track(state="failed")
-                raise VideoError(f"视频提交失败：{error}")
+                raise VideoError(f"视频提交失败：{concise_error_detail(error)}")
             raise VideoError("接口没有返回任务 ID 或视频地址；请核对任务记录后再提交。")
         info = {
             "task_id": task_id,
@@ -1186,7 +1265,9 @@ class VideoApiManager(ApiManager):
                 track(state="failed")
                 info.update(status=status)
                 await self._save_job_record(job, info)
-                raise VideoError(f"视频任务失败（ID：{task_id}）：{error or status}")
+                raise VideoError(
+                    f"视频任务失败（ID：{task_id}）：{concise_error_detail(error or status)}"
+                )
             if normalized in success or (url and not status):
                 if not url:
                     raise VideoError(f"任务 {task_id} 已完成，但接口未返回视频地址。")
@@ -1220,7 +1301,7 @@ class VideoApiManager(ApiManager):
                     and exc.status not in {408, 429}
                 ):
                     raise VideoError(
-                        f"视频查询失败（任务 ID：{task_id}）：{exc}。请核对原任务，勿重复提交。"
+                        f"视频查询失败（任务 ID：{task_id}）：{concise_error_detail(exc)}。请核对原任务，勿重复提交。"
                     ) from exc
                 transient_errors += 1
                 if transient_errors > 3 or time.monotonic() >= deadline:

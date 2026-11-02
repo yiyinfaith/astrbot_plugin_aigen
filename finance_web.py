@@ -180,6 +180,15 @@ class FinanceWebUI:
                                 "model": row["rule"].get("model", "")
                                 if isinstance(row["rule"], dict)
                                 else "",
+                                "supported_ranges": (
+                                    row["rule"].get("supported_ranges", {})
+                                    if isinstance(
+                                        row["rule"].get("supported_ranges", {}), dict
+                                    )
+                                    else {}
+                                )
+                                if isinstance(row["rule"], dict)
+                                else {},
                                 **self.preview(
                                     row["rule"]
                                     if isinstance(row["rule"], dict)
@@ -219,7 +228,11 @@ class FinanceWebUI:
                     or len(source) > 6000
                 ):
                     raise BillingError("模型 ID 或表达式长度不合法。")
-                rule = {"model": model, "expression": source}
+                rule = {
+                    "model": model,
+                    "expression": source,
+                    "supported_ranges": payload.get("supported_ranges", {}),
+                }
                 if type(payload.get("id")) is int:
                     snapshot = await self._work(self.finance.prices)
                     for row in snapshot["rows"]:
@@ -230,7 +243,9 @@ class FinanceWebUI:
                             and original.get("model") == model
                         ):
                             existing = self.preview(original)
-                            if existing.get("expression") == source:
+                            if existing.get("expression") == source and existing.get(
+                                "supported_ranges", {}
+                            ) == payload.get("supported_ranges", {}):
                                 rule = original
                             break
                 result = await self._work(self.preview, rule)
