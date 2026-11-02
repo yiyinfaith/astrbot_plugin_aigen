@@ -1440,8 +1440,7 @@ class ImageGeneratorPlugin(Star):
                     logger.warning("Could not collect video input: %s", exc)
                     if len(collection["errors"]) < 5:
                         collection["errors"].append(
-                            concise_error_detail(str(exc), limit=160)
-                            or "有材料无法读取，请重新发送。"
+                            str(exc)[:160] or "有材料无法读取，请重新发送。"
                         )
                 if (
                     self._terminating
