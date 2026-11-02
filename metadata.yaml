@@ -4,6 +4,7 @@ desc: 适用于Astrbot的多模态生成插件，包括生图、生视频、生�
 short_desc: 多模态生成、自动路由、模型计费与卡密充值
 version: v1.4.22
 author: 一吟Faith
+logo: logo.png
 repo: https://github.com/yiyinfaith/astrbot_plugin_aigen
 astrbot_version: ">=4.28.2,<5"
 support_platforms:
