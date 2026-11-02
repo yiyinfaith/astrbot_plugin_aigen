@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
-import logging
 import operator
 import secrets
 import sqlite3
@@ -14,6 +13,8 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
+
+from astrbot.api import logger
 
 from .billing_expression import TOKENS, PricingExpression
 from .billing_expression import BillingExpressionError as BillingError
@@ -39,7 +40,6 @@ REQUEST_NAMES = {
 }
 USAGE_NAMES = {"seconds", "input_tokens", "output_tokens", "total_tokens"}
 CURRENT: ContextVar = ContextVar("aigen_billing", default=None)
-LOGGER = logging.getLogger(__name__)
 
 
 def units(value) -> int:
@@ -999,7 +999,7 @@ def track(*, state: str = "", payload=None, raw: str = "", status: int = 0):
             except sqlite3.Error:
                 # An evidence write must not abandon an already submitted job.
                 # Final settlement still validates and persists the full result.
-                LOGGER.exception("Could not save billing checkpoint %s", usage.order)
+                logger.exception("Could not save billing checkpoint %s", usage.order)
             else:
                 usage.saved = snapshot
 
@@ -1152,12 +1152,12 @@ async def billed_call(
             # Deliver the artifact and recover this exact finished order when
             # storage becomes available. Never release another active task.
             service.unsettled.add(order)
-            LOGGER.exception(
+            logger.exception(
                 "Could not settle billing order %s; no charge recorded", order
             )
             charge = None
         if charge is None:
-            LOGGER.warning(
+            logger.warning(
                 "Billing order %s could not be settled; no charge recorded", order
             )
 

@@ -445,11 +445,12 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
                 "finish",
                 side_effect=sqlite3.OperationalError("disk full"),
             ),
-            self.assertLogs(b.LOGGER, level="ERROR"),
+            patch.object(b.logger, "exception") as log_exception,
         ):
             self.assertEqual(
                 await self.call(AsyncMock(return_value=b"completed")), b"completed"
             )
+        self.assertGreaterEqual(log_exception.call_count, 1)
         self.assertEqual(self.balance(), (10000000, 0))
 
     async def test_failed_settlement_recovers_without_unlocking_an_active_owner(self):
@@ -466,9 +467,10 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
                 "finish",
                 side_effect=sqlite3.OperationalError("disk full"),
             ),
-            self.assertLogs(b.LOGGER, level="ERROR"),
+            patch.object(b.logger, "exception") as log_exception,
         ):
             await self.call(AsyncMock(return_value=b"completed"))
+        self.assertGreaterEqual(log_exception.call_count, 1)
         self.assertEqual(len(self.service.unsettled), 1)
         self.assertEqual(await self.call(AsyncMock(return_value=b"second")), b"second")
         self.assertEqual(self.balance(), (9000000, 0))
@@ -504,9 +506,10 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
                 "checkpoint",
                 side_effect=sqlite3.OperationalError("disk full"),
             ),
-            self.assertLogs(b.LOGGER, level="ERROR"),
+            patch.object(b.logger, "exception") as log_exception,
         ):
             self.assertEqual(await self.call(generate), b"completed")
+        self.assertGreaterEqual(log_exception.call_count, 1)
         self.assertEqual(self.balance(), (9000000, 0))
         _, orders = self.service.store.listing("orders", self.owner)
         self.assertEqual(orders[0]["status"], "settled")
