@@ -63,7 +63,6 @@ from .image_manager import ImageManager
 from .image_router import select_image_route
 from .model_capabilities import allows, has_range
 from .utils import (
-    concise_error_detail,
     extract_image_urls_from_text,
     friendly_generation_error,
     match_keyword_in_text,
