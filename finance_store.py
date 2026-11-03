@@ -411,66 +411,6 @@ class FinanceStore:
             change,
         )
 
-    def settle_order(self, actor, operation, order_id, amount, note=""):
-        """Settle one order awaiting review after checking the upstream result.
-
-        Args:
-            actor: Trusted administrator.
-            operation: Retry identifier.
-            order_id: Order in the review state.
-            amount: Charge in balance units; zero settles without charging.
-            note: Optional administrator explanation.
-
-        Returns:
-            The settled order, its charge and resulting status.
-
-        Raises:
-            FinanceConflict: If the order is no longer awaiting review.
-        """
-        if not isinstance(order_id, str) or not 1 <= len(order_id) <= 64:
-            raise BillingError("订单编号不合法。")
-        if note is None:
-            note = ""
-        if not isinstance(note, str) or len(note) > 200:
-            raise BillingError("结算说明须为不超过 200 字的文字，可留空。")
-        charge = units(amount)
-
-        def change(db):
-            row = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
-            if not row or row["status"] != "review":
-                raise FinanceConflict("该订单已不是待核对状态，请刷新列表。")
-            status = "settled" if charge else "refunded"
-            text = (
-                f"管理员核对后扣费 {money(charge)}" if charge else "管理员核对后不扣费"
-            ) + (f"：{note.strip()}" if note.strip() else "")
-            refund = row["reserved"] - charge
-            db.execute(
-                "UPDATE balances SET amount=amount+? WHERE owner=?",
-                (refund, row["owner"]),
-            )
-            db.execute(
-                "UPDATE orders SET charged=?,reserved=0,status=?,note=? WHERE id=?",
-                (charge, status, text, order_id),
-            )
-            db.execute(
-                "INSERT INTO ledger(owner,delta,kind,ref) VALUES(?,?,'admin_settle',?)",
-                (row["owner"], refund, order_id),
-            )
-            return {
-                "order": order_id,
-                "charged": money(charge),
-                "status": status,
-                "note": text,
-            }
-
-        return self._mutate(
-            actor,
-            operation,
-            "settle_order",
-            {"order": order_id, "amount": charge, "note": note.strip()},
-            change,
-        )
-
     def platforms(self) -> list[str]:
         """Return historical account platform types without exposing other data."""
         with closing(sqlite3.connect(self.store.path, timeout=10)) as db:
@@ -695,10 +635,6 @@ class FinanceStore:
                         "deleted",
                         "revision",
                         "models",
-                        "order",
-                        "charged",
-                        "status",
-                        "note",
                     )
                     if key in result
                 }

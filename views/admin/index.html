@@ -6,10 +6,10 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="data:," />
     <title>AIGen 管理中心</title>
-    <link rel="stylesheet" href="./style.css?v=1.4.23-admin" />
+    <link rel="stylesheet" href="./style.css?v=1.4.6-20261103" />
     <script defer src="./vendor/vue.global.prod.js"></script>
     <script defer src="./vendor/liquid-glass.js"></script>
-    <script type="module" src="./app.js?v=1.4.23-admin"></script>
+    <script type="module" src="./app.js?v=1.4.6-20261103"></script>
   </head>
   <body>
     <div id="app" v-cloak>
@@ -45,10 +45,9 @@
             <div class="section-heading"><div><p class="eyebrow">USERS & HISTORY</p><h2>用户与记录</h2><p>管理余额，查询兑换、生成扣费及管理员操作。</p></div><glass-button label="＋ 设置用户余额" :disabled="busy" @activate="openBalance()" ></glass-button></div>
             <section class="panel table-panel"><div class="table-toolbar"><glass-segments :items="recordKinds" :selected="recordKind" :disabled="busy" label="记录分类" @select="changeRecordKind" ></glass-segments><label class="search-field"><span>⌕</span><input v-model="recordFilter.search" placeholder="搜索用户、模型或记录" @keyup.enter="recordFilter.page=1;loadRecords()" /></label></div>
               <div v-if="recordKind==='users'" class="balance-filter"><div><strong>仅显示负余额</strong><small>快速找到需要补足余额的用户</small></div><glass-toggle :value="negativeOnly" :disabled="busy" @select="toggleNegative" ></glass-toggle></div>
-              <div v-if="recordKind==='orders'" class="balance-filter"><div><strong>仅显示待核对</strong><small>插件重载或中断时已提交上游的收费任务，核对上游结果后结算</small></div><glass-toggle :value="reviewOnly" :disabled="busy" @select="toggleReview" ></glass-toggle></div>
               <div class="table-scroll"><table v-if="recordKind==='users'"><thead><tr><th>平台</th><th>用户 ID</th><th>当前余额</th><th>操作</th></tr></thead><tbody><tr v-for="row in records.rows" :key="row.owner"><td>{{ row.platform }}</td><td><code>{{ row.user_id }}</code></td><td class="amount" :class="{'negative':Number(row.amount)<0}">{{ row.amount }}</td><td><button class="row-action" :disabled="busy" @click="openBalance(row)">修改余额</button></td></tr></tbody></table>
                 <table v-else-if="recordKind==='redemptions'"><thead><tr><th>用户</th><th>充值金额</th><th>卡密</th><th>兑换时间</th></tr></thead><tbody><tr v-for="row in records.rows" :key="row.code"><td>{{ row.platform }} · {{ row.user_id }}</td><td class="amount">＋{{ row.amount }}</td><td><code>{{ row.code }}</code></td><td>{{ row.redeemed_at }}</td></tr></tbody></table>
-                <table v-else-if="recordKind==='orders'"><thead><tr><th>用户 / 模型</th><th>扣费</th><th>状态</th><th>订单详情</th></tr></thead><tbody><tr v-for="row in records.rows" :key="row.id"><td>{{ row.platform }} · {{ row.user_id }}<small class="block">{{ row.model }}</small></td><td class="amount">{{ row.charged ?? '待结算' }}</td><td><span class="badge" :class="{red: row.status==='review'}">{{ orderState(row.status) }}</span><button v-if="row.status==='review'" class="row-action settle-action" :disabled="busy" @click="openSettle(row)">核对结算</button></td><td><code>{{ row.id }}</code><small class="block note">{{ row.note }}</small></td></tr></tbody></table>
+                <table v-else-if="recordKind==='orders'"><thead><tr><th>用户 / 模型</th><th>扣费</th><th>状态</th><th>订单详情</th></tr></thead><tbody><tr v-for="row in records.rows" :key="row.id"><td>{{ row.platform }} · {{ row.user_id }}<small class="block">{{ row.model }}</small></td><td class="amount">{{ row.charged ?? '待结算' }}</td><td><span class="badge">{{ orderState(row.status) }}</span></td><td><code>{{ row.id }}</code><small class="block note">{{ row.note }}</small></td></tr></tbody></table>
                 <table v-else><thead><tr><th>管理员</th><th>操作</th><th>详情</th><th>时间</th></tr></thead><tbody><tr v-for="row in records.rows" :key="row.id"><td>{{ row.actor }}</td><td>{{ auditKind(row.kind) }}</td><td class="note">{{ auditDetail(row) }}</td><td>{{ row.created }}</td></tr></tbody></table></div>
               <p v-if="recordsLoading" class="empty" role="status">正在读取记录…</p><p v-else-if="!records.rows.length" class="empty">没有匹配的记录。</p><div class="pagination"><span>共 {{ records.total }} 条</span><button :disabled="recordFilter.page<=1 || busy" @click="recordFilter.page--;loadRecords()">上一页</button><span>{{ recordFilter.page }} / {{ pages(records.total) }}</span><button :disabled="recordFilter.page>=pages(records.total) || busy" @click="recordFilter.page++;loadRecords()">下一页</button></div></section>
           </section>
@@ -72,7 +71,6 @@
             <p v-if="error" class="validation-error" role="alert">{{ error }}</p>
             <label class="field">修改原因（选填）<input v-model="balanceDraft.reason" :disabled="busy" placeholder="选填，例如人工充值、更正余额" /></label><glass-button label="确认修改余额" :disabled="busy || usersLoading || !balanceDraft.user_id || !balanceSelection" @activate="setBalance" ></glass-button>
           </template>
-          <template v-else-if="modal.kind==='settle'"><p>订单 <code>{{ settleDraft.order_id }}</code></p><p class="muted">{{ settleDraft.user }} · {{ settleDraft.model }}<br />{{ settleDraft.note }}</p><p class="muted">请先到上游平台按任务 ID 核对该任务是否成功、实际收费多少，再填写本单向用户收取的金额；填 0 表示不扣费。</p><label class="field">扣费金额<input v-model="settleDraft.amount" inputmode="decimal" maxlength="40" :disabled="busy" placeholder="例如 0.5，不扣费填 0" /></label><label class="field">结算说明（选填）<input v-model="settleDraft.note_text" maxlength="200" :disabled="busy" placeholder="例如 上游已成功生成" /></label><p v-if="error" class="validation-error" role="alert">{{ error }}</p><glass-button label="确认结算" :disabled="busy || settleDraft.amount===''" @activate="settleOrder" ></glass-button></template>
           <template v-else-if="modal.kind==='generated'"><p>已生成 {{ generated.codes.length }} 张，每张 {{ generated.amount }}。</p><textarea class="generated-codes" readonly :value="generated.codes.join('\n')" aria-label="已生成卡密"></textarea><glass-button label="导出本批卡密" @activate="downloadCodes(generated.codes, 'aigen-cards-'+generated.amount+'.txt')" ></glass-button></template>
           <glass-dialog v-else :title="modal.title" :body="modal.body" :disabled="busy" @confirm="confirmModal" @cancel="closeModal" ></glass-dialog>
         </section>

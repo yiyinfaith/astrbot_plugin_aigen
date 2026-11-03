@@ -281,50 +281,6 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.balance(), (10000000, 0))
         self.assertEqual(self.service.store.listing("orders", self.owner)[0], 2)
 
-    def order_status(self, index=0):
-        return self.service.store.listing("orders", self.owner)[1][index]["status"]
-
-    async def test_reload_after_submission_waits_for_review_and_before_refunds(self):
-        async def before_submit():
-            raise asyncio.CancelledError
-
-        with self.assertRaises(asyncio.CancelledError):
-            await self.call(before_submit)
-        self.assertEqual(self.order_status(), "refunded")
-
-        async def after_submit():
-            b.track(state="submitted", payload={"task_id": "task-9"})
-            raise asyncio.CancelledError
-
-        with self.assertRaises(asyncio.CancelledError):
-            await self.call(after_submit)
-        _, rows = self.service.store.listing("orders", self.owner)
-        self.assertEqual(rows[0]["status"], "review")
-        self.assertIsNone(rows[0]["charged"])
-        self.assertIn("task-9", rows[0]["note"])
-        self.assertEqual(self.balance(), (10000000, 0))
-        # The next paid request is not blocked by an order awaiting review.
-        await self.call(AsyncMock(return_value=b"image"))
-        self.assertEqual(self.balance(), (9000000, 0))
-
-    def test_restart_keeps_submitted_orders_for_review_and_releases_the_rest(self):
-        store = self.service.store
-        other = self.service.owner(Identity(uid="456"))
-        store.redeem(other, store.create_cards("admin", "10", 1)[0])
-        # Both orders are left running, as after a crash.
-        submitted = store.begin(self.owner, "video", "m", None, {})
-        store.checkpoint(submitted, {"state": "submitted", "task_id": "t-1"})
-        pending = store.begin(other, "video", "m", None, {})
-        reopened = b.BillingStore(store.path)
-        order = reopened.listing("orders", self.owner)[1][0]
-        self.assertEqual(order["status"], "review")
-        self.assertIn("t-1", order["note"])
-        self.assertEqual(reopened.listing("orders", other)[1][0]["id"], pending)
-        self.assertEqual(reopened.listing("orders", other)[1][0]["status"], "refunded")
-        # Restarting again must not silently release orders awaiting review.
-        again = b.BillingStore(store.path)
-        self.assertEqual(again.listing("orders", self.owner)[1][0]["status"], "review")
-
     async def test_definite_upstream_failure_refunds(self):
         async def failed():
             b.track(state="submitted")
@@ -586,6 +542,14 @@ class GenerationBillingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             "共 0 条",
             commands.handle_command(self.service, Identity(uid="other"), "AI账单"),
+        )
+        for page in ("abc", "0", "-1", "1.5", "２"):
+            self.assertIn(
+                "页码必须是正整数",
+                commands.handle_command(self.service, self.event, "AI账单 " + page),
+            )
+        self.assertIn(
+            "第 1/1 页", commands.handle_command(self.service, self.event, "AI账单 1")
         )
 
 

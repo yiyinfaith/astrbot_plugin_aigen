@@ -184,9 +184,14 @@ class AudioPresetCollectionTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.audio_conf["preset_need_prefix"] = False
         _, result = await self.receive("轻声")
         self.assertEqual(result, [])
-        _, result = await self.receive("/轻声讲述", sender="another-user")
-        self.assertIn("本群已有用户正在录入", result[0][0].text)
-        self.assertEqual(len(self.plugin._video_collections), 1)
+        # Another member may record at the same time; materials stay separate.
+        await self.receive("/轻声讲述", sender="another-user")
+        await self.receive("only mine", sender="another-user")
+        self.assertEqual(len(self.plugin._video_collections), 2)
+        texts = sorted(
+            tuple(item["text"]) for item in self.plugin._video_collections.values()
+        )
+        self.assertEqual(len([t for t in texts if "only mine" in t]), 1)
 
     async def test_character_billing_uses_expanded_prompt(self):
         billing = importlib.import_module(PACKAGE + ".billing")

@@ -432,7 +432,7 @@ class CollectionSettingsTest(unittest.IsolatedAsyncioTestCase):
         await self.receive("/生成")
         self.plugin.video_mgr.generate.assert_awaited_once()
 
-    async def test_other_users_are_not_collected_and_group_slot_releases_on_submission(
+    async def test_group_members_record_concurrently_without_mixing_materials(
         self,
     ):
         await self.receive("/生视频 猫")
@@ -441,31 +441,16 @@ class CollectionSettingsTest(unittest.IsolatedAsyncioTestCase):
             "其他人的聊天", [behavior.Image("https://m.test/other.png")], sender="100"
         )
         self.assertFalse(outsider.stopped)
-        _, result = await self.receive("/生视频 他人", sender="100")
-        self.assertIn("已有用户正在录入", result[0][0].text)
-        _, result = await self.receive("/生音频 朗读", sender="100")
-        self.assertIn("已有用户正在录入", result[0][0].text)
-        self.assertEqual(self.collection()["deadline"], deadline)
-        self.assertEqual(self.collection()["text"], ["猫"])
-        self.assertEqual(self.collection()["images"], [])
-        entered, release = asyncio.Event(), asyncio.Event()
-        original = self.plugin.video_mgr.generate
-
-        async def slow(*args, **kwargs):
-            entered.set()
-            await release.wait()
-            return await original(*args, **kwargs)
-
-        self.plugin.video_mgr.generate = slow
-        task = asyncio.create_task(self.receive("/生成"))
-        await entered.wait()
-        try:
-            await self.receive("/生音频 朗读", sender="100")
-            self.assertEqual(self.collection()["kind"], "audio")
-            self.assertEqual(len(self.plugin._video_collections), 1)
-        finally:
-            release.set()
-            await task
+        await self.receive("/生视频 他人", sender="100")
+        collections = {
+            key[2]: item for key, item in self.plugin._video_collections.items()
+        }
+        self.assertEqual(len(collections), 2)
+        mine = next(item for sender, item in collections.items() if sender != "100")
+        self.assertEqual(mine["deadline"], deadline)
+        self.assertEqual(mine["text"], ["猫"])
+        self.assertEqual(mine["images"], [])
+        self.assertEqual(collections["100"]["text"], ["他人"])
 
     async def test_image_command_bypasses_material_collection(self):
         await self.receive("/生视频 猫")

@@ -45,6 +45,10 @@ def handle_command(service, event, text: str) -> str:
             return f"兑换成功，充值 {money(amount)}。余额 {money(available)}。"
         if len(args) > 1:
             return "查询命令最多填写一个页码。"
+        if args and not (
+            args[0].isascii() and args[0].isdecimal() and int(args[0]) >= 1
+        ):
+            return "页码必须是正整数，例如 /AI账单 2；不填页码查看第 1 页。"
         page = int(args[0]) if args else 1
         kind = "orders"
         total, rows = store.listing(kind, owner, page)

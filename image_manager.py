@@ -22,7 +22,12 @@ from .utils import (
 from .config_manager import media_attempts
 
 # Set while loading an image URL typed by a user, which must stay on the internet.
-_PUBLIC_ONLY: ContextVar[bool] = ContextVar("aigen_public_only", default=False)
+# The dict records why a URL was rejected so the user can be told.
+_PUBLIC_ONLY: ContextVar[dict | None] = ContextVar("aigen_public_only", default=None)
+
+
+class UnsafeImageUrlError(ValueError):
+    """A user-supplied image URL was refused for safety reasons."""
 
 
 class ImageManager:
@@ -35,8 +40,9 @@ class ImageManager:
         self, url: str, timeout: Optional[int] = None
     ) -> bytes | None:
         """通用下载逻辑"""
-        if _PUBLIC_ONLY.get():
-            return await self._download_public_image(url, timeout)
+        state = _PUBLIC_ONLY.get()
+        if state is not None:
+            return await self._download_public_image(url, timeout, state)
         for i in range(self.max_retries + 1):
             try:
                 async with aiohttp.ClientSession() as session:
@@ -53,7 +59,7 @@ class ImageManager:
         return None
 
     async def _download_public_image(
-        self, url: str, timeout: Optional[int] = None
+        self, url: str, timeout: Optional[int], state: dict
     ) -> bytes | None:
         """Download a user-typed URL, re-checking every redirect hop.
 
@@ -69,7 +75,11 @@ class ImageManager:
                 async with aiohttp.ClientSession(connector=connector) as session:
                     current = url
                     for _hop in range(6):
-                        await ensure_public_url(current)
+                        try:
+                            await ensure_public_url(current)
+                        except ValueError as exc:
+                            state["rejected"] = str(exc)
+                            return None
                         async with session.get(
                             current,
                             proxy=self.proxy,
@@ -82,7 +92,8 @@ class ImageManager:
                                 continue
                             resp.raise_for_status()
                             return await read_image_response(resp)
-                    raise ValueError("图片链接重定向次数过多。")
+                    state["rejected"] = "图片链接重定向次数过多。"
+                    return None
             except ValueError as exc:
                 logger.warning("User image URL rejected: %s", exc)
                 return None
@@ -95,12 +106,20 @@ class ImageManager:
         return None
 
     async def load_user_url(self, src: str) -> bytes | None:
-        """Load an image URL from message text with private addresses blocked."""
-        token = _PUBLIC_ONLY.set(True)
+        """Load an image URL from message text with private addresses blocked.
+
+        Raises:
+            UnsafeImageUrlError: If the URL or a redirect points somewhere unsafe.
+        """
+        state: dict = {}
+        token = _PUBLIC_ONLY.set(state)
         try:
-            return await self.load_bytes(src)
+            data = await self.load_bytes(src)
         finally:
             _PUBLIC_ONLY.reset(token)
+        if data is None and state.get("rejected"):
+            raise UnsafeImageUrlError(state["rejected"])
+        return data
 
     def _optimize_output_image_sync(self, raw: bytes) -> bytes:
         """对结果图做更积极的发送前压缩，降低平台上传耗时。"""
@@ -991,6 +1010,9 @@ class ImageManager:
             for result in results:
                 if isinstance(result, bytes):
                     images.append(result)
+                elif isinstance(result, UnsafeImageUrlError):
+                    # Always explain a refused link instead of a generic failure.
+                    raise ValueError(f"{result}未提交生成任务。") from result
                 elif isinstance(result, Exception):
                     logger.warning(f"Image extraction error: {result}")
                     if strict:

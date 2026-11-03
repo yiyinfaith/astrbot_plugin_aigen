@@ -794,8 +794,9 @@ class ImageGeneratorPlugin(Star):
             yield result
 
     @filter.command("AI账单", alias={"ai账单"}, prefix_optional=False)
-    async def my_orders_command(self, event: AstrMessageEvent, page: int = 1):
+    async def my_orders_command(self, event: AstrMessageEvent, page: str = ""):
         """查询当前用户的 AIGen 生成账单。用法：/AI账单 [页码]，默认第 1 页。"""
+        # Accept text so the plugin, not the framework, explains a bad page number.
         result = await self._registered_billing_command(event, "AI账单", str(page))
         if result is not None:
             yield result
@@ -1203,24 +1204,8 @@ class ImageGeneratorPlugin(Star):
             return [Plain(f"{label}生成功能已关闭。")]
         finish = control == "生成" and not start
         if start:
-            # Reserving the collection below happens before the first await.
-            # A group therefore has one material owner across video and audio.
-            for owner, active in self._video_collections.items():
-                # AstrBot may give each member a different conversation ID.
-                # Group ownership uses the platform instance plus group ID.
-                same_chat = (
-                    owner[1] == key[1]
-                    and owner[0].split(":", 1)[0] == key[0].split(":", 1)[0]
-                    if key[1]
-                    else owner == key
-                )
-                if same_chat and owner != key:
-                    remaining = max(0, int(active["deadline"] - monotonic()))
-                    return [
-                        Plain(
-                            f"本群已有用户正在录入材料，请等待其提交、取消或超时后再开始（剩余约{remaining}秒）。"
-                        )
-                    ]
+            # Collections are keyed by sender, so several members of one group
+            # can record at the same time without mixing their materials.
             if collection is not None:
                 collection["timer"].cancel()
             try:

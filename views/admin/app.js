@@ -43,8 +43,7 @@ const app = createApp({
       originalDraft: JSON.stringify(['', '0', {}]), preview: { valid: true, tiers: [], table: null }, validating: false, previewSequence: 0, previewTimer: null,
       cards: { rows: [], total: 0 }, selectedCodes: [], cardFilter: { page: 1, page_size: 30, status: 'active', denomination: '', search: '' },
       cardSequence: 0, recordSequence: 0, cardsLoading: false, recordsLoading: false,
-      records: { rows: [], total: 0 }, recordKind: 'users', recordFilter: { page: 1, search: '' }, negativeOnly: false, reviewOnly: false,
-      settleDraft: { order_id: '', user: '', model: '', note: '', amount: '', note_text: '' },
+      records: { rows: [], total: 0 }, recordKind: 'users', recordFilter: { page: 1, search: '' }, negativeOnly: false,
       cardDraft: { amount: '10', count: 10 }, generated: { amount: '', codes: [] },
       balanceDraft: { platform: '', user_id: '', expected: '0', amount: '0', reason: '', mode: 'set' },
       balanceModes: [{ value: 'add', label: '增加额度' }, { value: 'subtract', label: '减少额度' }, { value: 'set', label: '覆盖余额' }],
@@ -225,25 +224,11 @@ const app = createApp({
     async loadRecords() {
       const sequence = ++this.recordSequence;
       this.recordsLoading = true; this.records = { rows: [], total: 0 };
-      try { const result = await this.get(this.recordKind, { ...this.recordFilter, status: this.recordKind === 'users' && this.negativeOnly ? 'negative' : this.recordKind === 'orders' && this.reviewOnly ? 'review' : 'all' }); if (sequence === this.recordSequence) this.records = result; }
+      try { const result = await this.get(this.recordKind, { ...this.recordFilter, status: this.recordKind === 'users' && this.negativeOnly ? 'negative' : 'all' }); if (sequence === this.recordSequence) this.records = result; }
       catch (error) { if (sequence === this.recordSequence) this.error = error.message || String(error); }
       finally { if (sequence === this.recordSequence) this.recordsLoading = false; }
     },
     changeRecordKind(value) { if (this.busy) return; this.recordKind = value; this.recordFilter.page = 1; this.records = { rows: [], total: 0 }; return this.loadRecords(); },
-    toggleReview(value) { this.reviewOnly = value; this.recordFilter.page = 1; return this.run(() => this.loadRecords()); },
-    openSettle(row) {
-      this.error = '';
-      this.settleDraft = { order_id: row.id, user: row.platform + ' · ' + row.user_id, model: row.model, note: row.note, amount: '', note_text: '' };
-      this.modal = { kind: 'settle', title: '核对并结算订单' };
-    },
-    settleOrder() {
-      return this.run(async () => {
-        const result = await this.mutate('settle-order', { order_id: this.settleDraft.order_id, amount: this.settleDraft.amount, note: this.settleDraft.note_text });
-        this.closeModalAfterSave();
-        this.overview = await this.get('overview'); await this.loadRecords();
-        this.showNotice('订单已结算：' + result.note);
-      });
-    },
     toggleNegative(value) { this.negativeOnly = value; this.recordFilter.page = 1; return this.run(() => this.loadRecords()); },
     async openBalance(row) {
       this.error = '';
@@ -305,8 +290,8 @@ const app = createApp({
     confirm(title, body, action) { this.pendingConfirmation = action; this.modal = { kind: 'confirm', title, body }; },
     async confirmModal() { const action = this.pendingConfirmation; this.modal = null; this.pendingConfirmation = null; await action?.(); },
     orderState(value) { return { running: '生成中', settled: '已扣费', refunded: '未扣费 / 已退款', review: '待核对', reserved: '旧订单' }[value] || value; },
-    auditKind(value) { return { balance: '余额调整', create_cards: '生成卡密', delete_cards: '删除卡密', prices: '修改价格', settle_order: '核对结算' }[value] || value; },
-    auditDetail(row) { const value = row.result || {}; return row.kind === 'balance' ? value.owner + '：' + ({ add: '增加额度', subtract: '减少额度', set: '覆盖余额' }[value.mode || 'set']) + '；' + value.before + ' → ' + value.after + (value.reason ? '；' + value.reason : '') : row.kind === 'create_cards' ? value.count + ' 张 · 面额 ' + value.amount : row.kind === 'delete_cards' ? '删除 ' + value.deleted + ' 张' : row.kind === 'settle_order' ? value.order + '：' + value.note : value.models + ' 个模型 · 版本 ' + value.revision; },
+    auditKind(value) { return { balance: '余额调整', create_cards: '生成卡密', delete_cards: '删除卡密', prices: '修改价格' }[value] || value; },
+    auditDetail(row) { const value = row.result || {}; return row.kind === 'balance' ? value.owner + '：' + ({ add: '增加额度', subtract: '减少额度', set: '覆盖余额' }[value.mode || 'set']) + '；' + value.before + ' → ' + value.after + (value.reason ? '；' + value.reason : '') : row.kind === 'create_cards' ? value.count + ' 张 · 面额 ' + value.amount : row.kind === 'delete_cards' ? '删除 ' + value.deleted + ' 张' : value.models + ' 个模型 · 版本 ' + value.revision; },
   },
   mounted() { this.bootstrap(); },
   beforeUnmount() { clearTimeout(this.previewTimer); clearTimeout(this.toastTimer); clearTimeout(this.userTimer); ++this.userSequence; this.offContext?.(); },

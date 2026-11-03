@@ -358,18 +358,14 @@ class PluginAuditTest(unittest.IsolatedAsyncioTestCase):
         await self.fixture.receive("/生成")
         self.assertEqual(self.plugin.video_mgr.generate.await_args.args[0], "a cat")
 
-    async def test_group_collection_lock_survives_per_member_conversation_ids(self):
+    async def test_group_members_with_per_member_conversation_ids_record_apart(self):
         await self.fixture.receive("/生视频 cat", origin="qqbot:GroupMessage:group_99")
-        outsider, result = await self.fixture.receive(
+        member, _ = await self.fixture.receive(
             "/生音频 朗读", sender="100", origin="qqbot:GroupMessage:group_100"
         )
-        self.assertIn("已有用户正在录入", result[0][0].text)
-        self.assertTrue(outsider.stopped)
-        self.assertEqual(len(self.plugin._video_collections), 1)
-        await self.fixture.receive(
-            "/生视频 dog", sender="100", origin="anotherbot:GroupMessage:group_100"
-        )
-        self.assertEqual(len(self.plugin._video_collections), 2)
+        self.assertTrue(member.stopped)
+        kinds = sorted(item["kind"] for item in self.plugin._video_collections.values())
+        self.assertEqual(kinds, ["audio", "video"])
 
     async def test_statistics_failure_still_delivers_completed_image(self):
         self.plugin.api_mgr.call_api = AsyncMock(return_value=IMAGE)

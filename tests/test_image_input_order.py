@@ -139,13 +139,19 @@ class ImageInputOrderTest(unittest.IsolatedAsyncioTestCase):
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
         manager = ImageManager({})
+        unsafe = importlib.import_module(PACKAGE + ".image_manager").UnsafeImageUrlError
         try:
-            self.assertIsNone(
-                await manager.load_user_url(f"http://127.0.0.1:{port}/a.png")
-            )
-            self.assertIsNone(
-                await manager.load_user_url(f"http://localhost:{port}/a.png")
-            )
+            for host in ("127.0.0.1", "localhost"):
+                with self.assertRaisesRegex(unsafe, "内网"):
+                    await manager.load_user_url(f"http://{host}:{port}/a.png")
+            self.assertEqual(hits, [])
+            # The reason reaches the user even for single-image presets.
+            url = f"http://127.0.0.1:{port}/a.png"
+            event = FakeEvent([], text="手办化 " + url)
+            with self.assertRaisesRegex(ValueError, "内网.*未提交生成任务"):
+                await manager.extract_images_from_event(
+                    event, max_images=1, extra_sources=[url]
+                )
             self.assertEqual(hits, [])
         finally:
             await runner.cleanup()
