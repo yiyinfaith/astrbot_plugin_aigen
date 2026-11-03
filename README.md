@@ -1,201 +1,225 @@
 # AstrBot AIGen 多模态生成器
 
-<p align="center"><img src="logo.png" alt="AIGen Logo" width="160" height="160" /></p>
+<p align="center"><img src="https://raw.githubusercontent.com/yiyinfaith/astrbot_plugin_aigen/main/logo.png" alt="AIGen Logo" width="160" height="160" /></p>
 
-## 配置界面
+AstrBot 的生图、生视频、生音频插件：按输入材料自动选择路线与模型，支持多种上游协议、按模型计费、余额与卡密充值，并提供 `generate_image` / `generate_video` / `generate_audio` 函数工具。
 
-| 分组 | 内容 |
+## 快速开始
+
+1. 安装插件后进入 **AstrBot WebUI → 插件 → AIGen → 配置**。
+2. 在 🎨 生图 / 🎬 生视频 / 🎵 生音频 设置中选择接口格式，填写接口地址和 API Keys（生音频地址与 Keys 留空时跟随生视频）。
+3. 检查各「自动路由模型」中的模型 ID，留空的路线不会提交任务。
+4. 需要收费时，进入 **插件 → AIGen → 管理中心** 设置模型价格并生成卡密；不设置价格则全部免费。
+
+## 用户命令
+
+| 命令 | 说明 |
 | --- | --- |
-| 🌐 全局设置 | 代理、HTTP 超时、流式请求、调试、普通回复显示、帮助文案、函数工具冷却；定价与卡密移至插件 WebUI |
-| 🎨 生图设置 | 图片专用的接口格式、地址、Key 池、模型、画质、触发规则、预设和图片下载 |
-| 🎬 生视频设置 | 视频专用的六种接口格式、地址、Key 池、自动路由模型、时长、画质、触发规则、预设、任务轮询和视频缓存 |
-| 🎵 生音频设置 | 八种接口格式、七条路由、音色、交互收集、类型选择、任务查询、下载和发送 |
+| `/生图 <提示词>`、`/画图 <提示词>` | 无图文生图，带图（发送、引用或 @头像）图生图，支持多图 |
+| `/<图片预设关键词>` | 使用预设提示词，只取一张图：引用图 > 发送图 > @用户头像 > 发送者头像 |
+| `/生视频`、`/生成视频`、`/视频` | 开始录入视频材料 |
+| `/生音频 朗读\|提示词 [类型]`、`/音频 ...` | 开始录入音频材料，类型见[音频](#音频) |
+| `/生成` | 提交已录入的材料 |
+| `/设置`、`/设置重置` | 录入中修改 / 清除本次详细参数 |
+| `/清除失败项` | 清除读取失败的材料，保留已成功的部分 |
+| `/取消` | 清空材料并退出录入 |
+| `/AI余额`、`/AI账单 [页码]` | 查询余额、自己的生成账单 |
+| `/兑换AI卡密 <卡密>` | 充值，建议私聊 |
+| `/AI帮助`、`/AI菜单` | 显示管理员配置的帮助文本（QQ 以合并转发发送） |
 
-## 管理中心、模型计费、余额和卡密
+`/ai余额`、`/ai账单`、`/兑换ai卡密`、`/ai帮助`、`/ai菜单` 为小写别名。
 
-在 **AstrBot WebUI → 插件 → AIGen → 管理中心** 中管理价格，管理中心包含：
+## 使用说明
 
-- **模型定价**：仅编辑模型 ID 与价格表达式，实时显示合法性，并用“适用条件＋单价”表格展示分辨率、可读时段和具体费用，支持示例、搜索和删除。保存无效表达式会保留明确的错误提示；该模型开始生成时会返回“价格设置不合法，请联系管理员配置模型价格。”并停止提交。热重载不自动解析表达式。
-- **卡密管理**：按面额分类、有效/已兑换/已删除筛选、生成 1–100 张卡密、批量删除和导出卡密，玻璃圆环显示兑换率。删除只取消未兑换AI卡密的有效性，保留兑换历史。卡密由管理员自行分发。
-- **用户与记录**：按平台与用户 ID 查看余额、筛选负余额用户、直接设置余额（必须填写原因）、查看兑换记录、生成账单和管理员操作记录。余额修改会检查打开编辑时的余额，防止覆盖期间发生的充值或扣费。
+### 录入流程（视频、音频）
 
-**未配置价格的模型和表达式为 0/空的模型免费。** 使用最终路由模型精确匹配，包含长视频模型。余额、卡密面额和模型价格使用管理员统一约定的单位，例如元，金额保留六位小数。之后以 WebUI 保存的价格为准。
+1. 发送启动指令，Bot 提示开始录入及剩余秒数。
+2. 依次发送文字、图片、QQ 语音、视频或文件（也可引用），期间不逐条回复；多段文字按顺序合并为一个提示词。
+3. 需要时发送 `/设置`，按菜单回复要修改的选项编号（空格分隔，如 `5 8`），`0` 退出。
+4. 发送 `/生成`，Bot 汇总材料（如 `共收到1图片，0音频，0视频，2段提示词，生成中`）后提交。成功只发送成品。
 
-| 方式 | 价格表达式示例 | 结算依据 |
+- 整个录入从启动起共用一个时限（默认 120 秒），`/设置` 和类型询问不暂停计时，超时自动取消。
+- 同一群同一时间只允许一人录入，只收集发起者的消息；提交后即释放名额。
+- 材料读取失败或参数不合法时不会提交，可补充或 `/清除失败项` 后再 `/生成`。
+- 下载或发送失败不会重新生成，会返回任务 ID 和上游公网链接。
+
+### 图片
+
+- 无图走「文生图」，有图走「图生图」路线。指令使用管理员默认参数，不从提示词中解析比例或画质。
+- 自定义提示词按顺序收集引用图、发送图和 @用户头像，不自动加入发送者头像。
+- 预设关键词按完整词匹配：前后须为消息边界、空白或 QQ @片段。`手办化`、`@小明 手办化` 可触发，`手办化123` 不触发；重叠时取最长关键词。
+- 一次返回多张图片时全部发送，单张失败不影响其他图片。
+
+### 视频
+
+普通 `/生视频` 收到的所有图片都作为参考图。只有在启动消息或第一段文字中写明 `首尾帧`、`首帧`、`尾帧`、`动作迁移`、`音频同步` 时才走对应特殊路线。
+
+| 材料组合 | 路线 | 默认模型 |
 | --- | --- | --- |
-| 按次 | `fixed(0.2)` | 每次成功生成 0.2 |
-| 按 Token | `p * 2 + c * 8` | 输入/输出每百万 Token 2/8；使用上游实际 usage |
-| 按实际成品秒数 | `u("actual_seconds") * 0.1` | 实际视频/音频秒数 |
-| AutoDL 工作流按秒 | `u("seconds") * 0.1` | 同 AutoDL 插件用量规则；IndexTTS-2 至少按 10 秒计费 |
-| 按千字符 | `characters * 0.02 / 1000` | 合并文本字符数，按比例计算 |
-| 画质/时间档位 | 三元条件与 `tier()` | 显示各档位并按本单实际条件收费 |
+| 提示词 | 文生视频 | `minimax_h3_lightx2v_no_pic` |
+| 提示词 + 1–9 图 | 图生视频 | `minimax_h3_lightx2v_v5`（>10 秒 `_15s`） |
+| `首尾帧` + 提示词 + 2 图 | 首尾帧 | `minimax_h3_lightx2v` |
+| `首帧` / `尾帧` + 提示词 + 1 图 | 首帧 / 尾帧 | 需自行配置 |
+| 提示词 + 1–3 音频（可加 1–9 图） | 音频 / 图片＋音频生视频 | `minimax_h3_image_audio_to_video_v2`（>10 秒 `_15s`） |
+| `动作迁移` + 1 图 + 1 视频 | 动作迁移 | `wan2.2-animate-move` |
+| `音频同步` + 1 图 + 1 音频 | 对口型 | `minimax_h3_image_audio_to_video` |
+| 提示词 + 视频（可加图片、音频） | 视频生视频及其组合 | 需自行配置 |
 
-**表达式与 NewAPI 常用计费语法统一**，使用 `v1:`（可省略）、`tier()`、`fixed()`、`u()`、`param()`、`header()`、`has()`、时间函数、三元条件、`&&`/`||`/`!`、算术、比较和 `min/max/abs/ceil/floor`。NewAPI 实际使用 Go Expr，并非 CEL。插件以受限解释器执行这些计费规则，不执行 Python/JavaScript/Go 代码；不支持完整 Go Expr 对象、循环、任意函数或高级 GJSON 查询，不支持的语法明确报错。旧版已保存的 Python 条件表达式仍可读取，新规则建议使用以下写法。
+提示词中可写 `5秒` 或 `--duration 5` 指定时长。插件不会丢弃多余媒体、截断时长或降分辨率；材料不符合模型要求时直接提示，不提交收费任务。
 
-直接在 WebUI 填写表达式，可使用 AutoDL 的按秒规则。**以下每个代码块都是一条完整表达式，可单独复制到价格表达式输入框；不要把多条表达式合并粘贴。示例数字均为演示单价，请按自己的定价修改。**
+### 音频
 
-按秒计费：
+第一个参数必填：`朗读`（原文转语音 TTS）或 `提示词`（按描述生成声音 TTA）。第二个参数可选，未指定且带音频时 `/生成` 后会询问类型，直接回复类型名即可。
 
-```javascript
-tier("base", u("seconds") * 0.1)
-```
+| 启动方式 | 材料 | 路线 | 默认模型 |
+| --- | --- | --- | --- |
+| `/生音频 提示词` | 提示词 | 提示词生音频 TTA | 需配置 |
+| `/生音频 朗读` | 原文 | 文字生音频 TTS | 需配置 |
+| `/生音频 朗读 音色克隆` | 原文 + 1–3 段参考音频 | 音色克隆 | `IndexTTS-2` |
+| `/生音频 提示词 参考音频生成` | 提示词 + 1–3 段参考音频 | 音频条件 TTA | 需配置 |
+| `/生音频 提示词 音频编辑` | 编辑指令 + 1 段原音频 | 音频编辑 | 需配置 |
+| `/生音频 朗读 语音编辑` | 修改后的文字 + 1 段原语音 | 语音编辑 | 需配置 |
+| `/生音频 朗读 音色转换` | 2 段音频：原语音、目标音色，无文字 | 音色转换 | 需配置 |
 
-画质阶梯：
+音频预设只用于音频条件 TTA：发送 `/<关键词>` 后再发参考音频并 `/生成`。
 
-```javascript
-u("resolution") == "768p"
-  ? tier("high", u("seconds") * 0.2)
-  : tier("base", u("seconds") * 0.1)
-```
+## 配置参数
 
-北京时间低峰/高峰：**00:00（含）至 08:00（不含）每秒 0.03，其余时间每秒 0.04**。时区直接写在 `hour("Asia/Shanghai")` 中，无须另设全局价格时区；按提交时刻选择档位，排队跨时段不会改变本单价格。管理中心的“时段价格”示例按钮使用同一条规则。
+带「可选」的路线字段留空时跟随所在板块的主配置。`parameter_defaults`（生成参数默认值 JSON）用法见[配置教程](#配置教程)。
 
-```javascript
-hour("Asia/Shanghai") < 8
-  ? tier("off_peak", u("seconds") * 0.03)
-  : tier("peak", u("seconds") * 0.04)
-```
+### 🌐 全局设置
 
-如需按其他时区定价，修改表达式中的时区名称，例如 `UTC`、`Asia/Tokyo` 或 `America/New_York`。请使用 IANA 时区名称，避免依赖 VPS 所在时区。
-
-按次数计费：
-
-```javascript
-tier("request", u("requests") * 0.2)
-```
-
-每开始 5 秒计 0.2：
-
-```javascript
-tier("base", ceil(u("seconds") / 5) * 0.2)
-```
-
-图片质量条件，从生效请求参数读取：
-
-```javascript
-param("quality") == "high" ? tier("high", 0.3) : tier("base", 0.15)
-```
-
-引用 `p`、`c`、`len` 等 Token 变量时自动采用 NewAPI 每百万 Token 单位。输入每百万 2，输出每百万 8：
-
-```javascript
-tier("base", p * 2 + c * 8)
-```
-
-基于完整输入上下文长度的阶梯，缓存读取单独定价：
-
-```javascript
-len <= 32000
-  ? tier("short", p * 2 + c * 8 + cr * 0.2)
-  : tier("long", p * 4 + c * 12 + cr * 0.4)
-```
-
-NewAPI `fixed()` 按次规则，不需要自行乘除百万：
-
-```javascript
-tier("request", fixed(0.01))
-```
-
-AutoDL 使用的 `u("requests")`、`u("seconds")`、`u("resolution")`、`u("orientation")` 已接入，支持原工作流和 `wan2.2-animate-move` / `IndexTTS-2` 别名。输出方向为 `landscape`、`portrait` 或 `square`，由已验证的路由参数提供；`adaptive` 未能确认时不猜方向。视频和音频的秒数以成品为准；**不沿用 NewAPI 的提交预估秒数或测量失败回退值**，无法测量时本单不收费。
-
-AutoDL 的 IndexTTS-2 最低计费规则已加入：在 `u("seconds")` 规则中，成功音频不足 10 秒按 10 秒结算，仍保存原实测时长。`u("actual_seconds")` 不应用这一下限。`u("actual_seconds")` 可读取原实测值。插件不擅自给模型设置官网单价；管理员填的价格决定实际收费，默认仍是 0。
-
-Token 变量支持 `p`、`c`、`len`、`cr`、`cc`、`cc1h`、`img`、`img_cr`、`img_o`、`ai`、`ao` 和 `image_count`。引用缓存/图片/音频子类时，从 `p`/`c` 扣除已单独定价的数量，避免重复收费；`len` 保持完整输入长度。输入/输出总量缺失时不收费，不按文字长度猜 Token；缺省可选缓存/模态明细遵循 NewAPI 的 0 默认值，不猜图片缓存比例。任务可用 `u("input_tokens")`、`u("output_tokens")`、`u("total_tokens")` 和 `u("tokens")`。不额外套用 NewAPI 站点的分组倍率、充值比例、汇率或配额单位，卡密与价格使用插件里约定的同一余额单位。
-
-`param()` 提供已验证的生成参数（时长、档位、尺寸、质量、音色、语速、数量等），也提供对应的 `parameters.*` 字段；不保留提示词、媒体文件、密钥。它是本插件的计价参数上下文，不能当成所有上游协议完整请求体。没有可核验请求头上下文时 `header()` 规则会报错，不能凭空伪造请求头。`hour/minute/weekday/month/day` 使用明确 IANA 时区，`weekday()` 与 NewAPI 相同：星期日为 0，星期六为 6。无效/空时区按 UTC；不支持服务器相关的 `Local`。本单使用提交时固定的时间，跨时段排队不改变价格。全局不再设置价格时区，直接使用例如 `hour("Asia/Shanghai") < 8 ? 0.03 : 0.04`；每个时间函数都可指定自己的时区。保留的裸变量 `hour`、`weekday` 以 UTC 为准；新表达式请使用带时区的函数（裸 `weekday` 仍按星期一为 0）。
-
-余额按 **平台类型 + AstrBot 用户 ID** 保存，同一平台的用户在不同群和私聊中共用余额。`billing.sqlite3` 保存在 AstrBot 插件数据目录，升级保留。
-
-| 使用者 | 命令 | 说明 |
+| 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| 用户 | `/兑换AI卡密 <卡密>` | 一次兑换，建议私聊 |
-| 用户 | `/AI余额` | 显示当前余额，可能含未补足的实际费用 |
-| 用户 | `/AI账单 [页码]` | 只显示自己的订单，失败显示不收费 |
-| 用户 | `/AI帮助` | 配置中的统一帮助，以一条 QQ 合并转发发送；内容由管理员维护 |
+| `show_model_info` | 关 | 成功/失败提示中显示实际模型 |
+| `debug_mode` | 关 | 报错时输出完整错误 |
+| `use_proxy` / `proxy_url` | 关 / 空 | HTTP 代理，如 `http://127.0.0.1:7890` |
+| `timeout` | 120 | 单次 HTTP 请求和参考图下载超时（秒） |
+| `use_stream` | 关 | 生图使用流式请求；视频仍轮询任务 |
+| `gemini_stream_openai_compat` | 关 | New API 网关下 Gemini 流式生图改走 Chat Completions，以保留心跳 |
+| `help_text` | 空 | `/AI帮助` 显示的文本 |
+| `llm_cooldown_seconds` | 60 | 每用户函数工具冷却（秒），0 关闭；普通命令不限 |
 
-帮助别名为 `/ai帮助`、`/AI菜单`、`/ai菜单`；余额、账单和兑换分别提供 `/ai余额`、`/ai账单`、`/兑换ai卡密` 别名。
+### 🎨 生图设置
 
-## 详细参数设置、优先级和能力查询
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `interface_mode` | `openai_image` | `openai_image` / `openai_chat` / `openai_response` / `gemini_official` / `custom_endpoint` |
+| `base_url` / `api_keys` / `model` | — / — / `nano-banana` | 基础地址（不含 `/v1`，自定义模式填完整地址）、Key（每行一个）、默认模型 |
+| `image_resolution` | 1K | 1K / 2K / 4K |
+| `extra_prefix` | `生图` | 额外触发前缀，可多个 |
+| `custom_prompt_need_prefix` | 开 | 自定义提示词需要 AstrBot 前缀（`/`）或 @机器人 |
+| `preset_need_prefix` | 关 | 预设关键词需要前缀 |
+| `result_image_download_timeout` | 0 | 结果图下载超时，0 跟随 `timeout` |
+| `image_delivery_retries` | 2 | 下载与发送各自尝试次数（1–5） |
+| `generating_msg_template` | `🎨 收到请求，正在生成 [{preset}]...` | 开始提示，`{preset}` 为预设名或「自定义」 |
+| `enable_llm_tool` | 开 | 启用 `generate_image` |
+| `prompt_list` | 空 | 图片预设，格式 `关键词:提示词` |
+| `auto_route` / `routes` | 开 | 路线 `text_to_image`、`image_to_image`，字段：`model`、`interface_mode`（`inherit` 跟随主接口）、`base_url`、`api_keys`、`parameter_defaults` |
+| `parameter_defaults` | 空 | 板块生成参数默认值 |
 
-视频和音频在录入材料时可发送 `/设置`。QQ 以**一条合并转发消息**展示所有可选参数；不支持转发的平台或转发发送失败时，改发一条完整文字菜单。菜单按当前材料的路由、协议及已知模型能力生成，各个选项的数字在本次菜单内唯一，不同用户或聊天的菜单独立。
+### 🎬 生视频设置
 
-`/视频` 是 `/生视频` 的别名，`/音频` 是 `/生音频` 的别名；其余参数和交互规则相同，例如 `/视频 首帧`、`/音频 朗读`。
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | 开 | 启用视频生成 |
+| `interface_mode` | `minimax` | `openai_video` / `minimax` / `autodl_native` / `dashscope` / `seedance` / `custom_endpoint` |
+| `base_url` / `api_keys` | 空 | 基础地址与 Key，同一任务的创建和查询使用同一 Key |
+| `model` | `minimax_h3_lightx2v_no_pic` | 关闭自动路由时使用的模型 |
+| `auto_route` / `routes` | 开 | 按材料组合路由，路线字段见下表 |
+| `duration` | 5 | 默认时长（秒） |
+| `resolution` | 480p | 480p / 464p / 720p / 736p / 768p / 832p / 1080p / 1088p / 1440p |
+| `aspect_ratio` | 16:9 | 16:9 / 9:16 / 1:1 / 4:3 / 3:4 / 21:9 / adaptive |
+| `size` | 空 | 精确尺寸（仅 OpenAI Videos），如 `864x480` |
+| `seed` | -1 | 随机种子，-1 不发送 |
+| `generate_audio` / `watermark` | 关 / 关 | Seedance 同时生成音频 / 水印 |
+| `extra_prefix` | `生视频` | 额外触发前缀 |
+| `collection_timeout_seconds` | 120 | 材料录入总时限（秒） |
+| `custom_prompt_need_prefix` / `preset_need_prefix` | 开 / 关 | 同生图 |
+| `enable_llm_tool` | 开 | 启用 `generate_video` |
+| `prompt_list` | 空 | 视频预设，格式 `关键词:提示词` |
+| `poll_interval` / `poll_timeout` | 5 / 900 | 任务查询间隔 / 最长等待（秒），超时保留任务 ID |
+| `result_video_download_timeout` | 300 | 成品下载超时，0 跟随 `timeout` |
+| `video_delivery_retries` | 2 | 下载与发送各自尝试次数（1–5） |
+| `max_video_size_mb` | 100 | 下载大小上限 |
+| `cache_hours` | 24 | 本地视频保留小时数 |
+| `custom_*` | — | 自定义接口，见[配置教程](#自定义视频接口) |
+| `parameter_defaults` | 空 | 板块生成参数默认值 |
 
-用户只回复要修改的选项编号，用空格分隔，例如 `5 8`，其他参数保持当前值。每个参数只能选择一个值；冲突、未知编号或不支持的值整条拒绝，不保存部分结果。保存后仅回复一句确认，编号消息不计入提示词。`0` 退出设置并保留此前已保存的值；菜单中发送 `/生成` 直接使用此前已保存的设置提交；`/设置重置` 清除本次自定义参数。材料变化可能切换路由，最终提交前会再次检查参数，避免把旧模型设置提交给不支持的新模型。
+视频路线：`text_to_video`、`image_to_video`、`first_last_frame`、`first_frame`、`last_frame`、`audio_to_video`、`image_audio_to_video`、`video_to_video`、`image_video_to_video`、`audio_video_to_video`、`image_audio_video_to_video`、`motion_transfer`、`audio_sync`。每条路线字段：
 
-材料读取失败时，`/生成` 会列出错误并提示使用 `/清除失败项`。该操作只清除发起者本次录入的失败记录，保留已成功收集的文字、媒体和详细参数，不延长时限；随后可重新发送失败的材料，再 `/生成`。它不会删除已成功录入的材料，如需全部重来请 `/取消`。
-
-**整个录入过程从启动起共用默认 120 秒，菜单、选择回复和音频类型询问均不暂停或延长。** 音频与视频板块都可配置本板块的总录入时限。
-
-图片指令仍一次性提交，使用管理员默认参数，不从提示词中的比例、画质或尺寸文字提取控制参数。三个函数工具可显式设置参数，无需启动录入流程。
-
-参数优先级统一为：**显式函数工具参数或本次会话设置 > 路线参数默认值 > 对应生成板块默认值 > 上游默认值**。各板块和每条路由增加可选的“生成参数默认值（JSON）”，留空即可；例如 TTS 的 `{"speed": 1.2}` 或视频的 `{"duration": 10, "resolution": "768p"}`。只填写当前模型和协议支持的字段。省略与显式 `0`/`false` 分开处理，不用零值代替“未填写”。
-
-AIGen 的 `get_generation_capabilities(media_type="all")` 函数工具用于查询本插件的 `generate_image`、`generate_video`、`generate_audio` 三个工具，`media_type` 可选 `image`、`video`、`audio`、`all`。它只查询，不创建任务，返回已配置路线、模型、协议、支持的参数、范围/枚举和有效默认值。已知 AutoDL 工作流还返回媒体数量和时长限制；未知模型标明仅确认协议适配器可传字段，不能据此保证服务商模型支持。结果不包含接口地址、Keys、自定义请求头或凭据。该工具与菜单、提交验证共用参数定义。
-
-工具可选参数按协议支持情况使用：
-
-| 工具 | 新增或补齐的控制 |
+| 字段 | 说明 |
 | --- | --- |
-| `generate_image` | 现有尺寸、比例、画质、背景、格式、压缩、数量、保真度和 Responses 动作；Gemini/Chat 的 `temperature`、`top_p`、`seed`、`max_tokens`，Gemini 的 `top_k`；`use_message_media` 控制是否取附带图片 |
-| `generate_video` | 现有时长、比例、分辨率、参考模式、种子、声音；`size`、`watermark`、DashScope 的 `negative_prompt`/`prompt_extend`、Seedance 的 `camera_fixed`/`return_last_frame`/`service_tier`/`draft` |
-| `generate_audio` | `voice`、`speed`、`response_format`、`instructions`、`language`；MiniMax TTS 的 `volume`、`pitch`、`sample_rate`、`bitrate`、`channels`、`emotion`；Chat/Gemini 的 `temperature`、`top_p`、`max_tokens`；IndexTTS-2 的 `emo_control_method`、七项 `emo_*` 强度、`emo_random`、`emo_surprised`；`use_message_media` |
+| `model` | 模型 ID，留空表示该路线未配置 |
+| `long_model` | 时长超过 10 秒时使用的模型（可选） |
+| `interface_mode` / `long_interface_mode` | 接口格式 / 长时模型格式，`inherit` 跟随 |
+| `base_url` / `api_keys` | 本路线地址与 Key（可选） |
+| `resolution` / `aspect_ratio` | 本路线分辨率与比例（可选） |
+| `parameter_defaults` | 本路线生成参数默认值 |
 
-IndexTTS-2 情感强度每项 0–1.4，`emo_surprised` 仅支持字符串 `"0"`。显式设置向量强度时必须选择 `emo_control_method="使用情感向量控制"`；情感参考模式需要两段音频，先音色参考、后情感参考。音色 `voice` 参数统一映射到当前协议，不要求 Bot 记忆不同协议的字段名。自定义接口只支持模板中确实使用的参数占位符，选项值仍按原生 JSON 类型传递。
+### 🎵 生音频设置
 
-## 图片使用
-
-- `/生图 <提示词>`、`/画图 <提示词>`：无图片是文生图，传图片是图生图，支持多图。
-- 指令与 `generate_image` 工具均按上游顺序发送全部返回图片；每张图片独立处理下载和发送失败，不因其中一张失败而丢弃其他图片，能够恢复的公网链接会保留。工具成功只发送图片，普通指令的成功说明整次最多一条。按张计费时使用实际有效成品数量；按次与 Token 规则仍按一次请求结算。
-- 图片和视频预设关键词按完整词匹配：关键词前后必须是消息边界或空白；QQ 的 `@xxx` 消息片段视为空白边界，所以 `手办化`、`1 手办化 2`、`@小明手办化`、`手办化@小明` 可以触发，而 `手办化123`、`123手办化@小明` 不会触发。重叠关键词选最长的。音频条件 TTA 的预设提示词保持原有匹配方式。
-- 自定义提示词默认需要 AstrBot 前缀；关闭对应开关后 `生图 <提示词>` 可以触发。
-- 预设默认无需 AstrBot 前缀；开启对应开关后需要前缀或唤醒机器人。
-- 图片预设只取一图，优先 **引用图片 > 同时发送的图片 > @用户头像 > 发送者头像**。
-- 自定义提示词按消息组件顺序收集引用图片、发送图片、@用户头像，不自动添加发送者头像。
-- `/AI帮助`、`/ai帮助`、`/AI菜单`、`/ai菜单` 显示配置的帮助文字。
-
-图片保留 `openai_image`、`openai_chat`、`openai_response`、`gemini_official`、`custom_endpoint` 五种请求格式。`openai_image` 对应 OpenAI Images API（无图 `/v1/images/generations`、有图 `/v1/images/edits`）；`openai_response` 对应官方 Responses API 的 `/v1/responses` 和 `image_generation` 工具；`gemini_official` 对应 Gemini 官方 `generateContent`。
-
-## 音频使用和自动路由
-
-启动指令为 `/生音频 朗读 [音频类型]` 或 `/生音频 提示词 [音频类型]`，每个参数之间用空格。第一个参数必选，且只能是“朗读”或“提示词”；第二个参数可选“音色克隆”“参考音频生成”“音频编辑”“语音编辑”“音色转换”。仅发送 `/生音频` 时提示选择第一个参数，其他参数明确报错。正文在后续消息中发送。自定义前缀支持多个，默认 `/生音频`。
-
-“朗读”表示把文字原封不动转为音频（TTS），正文中的命令词、标点和参数样式文字也保留；“提示词”表示按描述生成声音（TTA）。随后发送文字、QQ 语音或音频文件，最后 `/生成`；多段文字按顺序用空格合并，收集期间不逐条回复。
-
-- 没有音频：直接按 TTS/TTA 路由，先汇总例如“共收到0图片，0音频，0视频，2段文字，生成中”（TTA 为“2段提示词”），成功只发送音频。
-- 有音频、未指定第二个参数：`/生成` 后询问适用类型，用户直接回复类型名称，不用 `/`。该回复不计入文字段数，然后汇总材料并生成。
-- 已指定第二个参数：`/生成` 后校验并直接提交，不再询问。例如 `/生音频 朗读 音色克隆`、`/生音频 提示词 音频编辑`。
-
-| 路由 | 材料 | 默认模型 |
+| 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| 提示词生音频（TTA） | 提示词，无音频 | 留空 |
-| 文字生音频（TTS） | 要朗读的原文，无音频 | 留空 |
-| 文字＋参考音频（音色克隆） | 原文＋1–3 段参考音频 | `IndexTTS-2` |
-| 提示词＋参考音频（音频条件 TTA） | 提示词＋1–3 段参考音频 | 留空 |
-| 音频编辑 | 编辑指令＋恰好一段原音频 | 留空 |
-| 音色转换 | 恰好两段音频：先原语音，后目标音色；无正文 | 留空 |
-| 语音编辑 | 修改后的文字＋恰好一段原语音 | 留空 |
+| `enabled` | 开 | 启用生音频 |
+| `interface_mode` | `minimax` | `minimax`（工作流 V2）/ `openai_speech` / `openai_chat` / `minimax_speech` / `gemini_official` / `dashscope` / `autodl_native` / `custom_endpoint` |
+| `base_url` / `api_keys` | 空 | 留空跟随生视频 |
+| `model` | 空 | 关闭自动路由时使用的模型 |
+| `auto_route` / `routes` | 开 | 路线 `text_to_audio`、`text_to_speech`、`reference_to_speech`、`reference_to_audio`、`audio_editing`、`voice_conversion`、`speech_editing`；字段：`model`、`interface_mode`、`base_url`、`api_keys`、`voice`、`parameter_defaults` |
+| `extra_prefix` | `生音频` | 额外触发前缀 |
+| `custom_prompt_need_prefix` / `preset_need_prefix` | 开 / 开 | 同生图 |
+| `prompt_list` | 空 | 音频预设（仅音频条件 TTA），格式 `关键词:提示词` |
+| `collection_timeout_seconds` | 120 | 材料录入总时限（秒） |
+| `enable_llm_tool` | 开 | 启用 `generate_audio` |
+| `voice` / `minimax_voice` / `gemini_voice` / `dashscope_voice` | `alloy` / `male-qn-qingse` / `Kore` / `Cherry` | 各协议默认音色 |
+| `response_format` | wav | wav / mp3 / opus / aac / flac / pcm |
+| `speed` | 1.0 | 语速（OpenAI 0.25–4，MiniMax 官方 0.5–2） |
+| `poll_interval` / `poll_timeout` | 5 / 900 | 任务查询间隔 / 最长等待（秒） |
+| `result_audio_download_timeout` | 300 | 成品下载超时（秒） |
+| `audio_delivery_retries` | 2 | 下载与发送各自尝试次数（1–5） |
+| `max_audio_size_mb` / `cache_hours` | 50 / 24 | 下载上限 / 本地缓存小时数 |
+| `parameter_defaults` | 空 | 生成参数默认值，自定义接口的 `adapter` 也写在这里 |
 
-音频路线的用途不同，保留七类配置，并要求所选上游模型或自定义接口支持对应操作：
+## 配置教程
 
-| 方向 | 输入 | 用途 |
+### 触发前缀与预设
+
+- **前缀开关**：「需要 AstrBot 前缀」开启时须发 `/生图 猫` 或 @机器人；关闭后直接发 `生图 猫` 也能触发。
+- **预设列表**：每行一条 `关键词:完整提示词`，例如 `手办化:将图片中的人物制作成精致的 PVC 手办，放在桌面上`。图片、视频、音频的预设分开保存。
+- **自定义前缀**：在 `extra_prefix` 中添加，如 `画画`、`做视频`；内置的 `/生图`、`/生视频`、`/生音频` 始终可用。
+
+### 生成参数默认值（JSON）
+
+优先级：**函数工具参数或本次 `/设置` > 路线默认值 > 板块默认值 > 上游默认值**。只填当前模型支持的字段，留空即可不使用。
+
+```json
+{"duration": 10, "resolution": "768p"}
+```
+
+音频示例：`{"speed": 1.2}`。可让 Bot 调用 `get_generation_capabilities` 函数工具查看各路线支持的参数、范围和默认值（不含地址与 Key）。
+
+### 自定义视频接口
+
+`interface_mode` 选 `custom_endpoint` 后配置：
+
+| 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| 文字＋参考音频音色生音频（音色克隆） | 新的朗读文字＋参考音色 | 用参考音色说出输入文字，不依赖参考音频原来讲了什么 |
-| 提示词＋参考音频音色生音频（音频条件 TTA） | 描述声音的提示词＋参考音频 | 按提示词生成新音频，具体参考音色或风格的能力由模型决定 |
-| 音频编辑 | 编辑指令＋一段原音频 | 对原音频做降噪、音效、背景音乐等编辑；使用 `/生音频 提示词 音频编辑` |
-| 语音编辑 | 修改后的目标文字＋一段原语音 | 编辑语音的文字内容；使用 `/生音频 朗读 语音编辑` |
-| 音色转换 | 原语音＋目标音色，两段音频 | 保留原语音内容并转换说话者音色；不输入正文文字 |
+| `custom_create_path` | `/v1/videos` | 创建路径，可含 `{model}` |
+| `custom_query_path` | `/v1/videos/{task_id}` | 查询路径，必须含 `{task_id}` |
+| `custom_body_template` | OpenAI 风格 | 请求 JSON 模板 |
+| `custom_headers` | `{}` | 额外请求头，Key 由插件以 Bearer 添加 |
+| `custom_id_path` / `custom_status_path` / `custom_url_path` / `custom_error_path` | `id` / `status` / `url` / `error.message` | 响应字段的点路径，支持数组下标如 `output.results.0.url` |
+| `custom_success_status` / `custom_failure_status` | `completed,succeeded,success` / `failed,failure,cancelled,canceled,expired` | 逗号分隔，忽略大小写 |
 
-音色克隆的内容来自新输入的文字；音色转换的内容来自第一段原语音。音频编辑使用“怎么改”的提示词，语音编辑使用“改成什么文字”的目标正文。插件保留独立路由供管理员选择对应模型，不会把未支持编辑或转换的普通 TTS 工作流当作这些能力。
+模板占位符：`{model}`、`{prompt}`、`{duration}`、`{resolution}`、`{ratio}`、`{size}`、`{reference_mode}`、`{image}`、`{images}`、`{audios}`、`{videos}`、`{stream}`。整个值只有一个占位符时保留 JSON 类型（数字、数组等）：
 
-**音频预设提示词仅用于音频条件 TTA。** 在“生音频设置 → 音频预设提示词”添加 `关键词:完整提示词`，例如 `轻声讲述:参考输入音频的音色，生成一段轻声、舒缓且停顿自然的讲述`。预设与图片、视频分别保存，长关键词优先匹配。
+```json
+{"model": "{model}", "prompt": "{prompt}", "seconds": "{duration}", "images": "{images}"}
+```
 
-- 直接发送 `/轻声讲述` 进入音频条件 TTA 的材料录入，随后发送参考音频，最后 `/生成`。已明确路线，不再询问音频类型；缺少参考音频时提示补充，且不会提交任务。
-- 也可先发送 `/生音频 提示词`，在材料中发送 `轻声讲述`、补充说明和参考音频，最后 `/生成`；未在启动时指定类型的，仍按原流程选择“参考音频生成”。选择音频编辑时不会展开预设。
-- 默认要求 AstrBot 前缀或唤醒机器人，可通过“预设关键词需要 AstrBot 前缀”调整。录入阶段仅收集发起者的材料，仍共用启动起的 120 秒时限。
-- 预设展开后只合并为一段提交；消息摘要中的提示词段数仍按用户输入统计。按字符计费时使用最终展开后的文本长度。朗读、音色克隆、无参考音频的 TTA、编辑和音色转换都保留原文。
+### 自定义音频接口
 
-音频的自定义接口高级配置统一填写在“生成参数默认值（可选 JSON）”中。普通生成参数直接放在顶层，自定义接口使用 `adapter` 对象；`adapter` 只供插件适配接口，不会混入上游生成参数，也不会出现在能力查询结果中。未使用自定义接口时可留空。路由中填写的同名值优先于板块值，工具或本次 `/设置` 的生成参数优先级最高。
+在路线或板块的 `parameter_defaults` 中写 `adapter` 对象，各项均可省略；同步接口把 `query_path` 设为 `""`：
 
 ```json
 {
@@ -203,12 +227,7 @@ IndexTTS-2 情感强度每项 0–1.4，`emo_surprised` 仅支持字符串 `"0"`
   "adapter": {
     "create_path": "/v2/video_generation",
     "query_path": "/v2/query/video_generation/{task_id}",
-    "body_template": {
-      "model": "{model}",
-      "prompt": "{prompt}",
-      "audios": "{audios}",
-      "speed": "{speed}"
-    },
+    "body_template": {"model": "{model}", "prompt": "{prompt}", "audios": "{audios}", "speed": "{speed}"},
     "headers": {},
     "id_path": "id",
     "status_path": "status",
@@ -221,81 +240,137 @@ IndexTTS-2 情感强度每项 0–1.4，`emo_surprised` 仅支持字符串 `"0"`
 }
 ```
 
-`adapter` 内各项均可省略，省略时沿用原接口默认值；同步接口将 `query_path` 设为 `""`。`body_template`、`headers` 可以直接填写 JSON 对象，其余字段是字符串，额外状态以逗号分隔。请求体支持 `{model}`、`{text}` / `{prompt}`、`{audios}`、`{audio}`、`{source_audio}`、`{target_audio}`、`{route}` 以及当前接口支持的可选生成参数占位符（如 `{voice}`、`{format}`、`{speed}`）；完整占位符保留数值、布尔、数组等 JSON 类型。响应路径使用 `output.url` 这样的点分路径。JSON、字段类型、材料占位符与模型参数会在提交前校验，错误配置不会创建收费任务。
+占位符：`{model}`、`{text}`/`{prompt}`、`{audios}`、`{audio}`、`{source_audio}`、`{target_audio}`、`{route}`，以及 `{voice}`、`{format}`、`{speed}` 等生成参数。
 
-生音频主地址、Keys 留空时跟随生视频设置，其余参数独立。每条音频路由可单独配置模型、接口格式、地址、Keys、对应协议音色及可选参数默认值：
+## 计费、余额与卡密
 
-| 格式 | 请求与产物 |
+在 **插件 → AIGen → 管理中心** 中管理：
+
+- **模型定价**：填写模型 ID 和价格表达式，实时校验并预览各档位价格，可一键套用示例。
+- **卡密管理**：按面额生成 1–100 张卡密、筛选、导出、批量删除（不影响已兑换记录）。
+- **用户与记录**：查看/修改余额（需填原因）、兑换记录、生成账单和管理员操作日志。
+
+规则：
+
+- 未配置价格或价格为 0 的模型免费。价格按最终路由到的模型 ID 精确匹配，长时模型需单独定价。
+- 余额按「平台 + 用户 ID」保存，群聊与私聊共用。单位由管理员自定（如元），保留 6 位小数。
+- 余额 ≤ 0 时不能使用收费模型；固定价格的模型要求余额不少于该价格。按实际用量计费的模型在完成后扣费，余额可能变为负数。
+- 同一用户同一时间只能有一个收费任务。生成失败、取消或无法核验用量时不扣费。
+- 表达式不合法时，该模型会提示「价格设置不合法，请联系管理员配置模型价格。」并停止提交。
+
+### 价格表达式教程
+
+表达式语法与 NewAPI 计费表达式一致，可加 `v1:` 前缀。最外层用 `tier("档位名", 金额)` 包住，档位名会显示在价格预览和账单中。
+
+**1. 按次收费**
+
+```javascript
+tier("base", fixed(0.2))
+```
+
+**2. 按张收费**（图片实际成功张数）
+
+```javascript
+tier("base", u("image_count") * 0.1)
+```
+
+**3. 按成品秒数收费**（视频/音频以成品实测时长为准，无法测量时不收费）
+
+```javascript
+tier("base", u("actual_seconds") * 0.1)
+```
+
+`u("seconds")` 与之相同，但对 `IndexTTS-2` 不足 10 秒按 10 秒计（与 AutoDL 一致）。
+
+**4. 按 Token 收费**（单位是每百万 Token，这里输入 2、输出 8）
+
+```javascript
+tier("base", p * 2 + c * 8)
+```
+
+**5. 按字符收费**（每千字符 0.02）
+
+```javascript
+tier("base", characters * 0.02 / 1000)
+```
+
+**6. 条件档位**：`条件 ? 满足时 : 否则`，可嵌套。
+
+```javascript
+u("resolution") == "768p"
+  ? tier("high", u("seconds") * 0.2)
+  : tier("base", u("seconds") * 0.1)
+```
+
+```javascript
+param("quality") == "high" ? tier("high", 0.3) : tier("base", 0.15)
+```
+
+**7. 分时段价格**（北京时间 0–8 点每秒 0.03，其余时间 0.04；按提交时刻计）
+
+```javascript
+hour("Asia/Shanghai") < 8
+  ? tier("off_peak", u("seconds") * 0.03)
+  : tier("peak", u("seconds") * 0.04)
+```
+
+**8. 按块计费**（每开始 5 秒计 0.2）
+
+```javascript
+tier("base", ceil(u("seconds") / 5) * 0.2)
+```
+
+**9. 长上下文阶梯**（缓存读取单独定价）
+
+```javascript
+len <= 32000
+  ? tier("short", p * 2 + c * 8 + cr * 0.2)
+  : tier("long", p * 4 + c * 12 + cr * 0.4)
+```
+
+> 每个代码块是一条完整表达式，单独粘贴到输入框；数字仅为示例。
+
+可用内容速查：
+
+| 类别 | 写法 | 含义 |
+| --- | --- | --- |
+| 用量 `u()` | `u("requests")` | 请求次数（1） |
+| | `u("seconds")`、`u("actual_seconds")` | 成品秒数（前者含 IndexTTS-2 的 10 秒下限） |
+| | `u("image_count")` | 实际成功图片数 |
+| | `u("resolution")`、`u("quality")` | 本次分辨率、画质 |
+| | `u("orientation")` | `landscape` / `portrait` / `square` |
+| | `u("input_tokens")`、`u("output_tokens")`、`u("total_tokens")` | 上游返回的 Token 数 |
+| Token 变量 | `p`、`c`、`len` | 输入、输出、完整输入长度（每百万计） |
+| | `cr`、`cc`、`cc1h` | 缓存读取、缓存创建、1 小时缓存创建 |
+| | `img`、`img_cr`、`img_o`、`ai`、`ao` | 图片输入/缓存/输出，音频输入/输出 |
+| 其他变量 | `characters` | 文本字符数 |
+| 请求参数 | `param("duration")`、`param("quality")`、`param("voice")` 等 | 本次生效的生成参数 |
+| | `has(param("size"), "1024")` | 字符串包含判断 |
+| 时间 | `hour("Asia/Shanghai")`，同理 `minute`、`weekday`、`month`、`day` | 括号内为 IANA 时区名，按提交时刻计算；`weekday` 周日为 0 |
+| 数学 | `min(a,b)`、`max(a,b)`、`abs`、`ceil`、`floor` | |
+| 运算 | `+ - * / %`、`== != < <= > >=`、`&& \|\| !`、`? :` | |
+
+注意：引用了缓存或图片/音频子类 Token 时，会自动从 `p`/`c` 中扣除，避免重复收费。不支持循环、自定义函数和高级 GJSON 查询，不支持的写法会直接报错。
+
+## 函数工具
+
+| 工具 | 说明 |
 | --- | --- |
-| `minimax` | 工作流 V2 `/v2/video_generation`，查询后接收 audio 产物；支持 New API `IndexTTS-2` |
-| `openai_speech` | OpenAI `/v1/audio/speech`，原文转二进制音频，不接受参考音频 |
-| `openai_chat` | Chat Completions 的 text/audio 输出和 WAV/MP3 input_audio；模型须支持对应方向 |
-| `minimax_speech` | MiniMax 官方 `/v1/t2a_v2`，原文转十六进制音频，不接受参考音频 |
-| `gemini_official` | Gemini AUDIO 输出、音色和 inlineData 音频输入；模型须支持对应方向 |
-| `dashscope` | DashScope Qwen TTS 多模态生成接口，返回音频 URL，不接受参考音频 |
-| `autodl_native` | AutoDL 原生 IndexTTS-2 工作流 |
-| `custom_endpoint` | 自定义 JSON、URL/Base64 产物或异步任务，可接入编辑、转换和其他服务 |
+| `generate_image` | 生图；可设尺寸、比例、画质、背景、格式、数量、`seed`、`temperature` 等，`use_message_media` 控制是否使用消息中的图片 |
+| `generate_video` | 生视频；可设时长、比例、分辨率、参考模式、种子、声音、水印及 DashScope / Seedance 专有参数 |
+| `generate_audio` | 生音频；参数 `text`、`mode`、`audio_type`，可设音色、语速、格式、语言及 MiniMax / IndexTTS-2 情感参数 |
+| `get_generation_capabilities` | 查询已配置路线、模型、支持参数与默认值，`media_type` 为 `image` / `video` / `audio` / `all`，只查询不生成 |
 
-标准 TTS 格式不会静默丢弃参考音频。MiniMax 工作流 V2 没有标准编辑/转换角色，此类路线需选择自定义接口。模板支持 `{model}`、`{text}`/`{prompt}`、`{audios}`、`{audio}`、`{source_audio}`、`{target_audio}`、`{route}`、`{voice}`、`{format}`、`{speed}`；完整占位符保留 JSON 类型，必须传递全部文字和音频。
+工具成功时只发送成品，冷却时间由 `llm_cooldown_seconds` 控制。
 
-材料收集超时默认 120 秒，可配置，从启动起计时；录入材料、/设置和音频类型选择共用这一个截止时间，均不暂停或重置计时。超时主动取消，`/取消` 清空材料，重新启动替换当前收集。音频和视频共用按平台、聊天和用户隔离的收集会话，避免一个 `/生成` 创建两个任务。成功只发送语音；非 WAV 输出使用 AstrBot 媒体工具转换，转换或语音发送失败时尝试发送原音频文件，最终失败才解释原因并提供原结果地址。发送失败不重新生成，提交中断或查询超时保留任务 ID 并提示核对原任务。
+## 交流与反馈
 
-新增 LLM 工具 `generate_audio`，参数为 `text`、`mode`、`audio_type`，引用当前消息的音频材料；有独立启用开关和冷却，成功不附加文字。`generate_image`、`generate_video` 名称保持不变。
+使用问题、Bug 反馈和功能建议欢迎加群交流：
 
-## 生图自动路由
-
-生图设置新增可配置的“文生图”“图生图”方向，无图片走文生图，有图片走图生图。每条路线可独立设置模型、接口格式、地址和 Keys；留空时使用板块默认配置。旧“视频生成进度文案”设置已删除，视频仍发送材料汇总。
-
-## 视频使用和自动路由
-
-视频命令采用材料收集：
-
-1. 发送 `/生视频`、`/生成视频` 或任一配置的视频自定义前缀。也可在启动消息里写提示词或明确的路由关键词。
-2. Bot 回复：`请发送材料，录入阶段发送“/设置”可设置详细参数，最后发送“/生成”开始生成视频，xx秒超时`，其中秒数使用本次收集实际配置的时限，默认显示 `120秒超时`。
-3. 依次发送文字、图片、QQ 语音、视频或对应的媒体文件。多段文字按发送顺序用空格合并成一个提示词；媒体按同类素材的接收顺序保留，重复发送也按不同参数计数。收集期间不逐条回复。
-4. 发送 `/生成`。先校验所有参数与所选模型；有效时只发送一次 `共收到x图片，x音频，x视频，x段提示词，生成中`，再创建任务。提示词按包含实际提示内容的文字消息计数，单独的路由关键词、参数或空白不计入；同一条消息里的多行文字计为一段，提交上游时仍按顺序合成一个提示词。
-5. 成功后只发送视频。失败时发送一段原因说明；生成已成功但下载/发送失败时保留任务和公网地址，可取回结果，不重新生成。
-
-`/取消` 清空当前材料；重新发送视频启动指令会开始新一轮收集。材料缺少或参数有误时保留当前材料，可在原有时限内补充后再次 `/生成`；要删除多余材料，用 `/取消` 后重新开始。插件配置页的 **生视频设置 → 视频材料收集超时（秒）**（`collection_timeout_seconds`）默认 **120 秒**，最小 1 秒。从发送启动指令开始计时，继续发送材料不会重置计时。到时还未 `/生成`，Bot 主动提示取消并清空本次材料，无需用户再发消息；重新开始会获得新的完整时限。截止前收到 `/生成` 时，会等待此前材料读取和参数校验完成；校验失败仍沿用原截止时间，已经过期则取消。这个收集时限与生成任务的轮询等待时间互相独立。每个群同一时间只允许一位用户录入视频或音频材料，录入仅接收发起者消息，其他人普通聊天不被收集。/设置和音频类型选择仍占用录入名额；提交生成、取消或超时即释放名额，后台生成时其他人可以开始下一次录入。各群、平台和私聊独立；一次性生图不占用录入名额，也不被当作视频/音频材料。重复 `/生成` 不会重复创建收费任务；热重载会回收本插件的计时任务。
-
-**普通 `/生视频` 收到的所有图片都作为参考图，与图片数量无关。** 仅显式输入 `首尾帧`、`首帧`、`尾帧`、`动作迁移`、`音频同步` 这些关键词时才触发对应特殊类别；文字参数之间用空格分隔。关键词可放在启动消息里，也可作为收集的第一段文字。以下表格表示整个收集会话的合并参数，所有情况最后都需 `/生成`：
-
-| 合并参数 | 路线 | 默认模型 |
-| --- | --- | --- |
-| 提示词，无媒体 | 文生视频 | `minimax_h3_lightx2v_no_pic` |
-| 提示词 + 1–9 图（全部参考图，含两图） | 图生视频 | `minimax_h3_lightx2v_v5`，超过 10 秒用 `minimax_h3_lightx2v_v5_15s` |
-| `首尾帧` + 提示词 + 恰好两图 | 首尾帧生视频 | `minimax_h3_lightx2v` |
-| `首帧` + 提示词 + 恰好一图 | 首帧生视频 | 留空，管理员配置支持该用途的模型 |
-| `尾帧` + 提示词 + 恰好一图 | 尾帧生视频 | 留空，管理员配置支持该用途的模型 |
-| 提示词 + 1–3 音频，无图/视频 | 音频生视频 | `minimax_h3_image_audio_to_video_v2`，超过 10 秒用对应 `_15s` |
-| 提示词 + 1–9 图 + 1–3 音频，无视频 | 图片＋音频生视频 | 同上 |
-| `动作迁移` + 恰好一图一视频，不能有提示词或音频 | 动作迁移（图片+视频生视频） | `wan2.2-animate-move` |
-| `音频同步` + 恰好一图一音频，不能有提示词或视频 | 音频同步（自动对口型，图片+音频生视频） | `minimax_h3_image_audio_to_video` |
-| 提示词 + 一个或多个视频 | 视频生视频 | 留空，管理员配置 |
-| 提示词 + 一张或多张图 + 一个或多个视频 | 图片＋视频生视频 | 留空，管理员配置 |
-| 提示词 + 一段或多段音频 + 一个或多个视频 | 音频＋视频生视频 | 留空，管理员配置 |
-| 提示词 + 一张或多张图 + 一段或多段音频 + 一个或多个视频 | 图片＋音频＋视频生视频 | 留空，管理员配置 |
-
-音频允许 0–3、图片允许 0–9 的泛化场景中，没有对应素材时按实际组合选择图生或文生类别。包含视频的普通组合不额外规定数量上限；具体模型的能力仍会在提交前校验。任何路线都不会丢弃超出的媒体、截断时长或降低分辨率。空模型会指出应配置的类别，不提交收费任务。
-
-所有自动路由类别默认 **MiniMax V2**。短时/长时模型、对应接口格式、分辨率和比例均可独立配置；长时接口选择“跟随本路线格式”时继承本路线的短时格式。没有长时模型则继续使用短时模型，并校验真实的时长范围。当前 AutoDL New API 只提供 OpenAI Videos 和 MiniMax V2；首帧、尾帧、普通视频重绘等类别保留给实际支持这些输入的服务，需要管理员设置模型。插件保留的六种请求格式不会让上游凭空具备未提供的工作流。
-
-图片、音频、视频既可直接以 QQ 对应消息发送，也可作为文件上传或引用。当前/引用的文件 ID 会通过 OneBot 查询；适配器漏掉文件组件时尝试恢复原消息，失败会阻止提交，避免漏材料。QQ 语音使用 AstrBot 的 `Record.convert_to_file_path()` 转成 WAV，支持宿主的 SILK/AMR 解码；本地媒体编码为标准 Data URL。材料文件不可读、格式不支持或转码失败会在最后说明，不把未读取的媒体当作不存在。普通视频收集不会自动加入 @用户头像或发送者头像。
-
-一条消息或引用中只有部分图片可解析时，同样阻止提交并在 `/生成` 时说明原因，避免把缺图的材料送去付费生成。开启自定义前缀要求后，收集中的 `生视频 ...`、`做视频 ...` 等无前缀文字作为提示词收集，不清空此前材料。`generate_video` 的冷却在读取媒体前预留，参数或材料校验失败会释放预留；热重载也会取消仍在读取材料的工具调用。任务记录写入失败时保留内存中的任务 ID 并继续查询，生成成功仍发送视频；等待失败的提示保留任务 ID，管理员可用此 ID 查询原任务。记录更新采用原子替换，避免失败的更新损坏此前记录。
-
-### 六种视频接口
-
-| 格式 | 创建路径 | 查询路径 |
-| --- | --- | --- |
-| OpenAI Videos | `/v1/videos` | `/v1/videos/{task_id}` |
-| MiniMax V2 | `/v2/video_generation` | `/v2/query/video_generation/{task_id}` |
-| AutoDL | `/api/v1/comfyui/comfyui_workflow/{model}` | `/api/v1/comfyui/comfyui_workflow/result/{task_id}` |
-| DashScope Wan | `/api/v1/services/aigc/image2video/video-synthesis` | `/api/v1/tasks/{task_id}` |
-| Seedance | `/api/v3/contents/generations/tasks` | `/api/v3/contents/generations/tasks/{task_id}` |
-| 自定义路径 | 配置 `custom_create_path` | 配置 `custom_query_path`，必须含 `{task_id}` |
-
-自定义模式还提供 JSON 请求模板、额外请求头、任务 ID/状态/视频 URL/错误字段的 JSON 点路径（支持数组索引），以及成功/失败状态列表。模板占位：`{model}`、`{prompt}`、`{duration}`、`{resolution}`、`{ratio}`、`{size}`、`{reference_mode}`、`{image}`、`{images}`、`{audios}`、`{videos}`、`{stream}`。
+| 吟枢苑✨插件交流群 | 吟枢苑✨吟窝（娱乐群） |
+| :---: | :---: |
+| 群号：529924533 | 群号：1059351824 |
+| <img src="https://raw.githubusercontent.com/yiyinfaith/astrbot_plugin_aigen/main/assets/qq-group-plugin.jpg" alt="插件交流群二维码" width="240" /> | <img src="https://raw.githubusercontent.com/yiyinfaith/astrbot_plugin_aigen/main/assets/qq-group-chat.jpg" alt="娱乐群二维码" width="240" /> |
 
 ## 参考与许可
 
