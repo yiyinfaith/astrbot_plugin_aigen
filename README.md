@@ -21,8 +21,6 @@
 
 **未配置价格的模型和表达式为 0/空的模型免费。** 使用最终路由模型精确匹配，包含长视频模型。余额、卡密面额和模型价格使用管理员统一约定的单位，例如元，金额保留六位小数。之后以 WebUI 保存的价格为准。
 
-固定费用在提交前检查余额是否足够；动态费用只要求当前余额为正，成功后扣完整实际费用。费用超过余额时记为负余额，后续收费请求暂停，充值补足后恢复。同一用户同时只允许一个收费任务，其他用户和免费模型不受此计费限制影响。SQLite 事务保证并发兑换及扣费的一致性。
-
 | 方式 | 价格表达式示例 | 结算依据 |
 | --- | --- | --- |
 | 按次 | `fixed(0.2)` | 每次成功生成 0.2 |
@@ -156,7 +154,7 @@ IndexTTS-2 情感强度每项 0–1.4，`emo_surprised` 仅支持字符串 `"0"`
 - 自定义提示词按消息组件顺序收集引用图片、发送图片、@用户头像，不自动添加发送者头像。
 - `/AI帮助`、`/ai帮助`、`/AI菜单`、`/ai菜单` 显示配置的帮助文字。
 
-图片保留 `openai_image`、`openai_chat`、`openai_response`、`gemini_official`、`custom_endpoint` 五种请求格式。`openai_image` 对应 OpenAI Images API（无图 `/v1/images/generations`、有图 `/v1/images/edits`）；`openai_response` 对应官方 Responses API 的 `/v1/responses` 和 `image_generation` 工具；`gemini_official` 对应 Gemini 官方 `generateContent`。`openai_chat` 只发送标准 Chat Completions 字段，图片输出依赖兼容服务自身，不再混入 Gemini 专用 `image_config` 等扩展字段。
+图片保留 `openai_image`、`openai_chat`、`openai_response`、`gemini_official`、`custom_endpoint` 五种请求格式。`openai_image` 对应 OpenAI Images API（无图 `/v1/images/generations`、有图 `/v1/images/edits`）；`openai_response` 对应官方 Responses API 的 `/v1/responses` 和 `image_generation` 工具；`gemini_official` 对应 Gemini 官方 `generateContent`。
 
 ## 音频使用和自动路由
 
@@ -177,8 +175,6 @@ IndexTTS-2 情感强度每项 0–1.4，`emo_surprised` 仅支持字符串 `"0"`
 | 音频编辑 | 编辑指令＋恰好一段原音频 | 留空 |
 | 音色转换 | 恰好两段音频：先原语音，后目标音色；无正文 | 留空 |
 | 语音编辑 | 修改后的文字＋恰好一段原语音 | 留空 |
-
-`IndexTTS-2` 的实际限制为 1–2 段参考音频（第一段音色，第二段可选情感）和 1–2048 字符原文；使用 MiniMax 工作流 V2 或 AutoDL 原生格式，不发送视频时长和分辨率参数。其他方向默认模型为空，未配置时说明应配置的方向，不提交任务。朗读＋音频默认提供音色克隆及适用时的语音编辑；提示词＋音频提供参考音频生成及适用时的音频编辑；无正文、两段音频可选择音色转换。
 
 音频路线的用途不同，保留七类配置，并要求所选上游模型或自定义接口支持对应操作：
 
@@ -299,9 +295,7 @@ IndexTTS-2 情感强度每项 0–1.4，`emo_surprised` 仅支持字符串 `"0"`
 | Seedance | `/api/v3/contents/generations/tasks` | `/api/v3/contents/generations/tasks/{task_id}` |
 | 自定义路径 | 配置 `custom_create_path` | 配置 `custom_query_path`，必须含 `{task_id}` |
 
-各模式使用各自协议请求体，不混写字段。音频同步在已核对的线上 AutoDL v1.0.27 MiniMax 解码器中使用 `audio_duration`，OpenAI 使用 `seconds`；API 文档同时出现过两种 MiniMax 时长写法，插件以实际解码器可接受的请求为准。六种模式均接受管理员填写的模型 ID；插件不设置模式与模型的白名单。DashScope Wan 会按提示词、图片、音频、视频以及 reference/first_frame/first_last_frame 组合生成 input 字段；上游未开放的组合会由服务端返回明确错误。AutoDL New API 使用工作流 ID，已移除 `MiniMax-H3` / `MiniMax-H3-Max` 旧别名；独立接入其他服务时使用该服务实际支持的模型。
-
-自定义模式还提供 JSON 请求模板、额外请求头、任务 ID/状态/视频 URL/错误字段的 JSON 点路径（支持数组索引），以及成功/失败状态列表。模板占位：`{model}`、`{prompt}`、`{duration}`、`{resolution}`、`{ratio}`、`{size}`、`{reference_mode}`、`{image}`、`{images}`、`{audios}`、`{videos}`、`{stream}`。占位独占一个 JSON 字符串时会保留列表、数字、布尔值类型，避免模板字符串破坏 JSON。
+自定义模式还提供 JSON 请求模板、额外请求头、任务 ID/状态/视频 URL/错误字段的 JSON 点路径（支持数组索引），以及成功/失败状态列表。模板占位：`{model}`、`{prompt}`、`{duration}`、`{resolution}`、`{ratio}`、`{size}`、`{reference_mode}`、`{image}`、`{images}`、`{audios}`、`{videos}`、`{stream}`。
 
 ## 参考与许可
 
