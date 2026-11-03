@@ -52,6 +52,28 @@ class FinanceStoreTest(unittest.TestCase):
     def operation(self):
         return uuid.uuid4().hex
 
+    def test_admin_settles_a_review_order_once(self):
+        store = self.billing.store
+        store.redeem(self.owner, store.create_cards("admin", "10", 1)[0])
+        order = store.begin(self.owner, "video", "m", None, {})
+        store.finish(order, None, "待核对")
+        operation = self.operation()
+        result = self.finance.settle_order("admin", operation, order, "1.5", "已核对")
+        self.assertEqual((result["charged"], result["status"]), ("1.5", "settled"))
+        # A browser retry returns the original result without charging twice.
+        self.assertEqual(
+            self.finance.settle_order("admin", operation, order, "1.5", "已核对"),
+            result,
+        )
+        self.assertEqual(store.balance(self.owner)[0], 8500000)
+        with self.assertRaises(storage.FinanceConflict):
+            self.finance.settle_order("admin", self.operation(), order, "0")
+        with self.assertRaises(b.BillingError):
+            self.finance.settle_order("admin", self.operation(), order, "-1")
+        audit = self.finance.listing("audit")["rows"][0]
+        self.assertEqual(audit["kind"], "settle_order")
+        self.assertEqual(audit["result"]["order"], order)
+
     def test_reopening_does_not_compile_prices_at_startup(self):
         with patch.object(
             pricing,

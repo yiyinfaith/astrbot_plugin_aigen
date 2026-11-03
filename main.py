@@ -27,7 +27,7 @@ from astrbot.api.message_components import (
     Record,
     Video,
 )
-from astrbot.api.star import Context, Star, StarTools, register
+from astrbot.api.star import Context, Star, StarTools
 from astrbot.core import AstrBotConfig
 
 from .api_manager import ApiManager, ImageBatch, ImageDownloadError
@@ -73,13 +73,6 @@ from .video_inputs import collect_media, normalize_media_event, text_media
 from .video_router import VideoError, VideoOptions, parse_video_command, select_route
 
 
-@register(
-    "astrbot_plugin_aigen",
-    "yiyinfaith",
-    "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.23",
-    "https://github.com/yiyinfaith/astrbot_plugin_aigen",
-)
 class ImageGeneratorPlugin(Star):
     """Generate images through configured OpenAI-compatible or Gemini APIs."""
 

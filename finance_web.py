@@ -133,6 +133,7 @@ class FinanceWebUI:
             "create-cards",
             "delete-cards",
             "set-balance",
+            "settle-order",
         }
         if (
             request.method not in {"GET", "POST"}
@@ -268,6 +269,15 @@ class FinanceWebUI:
             elif action == "delete-cards":
                 result = await self._work(
                     self.finance.delete_cards, actor, operation, payload.get("codes")
+                )
+            elif action == "settle-order":
+                result = await self._work(
+                    self.finance.settle_order,
+                    actor,
+                    operation,
+                    payload.get("order_id"),
+                    payload.get("amount"),
+                    payload.get("note", ""),
                 )
             else:
                 result = await self._work(

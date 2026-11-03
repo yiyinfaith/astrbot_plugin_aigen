@@ -39,6 +39,7 @@ REQUEST_NAMES = {
     "model",
 }
 USAGE_NAMES = {"seconds", "input_tokens", "output_tokens", "total_tokens"}
+REVIEW_NOTE = "任务已提交上游但插件被重载或中断，待管理员核对上游结果后结算"
 CURRENT: ContextVar = ContextVar("aigen_billing", default=None)
 
 
@@ -371,11 +372,24 @@ class BillingStore:
                     "INSERT INTO balances SELECT owner,amount FROM balances_before_actual_billing"
                 )
                 db.execute("DROP TABLE balances_before_actual_billing")
-            # Old holds and interrupted requests have no usable completed result.
-            # Release them exactly once; never charge a late/recovered failure.
+            # Legacy holds and requests interrupted before submission are
+            # released once. A request already submitted upstream may still be
+            # billed there, so it waits for an administrator instead.
             for row in db.execute(
-                "SELECT * FROM orders WHERE status IN ('reserved','running','review')"
+                "SELECT * FROM orders WHERE status IN ('reserved','running') OR (status='review' AND reserved>0)"
             ).fetchall():
+                try:
+                    result = json.loads(row["details"]).get("result", {})
+                    state, task_id = result.get("state"), result.get("task_id")
+                except (ValueError, TypeError, AttributeError):
+                    state, task_id = "", ""
+                if row["status"] == "running" and state in {"submitted", "completed"}:
+                    note = REVIEW_NOTE + (f"；上游任务 {task_id}" if task_id else "")
+                    db.execute(
+                        "UPDATE orders SET status='review',note=? WHERE id=?",
+                        (note, row["id"]),
+                    )
+                    continue
                 db.execute(
                     "UPDATE balances SET amount=amount+? WHERE owner=?",
                     (row["reserved"], row["owner"]),
@@ -1073,6 +1087,7 @@ async def billed_call(
         note = ""
         charge = None
         facts = {}
+        review = False
         if usage.state == "completed" and not isinstance(error, asyncio.CancelledError):
             # Probe only local completed artifacts; never download again for billing.
             path = getattr(result, "path", None)
@@ -1110,9 +1125,15 @@ async def billed_call(
                     pass
                 except asyncio.CancelledError as exc:
                     error = exc
+        if isinstance(error, asyncio.CancelledError) and usage.state in {
+            "submitted",
+            "completed",
+        }:
+            # Hot reload or shutdown after submission: the upstream may still
+            # finish and bill. Leave the result for an administrator to settle.
+            note, review = REVIEW_NOTE, True
+        elif usage.state == "completed":
             try:
-                if isinstance(error, asyncio.CancelledError):
-                    raise BillingError("生成在结算前取消，本次不扣费")
                 facts = {**values.get("_usage", {}), **usage.values}
                 if "total_tokens" in usage.values:
                     facts["tokens"] = usage.values["total_tokens"]
@@ -1155,8 +1176,10 @@ async def billed_call(
             logger.exception(
                 "Could not settle billing order %s; no charge recorded", order
             )
-            charge = None
-        if charge is None:
+            charge, review = None, False
+        if charge is None and review:
+            logger.warning("Billing order %s awaits administrator review", order)
+        elif charge is None:
             logger.warning(
                 "Billing order %s could not be settled; no charge recorded", order
             )

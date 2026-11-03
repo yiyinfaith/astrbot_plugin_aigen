@@ -122,6 +122,39 @@ class ImageInputOrderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, [b"image:https://quoted"])
         self.assertEqual(self.avatars_requested, [])
 
+    async def test_user_text_urls_cannot_reach_loopback_or_private_hosts(self):
+        from aiohttp import web
+
+        hits = []
+
+        async def handle(request):
+            hits.append(request.path)
+            return web.Response(body=b"x", content_type="image/png")
+
+        app = web.Application()
+        app.router.add_get("/a.png", handle)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        manager = ImageManager({})
+        try:
+            self.assertIsNone(
+                await manager.load_user_url(f"http://127.0.0.1:{port}/a.png")
+            )
+            self.assertIsNone(
+                await manager.load_user_url(f"http://localhost:{port}/a.png")
+            )
+            self.assertEqual(hits, [])
+        finally:
+            await runner.cleanup()
+        utils = importlib.import_module(PACKAGE + ".utils")
+        for address in ("10.0.0.1", "192.168.1.2", "169.254.169.254", "::1"):
+            self.assertFalse(utils.is_public_ip(address), address)
+        self.assertTrue(utils.is_public_ip("8.8.8.8"))
+        await utils.ensure_public_url("https://8.8.8.8/a.png")
+
     async def test_quoted_image_fetched_by_message_id_is_collected(self):
         async def no_refs(event, segment):
             return []

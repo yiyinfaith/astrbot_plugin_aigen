@@ -1,7 +1,13 @@
-import re
+import asyncio
+import ipaddress
 import json
+import re
+import socket
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+import aiohttp
+import aiohttp.abc
 
 _API_VERSION_SEGMENT = re.compile(r"^v\d+(?:(?:alpha|beta)\d*)?$", re.IGNORECASE)
 MAX_IMAGE_BYTES = 100 * 1024 * 1024
@@ -123,6 +129,66 @@ async def read_image_response(response) -> bytes:
             raise ValueError("图片超过 100MB 下载上限。")
         data.extend(chunk)
     return bytes(data)
+
+
+def is_public_ip(value: str) -> bool:
+    """Return whether an address is globally routable (not loopback/LAN/etc.)."""
+    try:
+        address = ipaddress.ip_address(str(value).split("%", 1)[0])
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    if mapped is not None:
+        address = mapped
+    return address.is_global and not address.is_multicast
+
+
+async def ensure_public_url(url: str) -> None:
+    """Reject user-supplied URLs that point at the bot host or a private network.
+
+    Args:
+        url: An HTTP(S) URL taken from untrusted message text.
+
+    Raises:
+        ValueError: If the scheme is unsupported or any resolved address is private.
+    """
+    parts = urlsplit(str(url or ""))
+    host = parts.hostname or ""
+    if parts.scheme not in {"http", "https"} or not host:
+        raise ValueError("图片链接必须是 http(s) 公网地址。")
+    try:
+        ipaddress.ip_address(host)
+        addresses = [host]
+    except ValueError:
+        try:
+            infos = await asyncio.get_running_loop().getaddrinfo(
+                host, parts.port or (443 if parts.scheme == "https" else 80)
+            )
+        except OSError as exc:
+            raise ValueError("图片链接的域名无法解析。") from exc
+        addresses = [info[4][0] for info in infos]
+    if not addresses or not all(is_public_ip(address) for address in addresses):
+        raise ValueError("出于安全考虑，不读取指向本机或内网地址的图片链接。")
+
+
+class PublicResolver(aiohttp.abc.AbstractResolver):
+    """Resolve hostnames but only connect to globally routable addresses."""
+
+    def __init__(self):
+        self._resolver = aiohttp.DefaultResolver()
+
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        records = [
+            record
+            for record in await self._resolver.resolve(host, port, family)
+            if is_public_ip(record["host"])
+        ]
+        if not records:
+            raise OSError("出于安全考虑，不读取指向本机或内网地址的图片链接。")
+        return records
+
+    async def close(self):
+        await self._resolver.close()
 
 
 def norm_id(raw_id: Any) -> str:

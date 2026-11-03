@@ -31,7 +31,7 @@ class ConfigSchemaTest(unittest.TestCase):
             self.assertNotIn("result_video_download_retries", settings)
             self.assertNotIn("download_retries", settings)
         self.assertNotIn("billing_prices", self.defaults["global_settings"])
-        self.assertEqual(self.defaults["global_settings"]["help_text"], "")
+        self.assertIn("/AI余额", self.defaults["global_settings"]["help_text"])
         self.assertNotIn("_config_layout_version", self.defaults)
         self.assertNotIn("custom_create_path", self.defaults["audio_settings"])
 

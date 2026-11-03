@@ -10,8 +10,19 @@ from PIL import Image as PILImage
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import At, Image, Reply
 from astrbot.api import logger
-from .utils import MAX_IMAGE_BYTES, read_image_response
+from contextvars import ContextVar
+from urllib.parse import urljoin
+
+from .utils import (
+    MAX_IMAGE_BYTES,
+    PublicResolver,
+    ensure_public_url,
+    read_image_response,
+)
 from .config_manager import media_attempts
+
+# Set while loading an image URL typed by a user, which must stay on the internet.
+_PUBLIC_ONLY: ContextVar[bool] = ContextVar("aigen_public_only", default=False)
 
 
 class ImageManager:
@@ -24,6 +35,8 @@ class ImageManager:
         self, url: str, timeout: Optional[int] = None
     ) -> bytes | None:
         """通用下载逻辑"""
+        if _PUBLIC_ONLY.get():
+            return await self._download_public_image(url, timeout)
         for i in range(self.max_retries + 1):
             try:
                 async with aiohttp.ClientSession() as session:
@@ -38,6 +51,56 @@ class ImageManager:
                 if i < self.max_retries:
                     await asyncio.sleep(1)
         return None
+
+    async def _download_public_image(
+        self, url: str, timeout: Optional[int] = None
+    ) -> bytes | None:
+        """Download a user-typed URL, re-checking every redirect hop.
+
+        Without a proxy the connector also filters resolved addresses, so a
+        hostname cannot switch to a private IP between the check and connect.
+        """
+        for i in range(self.max_retries + 1):
+            resolver = None if self.proxy else PublicResolver()
+            try:
+                connector = (
+                    aiohttp.TCPConnector(resolver=resolver) if resolver else None
+                )
+                async with aiohttp.ClientSession(connector=connector) as session:
+                    current = url
+                    for _hop in range(6):
+                        await ensure_public_url(current)
+                        async with session.get(
+                            current,
+                            proxy=self.proxy,
+                            timeout=timeout or self.timeout,
+                            allow_redirects=False,
+                        ) as resp:
+                            location = resp.headers.get("Location")
+                            if resp.status in {301, 302, 303, 307, 308} and location:
+                                current = urljoin(current, location)
+                                continue
+                            resp.raise_for_status()
+                            return await read_image_response(resp)
+                    raise ValueError("图片链接重定向次数过多。")
+            except ValueError as exc:
+                logger.warning("User image URL rejected: %s", exc)
+                return None
+            except Exception:
+                if i < self.max_retries:
+                    await asyncio.sleep(1)
+            finally:
+                if resolver is not None:
+                    await resolver.close()
+        return None
+
+    async def load_user_url(self, src: str) -> bytes | None:
+        """Load an image URL from message text with private addresses blocked."""
+        token = _PUBLIC_ONLY.set(True)
+        try:
+            return await self.load_bytes(src)
+        finally:
+            _PUBLIC_ONLY.reset(token)
 
     def _optimize_output_image_sync(self, raw: bytes) -> bytes:
         """对结果图做更积极的发送前压缩，降低平台上传耗时。"""
@@ -794,13 +857,14 @@ class ImageManager:
 
         chain = self._event_chain(event)
 
-        def add_image_task(source: str, bucket: list):
+        def add_image_task(source: str, bucket: list, *, user_text: bool = False):
             if not self._is_probably_valid_source(source):
                 return False
             # Keep the loader lazy so lower-priority sources are not opened
             # when a higher-priority source already satisfied a single-image
-            # request.
-            task = lambda source=source: self.load_bytes(source)
+            # request. URLs typed by users may only reach public addresses.
+            loader = self.load_user_url if user_text else self.load_bytes
+            task = lambda source=source, loader=loader: loader(source)
             bucket.append(task)
             ordered_tasks.append(task)
             return True
@@ -837,7 +901,7 @@ class ImageManager:
             add_text_mentions(text)
             for source in list(pending_extra_sources):
                 if source and source in text:
-                    add_image_task(source, message_tasks)
+                    add_image_task(source, message_tasks, user_text=True)
                     pending_extra_sources.remove(source)
 
         async def image_source(segment) -> str | None:
@@ -916,7 +980,7 @@ class ImageManager:
 
         # 文本中的图片 URL 属于发送者主动提供的图片，加入“发送图片”来源。
         for source in pending_extra_sources:
-            add_image_task(source, message_tasks)
+            add_image_task(source, message_tasks, user_text=True)
 
         async def resolve(tasks: list) -> list[bytes]:
             if not tasks:
