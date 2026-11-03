@@ -93,61 +93,7 @@ AstrBot 的生图、生视频、生音频插件：按输入材料自动选择路
 - **预设列表**：每行一条 `关键词:完整提示词`，例如 `手办化:将图片中的人物制作成精致的 PVC 手办，放在桌面上`。图片、视频、音频的预设分开保存。
 - **自定义前缀**：在 `extra_prefix` 中添加，如 `画画`、`做视频`；内置的 `/生图`、`/生视频`、`/生音频` 始终可用。
 
-### 生成参数默认值（JSON）
-
-优先级：**函数工具参数或本次 `/设置` > 路线默认值 > 板块默认值 > 上游默认值**。只填当前模型支持的字段，留空即可不使用。
-
-```json
-{"duration": 10, "resolution": "768p"}
-```
-
-音频示例：`{"speed": 1.2}`。可让 Bot 调用 `get_generation_capabilities` 函数工具查看各路线支持的参数、范围和默认值（不含地址与 Key）。
-
-### 自定义视频接口
-
-`interface_mode` 选 `custom_endpoint` 后配置：
-
-| 参数 | 默认 | 说明 |
-| --- | --- | --- |
-| `custom_create_path` | `/v1/videos` | 创建路径，可含 `{model}` |
-| `custom_query_path` | `/v1/videos/{task_id}` | 查询路径，必须含 `{task_id}` |
-| `custom_body_template` | OpenAI 风格 | 请求 JSON 模板 |
-| `custom_headers` | `{}` | 额外请求头，Key 由插件以 Bearer 添加 |
-| `custom_id_path` / `custom_status_path` / `custom_url_path` / `custom_error_path` | `id` / `status` / `url` / `error.message` | 响应字段的点路径，支持数组下标如 `output.results.0.url` |
-| `custom_success_status` / `custom_failure_status` | `completed,succeeded,success` / `failed,failure,cancelled,canceled,expired` | 逗号分隔，忽略大小写 |
-
-模板占位符：`{model}`、`{prompt}`、`{duration}`、`{resolution}`、`{ratio}`、`{size}`、`{reference_mode}`、`{image}`、`{images}`、`{audios}`、`{videos}`、`{stream}`。整个值只有一个占位符时保留 JSON 类型（数字、数组等）：
-
-```json
-{"model": "{model}", "prompt": "{prompt}", "seconds": "{duration}", "images": "{images}"}
-```
-
-### 自定义音频接口
-
-在路线或板块的 `parameter_defaults` 中写 `adapter` 对象，各项均可省略；同步接口把 `query_path` 设为 `""`：
-
-```json
-{
-  "speed": 1.2,
-  "adapter": {
-    "create_path": "/v2/video_generation",
-    "query_path": "/v2/query/video_generation/{task_id}",
-    "body_template": {"model": "{model}", "prompt": "{prompt}", "audios": "{audios}", "speed": "{speed}"},
-    "headers": {},
-    "id_path": "id",
-    "status_path": "status",
-    "url_path": "url",
-    "error_path": "error.message",
-    "base64_path": "audio_base64",
-    "success_status": "done,finished",
-    "failure_status": "aborted"
-  }
-}
-```
-
-占位符：`{model}`、`{text}`/`{prompt}`、`{audios}`、`{audio}`、`{source_audio}`、`{target_audio}`、`{route}`，以及 `{voice}`、`{format}`、`{speed}` 等生成参数。
-
-## 计费、余额与卡密
+### 计费、余额与卡密
 
 在 **插件 → AIGen → 管理中心** 中管理：
 
@@ -256,6 +202,60 @@ len <= 32000
 | 运算 | `+ - * / %`、`== != < <= > >=`、`&& \|\| !`、`? :` | |
 
 注意：引用了缓存或图片/音频子类 Token 时，会自动从 `p`/`c` 中扣除，避免重复收费。不支持循环、自定义函数和高级 GJSON 查询，不支持的写法会直接报错。
+
+### 生成参数默认值（JSON）
+
+优先级：**函数工具参数或本次 `/设置` > 路线默认值 > 板块默认值 > 上游默认值**。只填当前模型支持的字段，留空即可不使用。
+
+```json
+{"duration": 10, "resolution": "768p"}
+```
+
+音频示例：`{"speed": 1.2}`。可让 Bot 调用 `get_generation_capabilities` 函数工具查看各路线支持的参数、范围和默认值（不含地址与 Key）。
+
+### 自定义视频接口
+
+`interface_mode` 选 `custom_endpoint` 后配置：
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `custom_create_path` | `/v1/videos` | 创建路径，可含 `{model}` |
+| `custom_query_path` | `/v1/videos/{task_id}` | 查询路径，必须含 `{task_id}` |
+| `custom_body_template` | OpenAI 风格 | 请求 JSON 模板 |
+| `custom_headers` | `{}` | 额外请求头，Key 由插件以 Bearer 添加 |
+| `custom_id_path` / `custom_status_path` / `custom_url_path` / `custom_error_path` | `id` / `status` / `url` / `error.message` | 响应字段的点路径，支持数组下标如 `output.results.0.url` |
+| `custom_success_status` / `custom_failure_status` | `completed,succeeded,success` / `failed,failure,cancelled,canceled,expired` | 逗号分隔，忽略大小写 |
+
+模板占位符：`{model}`、`{prompt}`、`{duration}`、`{resolution}`、`{ratio}`、`{size}`、`{reference_mode}`、`{image}`、`{images}`、`{audios}`、`{videos}`、`{stream}`。整个值只有一个占位符时保留 JSON 类型（数字、数组等）：
+
+```json
+{"model": "{model}", "prompt": "{prompt}", "seconds": "{duration}", "images": "{images}"}
+```
+
+### 自定义音频接口
+
+在路线或板块的 `parameter_defaults` 中写 `adapter` 对象，各项均可省略；同步接口把 `query_path` 设为 `""`：
+
+```json
+{
+  "speed": 1.2,
+  "adapter": {
+    "create_path": "/v2/video_generation",
+    "query_path": "/v2/query/video_generation/{task_id}",
+    "body_template": {"model": "{model}", "prompt": "{prompt}", "audios": "{audios}", "speed": "{speed}"},
+    "headers": {},
+    "id_path": "id",
+    "status_path": "status",
+    "url_path": "url",
+    "error_path": "error.message",
+    "base64_path": "audio_base64",
+    "success_status": "done,finished",
+    "failure_status": "aborted"
+  }
+}
+```
+
+占位符：`{model}`、`{text}`/`{prompt}`、`{audios}`、`{audio}`、`{source_audio}`、`{target_audio}`、`{route}`，以及 `{voice}`、`{format}`、`{speed}` 等生成参数。
 
 ## 函数工具
 
