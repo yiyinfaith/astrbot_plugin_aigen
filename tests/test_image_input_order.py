@@ -122,6 +122,19 @@ class ImageInputOrderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, [b"image:https://quoted"])
         self.assertEqual(self.avatars_requested, [])
 
+    async def test_quoted_image_fetched_by_message_id_is_collected(self):
+        async def no_refs(event, segment):
+            return []
+
+        async def fetch(context, message_id):
+            return [Image("https://fetched")]
+
+        self.manager._load_quoted_image_refs = no_refs
+        self.manager._fetch_reply_components = fetch
+        event = FakeEvent([Reply(reply_id="42")])
+        result = await self.manager.extract_images_from_event(event, context=event)
+        self.assertEqual(result, [b"image:https://fetched"])
+
     async def test_single_image_falls_back_to_sender_avatar(self):
         result = await self.manager.extract_images_from_event(
             FakeEvent([]), max_images=1, include_sender_avatar=True

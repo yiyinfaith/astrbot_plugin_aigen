@@ -77,7 +77,7 @@ from .video_router import VideoError, VideoOptions, parse_video_command, select_
     "astrbot_plugin_aigen",
     "yiyinfaith",
     "统一图片、视频、音频生成与关键词预设插件",
-    "1.4.22",
+    "1.4.23",
     "https://github.com/yiyinfaith/astrbot_plugin_aigen",
 )
 class ImageGeneratorPlugin(Star):
@@ -1196,7 +1196,7 @@ class ImageGeneratorPlugin(Star):
         if error := self._register_user(event):
             return [Plain(error)]
         if key in self._video_busy:
-            return [Plain("已有视频任务正在生成，请等待结果，勿重复提交。")]
+            return [Plain("已有生成任务正在运行，请等待结果，勿重复提交。")]
         raw = self._event_message_text(event)
         control = (
             self._clean_message(raw) if self._has_astrbot_prefix(event, raw) else ""
@@ -1278,7 +1278,9 @@ class ImageGeneratorPlugin(Star):
                 # A finish command may have been queued while an earlier upload was
                 # resolving. Verify ownership again before accepting/submitting it.
                 if self._video_collections.get(key) is not collection:
-                    return [Plain("材料已提交或取消，请等待结果或重新发送 /生视频。")]
+                    return [
+                        Plain(f"材料已提交或取消，请等待结果或重新发送 /生{label}。")
+                    ]
                 if start:
                     try:
                         await event.send(
@@ -1825,7 +1827,7 @@ class ImageGeneratorPlugin(Star):
         expiry = str(expiry or "").strip()
         if expiry:
             return f"链接失效时间：{expiry}"
-        return "链接失效时间：AutoDL 未返回明确时间，请以 AutoDL 上游链接有效期为准"
+        return "链接失效时间：上游未返回明确时间，请以上游链接有效期为准"
 
     async def _deliver_video_fallback(
         self,
@@ -1983,6 +1985,9 @@ class ImageGeneratorPlugin(Star):
         if not self.video_conf.get("enable_llm_tool", True):
             yield "视频生成函数工具已停用。"
             return
+        if not self.video_conf.get("enabled", True):
+            yield "视频生成功能已关闭。"
+            return
         if self._terminating:
             yield "视频插件正在重载，请稍后再试。"
             return
@@ -2033,6 +2038,11 @@ class ImageGeneratorPlugin(Star):
                     audios, videos = await collect_media(media_event, self.img_mgr)
                 else:
                     images, audios, videos = [], [], []
+                # Validate route, model and materials before keeping the cooldown.
+                self._refresh_model_capabilities()
+                self.video_mgr.prepare(
+                    options.prompt, images, audios, videos, options=options
+                )
             except (VideoError, ValueError, TypeError, OSError) as exc:
                 if self._llm_last_call.get(uid) == claimed_at:
                     self._llm_last_call.pop(uid, None)
@@ -2179,6 +2189,9 @@ class ImageGeneratorPlugin(Star):
         ):
             yield "音频模式或类型无效。"
             return
+        if self._terminating:
+            yield "音频插件正在重载，请稍后再试。"
+            return
         cooldown_key = self._tool_cooldown_key(event, "audio")
         cooldown = max(0, int(self.audio_conf.get("llm_cooldown_seconds", 60)))
         if (
@@ -2191,23 +2204,32 @@ class ImageGeneratorPlugin(Star):
         if key in self._video_busy:
             yield "已有生成任务正在运行，请等待结果。"
             return
-        self._llm_last_call[cooldown_key] = monotonic()
+        claimed_at = monotonic()
+        self._llm_last_call[cooldown_key] = claimed_at
         self._video_busy.add(key)
         task = asyncio.current_task()
         self._video_generation_tasks.add(task)
         try:
-            if use_message_media:
-                _, images, audios, videos = await self._video_command_inputs(
-                    event, "", "自定义"
-                )
-            else:
-                images, audios, videos = [], [], []
-            if images or videos:
-                yield "生音频不接受图片或视频。"
+            try:
+                if use_message_media:
+                    _, images, audios, videos = await self._video_command_inputs(
+                        event, "", "自定义"
+                    )
+                else:
+                    images, audios, videos = [], [], []
+                if images or videos:
+                    raise VideoError("生音频不接受图片或视频。")
+                options = parse_audio_materials([text], mode)
+                options.route = AUDIO_TYPES.get(audio_type, "")
+                options.parameters = parameters
+                self._refresh_model_capabilities()
+                self.audio_mgr.prepare(options, audios)
+            except (VideoError, ValueError, TypeError, OSError) as exc:
+                # Nothing was submitted; release the reservation like other tools.
+                if self._llm_last_call.get(cooldown_key) == claimed_at:
+                    self._llm_last_call.pop(cooldown_key, None)
+                yield str(exc)
                 return
-            options = parse_audio_materials([text], mode)
-            options.route = AUDIO_TYPES.get(audio_type, "")
-            options.parameters = parameters
             result = await self._generate_audio(event, options, audios, tool_call=True)
             if result:
                 yield "\n".join(part.text for part in result if isinstance(part, Plain))
@@ -2309,6 +2331,8 @@ class ImageGeneratorPlugin(Star):
         if not prompt and images:
             prompt = "请根据参考图片生成一张高质量图片，保留主体特征并自然完成画面。"
         if not prompt:
+            if self._llm_last_call.get(uid) == now:
+                self._llm_last_call.pop(uid, None)
             yield "请提供图片生成或编辑提示词，或在消息中附带参考图片。"
             return
 
@@ -2346,6 +2370,8 @@ class ImageGeneratorPlugin(Star):
                     self.conf, images, str(self.conf.get("model") or "nano-banana")
                 )
             except VideoError as exc:
+                if self._llm_last_call.get(uid) == now:
+                    self._llm_last_call.pop(uid, None)
                 yield str(exc)
                 return
             try:
@@ -2436,6 +2462,8 @@ class ImageGeneratorPlugin(Star):
         if error := self._register_user(event):
             await event.send(event.chain_result([Plain(error)]))
             return
-        text = str(self.conf.get("help_text", ""))
+        text = str(self.conf.get("help_text", "") or "").strip()
+        if not text:
+            text = "管理员尚未配置帮助内容，请在插件配置的“全局设置 → 帮助”中填写。"
         event.stop_event()
         await self._send_settings_menu(event, [text], title="AI帮助")

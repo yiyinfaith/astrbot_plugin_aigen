@@ -714,7 +714,7 @@ class ImageManager:
                 try:
                     if Path(src).is_file():
                         is_local_file = True
-                except:
+                except (OSError, ValueError):
                     pass
 
             if src.startswith("http"):
@@ -881,14 +881,15 @@ class ImageManager:
                             f"Reply chain empty/no-image, fetching message_id: {seg.id}"
                         )
                         components = await self._fetch_reply_components(context, seg.id)
-
-                        for comp in components:
-                            if self._is_image_component(comp):
-                                source = image_source(comp)
-                                if source:
-                                    add_image_task(source, quoted_tasks)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         logger.warning(f"Failed to fetch reply message {seg.id}: {e}")
+                        components = []
+                    for comp in components:
+                        if self._is_image_component(comp):
+                            # Strict requests must report unreadable quoted images.
+                            source = await image_source(comp)
+                            if source:
+                                add_image_task(source, quoted_tasks)
 
             elif self._is_image_component(seg):
                 source = await image_source(seg)

@@ -338,7 +338,7 @@ class ApiManager:
                             deep_url = find_url(args)
                             if deep_url:
                                 return deep_url
-                        except:
+                        except Exception:  # noqa: BLE001
                             pass
 
                         # 尝试1: 字符串正则查找 base64 (优先找base64，因为它最明确)
@@ -1123,7 +1123,7 @@ class ApiManager:
                                     continue
                                 return f"Images API edits endpoint unsupported {resp.status}: {err_msg} | URL: {url}"
                             return f"Images API Multipart Error {resp.status}: {err_msg} | URL: {url}"
-                        except:
+                        except Exception:  # noqa: BLE001
                             if (
                                 has_input_image
                                 and self._is_images_edits_unsupported_error(resp_text)
@@ -1328,7 +1328,7 @@ class ApiManager:
                                 )
                             else:
                                 err_msg = json.dumps(err_json, ensure_ascii=False)
-                        except:
+                        except Exception:  # noqa: BLE001
                             pass
 
                         if has_input_image and self._is_images_edits_unsupported_error(
@@ -2385,7 +2385,7 @@ class ApiManager:
                                         extracted_urls.append(image_url["url"])
                                 if "url" in chunk and isinstance(chunk["url"], str):
                                     extracted_urls.append(chunk["url"])
-                            except:
+                            except Exception:  # noqa: BLE001
                                 pass
 
                     if valid_stream:
@@ -2427,7 +2427,7 @@ class ApiManager:
                                             return json.dumps(
                                                 chunk["error"], ensure_ascii=False
                                             )
-                                    except:
+                                    except Exception:  # noqa: BLE001
                                         pass
                     else:
                         return f"数据解析失败: 看起来是流式数据但无法解析. 内容: {resp_text[:100]}..."

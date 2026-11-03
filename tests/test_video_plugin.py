@@ -213,7 +213,9 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.plugin.conf = {"model": "image", "llm_cooldown_seconds": 0}
         self.plugin.video_conf = {"model": "video", "llm_cooldown_seconds": 0}
         self.plugin.audio_conf = {"model": "audio", "llm_cooldown_seconds": 0}
-        self.plugin.audio_mgr = SimpleNamespace(_session=None)
+        self.plugin.audio_mgr = SimpleNamespace(
+            _session=None, prepare=lambda *args, **kwargs: None
+        )
         self.plugin._llm_last_call = {}
         self.plugin._video_collections = {}
         self.plugin._video_busy = set()
@@ -300,6 +302,50 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         result = await call()
         self.assertIn("正在重载", result[0])
         self.plugin.video_mgr.generate.assert_not_awaited()
+
+    async def test_unsupported_tool_materials_release_video_cooldown(self):
+        self.plugin.video_conf["llm_cooldown_seconds"] = 60
+
+        def reject(*args, **kwargs):
+            raise router.VideoError("首尾帧需要恰好 2 张图片")
+
+        self.plugin.video_mgr.prepare = reject
+        result = [x async for x in self.plugin.generate_video(Event([]), prompt="猫")]
+        self.assertIn("恰好 2 张", result[0])
+        self.assertFalse(self.plugin._llm_last_call)
+        self.plugin.video_mgr.generate.assert_not_awaited()
+
+    async def test_audio_tool_reports_unreadable_media_and_releases_cooldown(self):
+        self.plugin.audio_conf["llm_cooldown_seconds"] = 60
+        self.plugin._video_command_inputs = AsyncMock(
+            side_effect=router.VideoError("QQ 语音读取或转码失败")
+        )
+        result = [x async for x in self.plugin.generate_audio(Event([]), text="你好")]
+        self.assertIn("转码失败", result[0])
+        self.assertFalse(self.plugin._llm_last_call)
+        self.assertFalse(self.plugin._video_busy)
+
+    async def test_image_tool_without_prompt_or_media_releases_cooldown(self):
+        self.plugin.conf["llm_cooldown_seconds"] = 60
+        result = [
+            x
+            async for x in self.plugin.generate_image(
+                Event([]), use_message_media=False
+            )
+        ]
+        self.assertIn("提示词", result[0])
+        self.assertFalse(self.plugin._llm_last_call)
+
+    async def test_empty_help_text_sends_a_configuration_hint(self):
+        event = Event([])
+        await self.plugin.help_command(event)
+        self.assertIn("尚未配置帮助内容", event.sent[-1][0].text)
+
+    def test_user_text_never_selects_server_local_files(self):
+        sources = utils.extract_image_urls_from_text(
+            r"参考 C:\Users\admin\secret.png 和 https://example.com/a.png"
+        )
+        self.assertEqual(sources, ["https://example.com/a.png"])
 
     async def test_invalid_llm_options_release_cooldown_reservation(self):
         self.plugin.video_conf["llm_cooldown_seconds"] = 60
@@ -849,7 +895,7 @@ class VideoPluginTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             "https://media.test/download-fallback.mp4", event.sent[-1][0].text
         )
-        self.assertIn("AutoDL 未返回明确时间", event.sent[-1][0].text)
+        self.assertIn("上游未返回明确时间", event.sent[-1][0].text)
 
     async def test_media_data_url_type_and_local_magic_validation(self):
         with self.assertRaises(router.VideoError):

@@ -259,22 +259,17 @@ def normalize_api_root(raw_url: Any) -> str:
 
 
 def extract_image_urls_from_text(text: str) -> list[str]:
-    """从文本中提取图片链接和本地文件路径"""
+    """从用户文本中提取公网图片链接。
+
+    用户文本不可信，不提取服务器本地文件路径，避免读取宿主机文件并发送给上游。
+    """
     image_urls = []
 
-    # 本地文件路径 (Windows)
-    local_patterns = [r"[a-zA-Z]:\\[^\s,，。！？\n]+\.(?:jpg|jpeg|png|gif|bmp|webp)"]
-    for pattern in local_patterns:
-        matches = re.findall(pattern, text, re.IGNORECASE)
-        for match in matches:
-            if match and match not in image_urls:
-                image_urls.append(match)
-
-    # 网络 URL
+    # 网络 URL；结尾断言需单独允许字符串末尾（字符集中的 $ 只是普通字符）。
     url_patterns = [
-        r'https?://[^\s<>"\'\)]+\.(?:jpg|jpeg|png|gif|bmp|webp)(?:\?[^\s<>"\'\)]*)?(?=[\s<>"\'\)|$])',
-        r'https?://[^\s<>"\'\)]+/(?:s\d+/|upload/|image/|img/|pic/)[^\s<>"\'\)]+\.(?:jpg|jpeg|png|gif|bmp|webp)(?:\?[^\s<>"\'\)]*)?(?=[\s<>"\'\)|$])',
-        r'https?://youke\d+\.picui\.cn/[^\s<>"\'\)]+\.(?:jpg|jpeg|png|gif|bmp|webp)(?:\?[^\s<>"\'\)]*)?(?=[\s<>"\'\)|$])',
+        r'https?://[^\s<>"\'\)]+\.(?:jpg|jpeg|png|gif|bmp|webp)(?:\?[^\s<>"\'\)]*)?(?=[\s<>"\'\)|]|$)',
+        r'https?://[^\s<>"\'\)]+/(?:s\d+/|upload/|image/|img/|pic/)[^\s<>"\'\)]+\.(?:jpg|jpeg|png|gif|bmp|webp)(?:\?[^\s<>"\'\)]*)?(?=[\s<>"\'\)|]|$)',
+        r'https?://youke\d+\.picui\.cn/[^\s<>"\'\)]+\.(?:jpg|jpeg|png|gif|bmp|webp)(?:\?[^\s<>"\'\)]*)?(?=[\s<>"\'\)|]|$)',
     ]
     for pattern in url_patterns:
         matches = re.findall(pattern, text, re.IGNORECASE)

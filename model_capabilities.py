@@ -179,6 +179,8 @@ def merge_model_ranges(config: dict, model: str) -> dict:
     mapping = config.get("_model_capabilities", {})
     ranges = mapping.get(model) if isinstance(mapping, dict) else None
     effective = dict(config)
+    # Ranges belong to one model; never carry another model's limits forward.
+    effective.pop("supported_ranges", None)
     if ranges:
         effective["supported_ranges"] = normalize_supported_ranges(ranges)
     return effective

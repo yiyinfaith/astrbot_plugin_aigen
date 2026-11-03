@@ -253,6 +253,17 @@ class ParameterContractTest(unittest.IsolatedAsyncioTestCase):
                 "cat", [], [], [], options=options
             )
 
+    def test_route_capabilities_do_not_inherit_the_default_models_ranges(self):
+        config = audio_tests.settings()["video_settings"]
+        config["model"] = "board-model"
+        config["_model_capabilities"] = {"board-model": {"output_seconds": "1-3"}}
+        data = json.loads(caps.configured_capabilities("video", config))
+        self.assertEqual(
+            data[0]["configured_supported_ranges"], {"output_seconds": "1-3"}
+        )
+        route = next(row for row in data if row.get("route") == "text_to_video")
+        self.assertNotIn("configured_supported_ranges", route)
+
     def test_capability_query_filters_secrets_and_describes_known_limits(self):
         config = audio_tests.settings()["video_settings"]
         config.update(
