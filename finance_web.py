@@ -126,6 +126,7 @@ class FinanceWebUI:
             "audit",
             "platforms",
             "user-options",
+            "ui-settings",
         }
         writes = {
             "preview",
@@ -133,6 +134,7 @@ class FinanceWebUI:
             "create-cards",
             "delete-cards",
             "set-balance",
+            "ui-settings",
         }
         if (
             request.method not in {"GET", "POST"}
@@ -146,6 +148,8 @@ class FinanceWebUI:
             if request.method == "GET":
                 if action == "overview":
                     result = await self._work(self.finance.overview)
+                elif action == "ui-settings":
+                    result = await self._work(self.finance.ui_settings)
                 elif action == "platforms":
                     historical = set(await self._work(self.finance.platforms))
                     manager = getattr(self.context, "platform_manager", None)
@@ -264,6 +268,10 @@ class FinanceWebUI:
                     operation,
                     payload.get("amount"),
                     payload.get("count"),
+                )
+            elif action == "ui-settings":
+                result = await self._work(
+                    self.finance.save_ui_settings, payload.get("liquid_glass")
                 )
             elif action == "delete-cards":
                 result = await self._work(

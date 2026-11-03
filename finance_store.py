@@ -411,6 +411,37 @@ class FinanceStore:
             change,
         )
 
+    def ui_settings(self) -> dict:
+        """Return management-page display preferences.
+
+        Returns:
+            Whether the optional WebGL liquid-glass effect is enabled.
+        """
+        with closing(sqlite3.connect(self.store.path, timeout=10)) as db:
+            row = db.execute(
+                "SELECT value FROM finance_settings WHERE key='ui_liquid_glass'"
+            ).fetchone()
+        return {"liquid_glass": bool(row and row[0] == "1")}
+
+    def save_ui_settings(self, liquid_glass) -> dict:
+        """Persist display preferences; they never affect billing.
+
+        Args:
+            liquid_glass: Whether to load the WebGL liquid-glass effect.
+
+        Returns:
+            The saved preferences.
+        """
+        if not isinstance(liquid_glass, bool):
+            raise BillingError("液态玻璃开关必须是 true 或 false。")
+        with self.store.transaction() as db:
+            db.execute(
+                "INSERT INTO finance_settings(key,value) VALUES('ui_liquid_glass',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                ("1" if liquid_glass else "0",),
+            )
+        return {"liquid_glass": liquid_glass}
+
     def platforms(self) -> list[str]:
         """Return historical account platform types without exposing other data."""
         with closing(sqlite3.connect(self.store.path, timeout=10)) as db:

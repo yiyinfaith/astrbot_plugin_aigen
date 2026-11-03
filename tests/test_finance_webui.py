@@ -660,6 +660,19 @@ class FinanceApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["rows"][0]["valid"])
         self.assertEqual(result["rows"][0]["error"], "表达式不合法")
 
+    async def test_liquid_glass_preference_defaults_off_and_persists(self):
+        result, status = await self.request("ui-settings", method="GET")
+        self.assertEqual((status, result), (200, {"liquid_glass": False}))
+        result, status = await self.request("ui-settings", {"liquid_glass": True})
+        self.assertEqual((status, result), (200, {"liquid_glass": True}))
+        result, _ = await self.request("ui-settings", method="GET")
+        self.assertEqual(result, {"liquid_glass": True})
+        _, status = await self.request("ui-settings", {"liquid_glass": "yes"})
+        self.assertEqual(status, 400)
+        self.assertEqual(
+            (await self.request("ui-settings", method="GET"))[0], {"liquid_glass": True}
+        )
+
     async def test_page_preview_and_closed_reload_state(self):
         result, status = await self.request(
             "preview", {"model": "m", "expression": 'u("seconds") * 0.1'}
