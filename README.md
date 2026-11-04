@@ -5,6 +5,7 @@
 AstrBot 的生图、生视频、生音频插件：按输入材料自动选择路线与模型，支持多种上游协议、按模型计费、余额与卡密充值，并提供 `generate_image` / `generate_video` / `generate_audio` 函数工具。
 
 💡 **生视频 API 推荐：** [AutoDL](https://www.autodl.art/large-model/comfyui)，成本较低，几分钱/秒。（非广告）
+
 🔌 **AutoDL 接入 NewAPI 插件推荐：** [new-api-plugin-autodl](https://github.com/yiyinfaith/new-api-plugin-autodl)。
 
 ## 快速开始
