@@ -3,6 +3,7 @@
 <p align="center"><img src="https://raw.githubusercontent.com/yiyinfaith/astrbot_plugin_aigen/main/logo.png" alt="AIGen Logo" width="160" height="160" /></p>
 
 AstrBot 的生图、生视频、生音频插件：按输入材料自动选择路线与模型，支持多种上游协议、按模型计费、余额与卡密充值，并提供 `generate_image` / `generate_video` / `generate_audio` 函数工具。
+💡 **生视频 API 推荐：** [AutoDL](https://www.autodl.art/large-model/comfyui)，成本较低，几分钱/秒。（非广告）
 
 ## 快速开始
 
